@@ -409,8 +409,13 @@ def _apply(actions, cfg, user_text="", context_text=""):
                           f"（{t['project'] or '未分類'}{' / ' + t['due'] if t['due'] else ''}"
                           f"{' / 🔁' + recurring.describe(t['repeat']) if t.get('repeat') else ''}）")
         elif kind == "update_task":
-            t = touched = db.update_task(task_id, title=title, due=due, project=project, notes_append=notes)
-            change = f"（締切 {t['due']}）" if due else ""
+            change = _intended_update(db.get_task(task_id), title, due, project, notes, f"{user_text} {context_text}")
+            if not change:
+                cur = db.get_task(task_id)
+                events.append(f"・ #{cur['id']} {cur['title']} は変えていません（何を変えるのか読み取れなかったため）")
+                continue
+            t = touched = db.update_task(task_id, **change)
+            change = f"（締切 {t['due']}）" if change.get("due") else ""
             events.append(f"✎ #{t['id']} {t['title']} を更新しました{change}")
         elif kind == "complete_task":
             t = touched = db.update_task(task_id, status="done")
@@ -434,6 +439,36 @@ def _apply(actions, cfg, user_text="", context_text=""):
             handoffs.append(h)
             events.append(f"→ #{t['id']} {t['title']} を Claude Code 用に準備しました（handoff #{h['id']}）")
     return events, handoffs, touched
+
+
+def _intended_update(task, title, due, project, notes, said):
+    """The fields of an update_task the user actually asked to change (#20).
+
+    The model fills update_task for anything that sounds related to a task, e.g. a wish about how
+    Es should talk becomes the new title of a bug-fix task. Each change needs a sign in the words:
+    a rename needs 名前/タイトル/「…」に変えて, a due date a date word, notes a メモ-like word or the
+    task named in the message, a project move the project's name."""
+    change = {}
+    if title and title != task["title"] and _RENAME_RE.search(said):
+        change["title"] = title
+    if due and due != task["due"] and _DUE_HINT_RE.search(said):
+        change["due"] = due
+    if project and project != task["project"] and project.lower() in said.lower():
+        change["project"] = project
+    named = f"#{task['id']}" in said or _similarity(said, task["title"]) >= 0.3
+    if notes and (_NOTE_HINT_RE.search(said) or named):
+        change["notes_append"] = notes
+    return change
+
+
+def _policy_flow(text):
+    """A wish about how Es behaves is not a task change (#20): explain and offer to register it."""
+    if not (_POLICY_WISH_RE.search(text) and _POLICY_RE.search(text)):
+        return None
+    db.set_setting("pending_feature", text)
+    return ("わかった、気をつけるね。ただ、私の受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
+            "私が自分で書き換えることはできないんだ。\n"
+            "改修のタスクとして EsAgent に登録しておく？「うん」か「登録して」で入れるよ。タスクは何も変えていないよ。")
 
 
 def delegate(task_id, cfg):
@@ -484,6 +519,15 @@ _CLAIM_RE = re.compile(r"(追加|登録|作成|更新|完了に|変更|分類|�
 _FORGET_RE = re.compile(r"忘れて|後回し|今はいい|いったん置|一旦置|触れないで|出さないで")
 _ACK_RE = re.compile(r"もう(動いて|始めて|やって|始まって)|始めたよ|やってるよ|動いてるよ")
 _COMPANY_RE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9一-龥ァ-ヶー]{1,12}社")
+# What an update_task may change: each field needs its own sign in what the user said (#20).
+_RENAME_RE = re.compile(r"名前|タイトル|名称|改名|リネーム|呼び方|」(に|へ)(変え|変更|直|し)")
+_DUE_HINT_RE = re.compile(r"\(=\d{4}-\d{2}-\d{2}\)|\d{4}-\d{2}-\d{2}|\d{1,2}[/月]\d|締め?切|期限|期日|〆|延期|前倒し|"
+                          r"ずら|延ば|早め|遅ら|それぞれ|ずつ|週|日")
+_NOTE_HINT_RE = re.compile(r"メモ|詳細|補足|追記|書き足|書いて|残して|付け加え|足して|加えて|内容")
+# Requests about how Es itself should behave ("曖昧なら質問してからタスクにしてほしい").
+_POLICY_WISH_RE = re.compile(r"(して|するように|しないで|やめて)(ほしい|欲しい|ください|くれ|ね$)|ようにして|しないで$|やめて$")
+_POLICY_RE = re.compile(r"(質問|確認|聞い|聞き返)(して)?から|聞き返して|勝手に|曖昧な|あいまいな|返事は|返答は|答え方|話し方|口調|"
+                        r"(君|きみ|キミ|Es|エス)(は|には|に|が)|これからは|今後は|次からは")
 _META_TITLE_RE = re.compile(r"関連タスク|タスクの開始|タスク$|内容(の)?(取り出し|取得|取り込)|取ってく")
 
 
@@ -886,6 +930,10 @@ def _chat(text, cfg, message_id=None):
             reply = "了解、じゃあ私も集中するね。終わったら教えて。"
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "intent": "ack"}
+        policy = None if db.get_setting("pending_feature") else _policy_flow(text)
+        if policy:
+            db.add_message("assistant", policy)
+            return {"reply": policy, "events": [], "handoffs": [], "intent": "policy"}
         feature = _feature_flow(cfg, text)
         if feature:
             reply, events = feature
