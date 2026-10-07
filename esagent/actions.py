@@ -190,7 +190,8 @@ def run_action(action, args, cfg):
                 reply = f"「{rule_text}」を読めませんでした。「毎週月曜9時」「毎日5時」のように書いてください。"
             else:
                 t = recurring.set_rule(task["id"], rule)
-                reply = f"🔁 #{t['id']} {t['title']} を{recurring.describe(rule)}にリセットするようにしました（次の締切 {t['due']}）。"
+                reply = (f"🔁 #{t['id']} {t['title']} を{recurring.describe(rule)}にリセットするようにしました（次の締切 {t['due']}）。\n"
+                         f"※ {recurring.GOOGLE_NOTE}")
     elif name == "/note":
         ref, _, memo = args.partition(" ")
         task, cands = _find_task(ref) if ref else (None, [])

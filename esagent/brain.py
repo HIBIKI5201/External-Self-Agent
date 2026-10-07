@@ -546,6 +546,19 @@ def _activity_flow(text):
     return "この 1 日で私がしたのは、記録に残っているこれだけだよ:\n" + "\n".join(done) + "\n" + tail
 
 
+# "繰り返しってGoogleで設定されてる？" -- explain how repeating works instead of guessing (#6).
+_REPEAT_TOPIC_RE = re.compile(r"繰り?返し|リピート|定期|ウィークリー|デイリー|リセット")
+_REPEAT_ASK_RE = re.compile(r"[？?]|どう|仕組み|なって|されて|できる|できない|Google|グーグル|ToDo|TODO|todo")
+
+
+def _repeat_question_flow(text):
+    if not (_REPEAT_TOPIC_RE.search(text) and _REPEAT_ASK_RE.search(text)):
+        return None
+    if recurring.parse(text) or _EXPLICIT_ADD_RE.search(text) or _DELEGATE_ASK_RE.search(text):
+        return None  # "〇〇を毎週月曜9時にリセットして" is a request, handled as usual
+    return recurring.explain()
+
+
 def _policy_flow(text):
     """A wish about how Es behaves is not a task change (#20): explain and offer to register it."""
     if not (_POLICY_WISH_RE.search(text) and _POLICY_RE.search(text)):
@@ -1127,6 +1140,10 @@ def _chat(text, cfg, message_id=None):
             reply = "了解、じゃあ私も集中するね。終わったら教えて。"
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "intent": "ack"}
+        repeat = _repeat_question_flow(text)
+        if repeat:
+            db.add_message("assistant", repeat)
+            return {"reply": repeat, "events": [], "handoffs": [], "intent": "repeat"}
         activity = _activity_flow(text)
         if activity:
             db.add_message("assistant", activity)
