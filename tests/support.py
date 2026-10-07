@@ -66,7 +66,7 @@ class Sandbox:
         import llm
         handoff.HANDOFF_DIR = os.path.join(self.dir, "handoffs")
         self._patches = [(gsync, "run_once", gsync.run_once), (gapi, "request", gapi.request),
-                         (llm, "_post", llm._post), (gsync, "_req", gsync._req), (gsync, "_paged", gsync._paged)]
+                         (llm, "_post", llm._post), (llm, "chat_tools", llm.chat_tools), (gsync, "_req", gsync._req), (gsync, "_paged", gsync._paged)]
         self.sync_once = gsync.run_once      # the real sync, for tests that use FakeTasks
         gsync.run_once = lambda: "online"    # chat code must not sync during tests
 
@@ -82,6 +82,14 @@ class Sandbox:
                                    "messages": body["messages"], "out": out})
             return out
         llm._post = record
+
+        orig_tools = llm.chat_tools
+
+        def record_tools(cfg, messages, tools, options=None, timeout=180):
+            out = orig_tools(cfg, messages, tools, options, timeout)
+            self.llm_calls.append({"stage": "tools", "messages": list(messages), "out": out})
+            return out
+        llm.chat_tools = record_tools
         return self
 
     def __exit__(self, *exc):

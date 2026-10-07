@@ -25,6 +25,7 @@ import llm  # noqa: E402
 import events  # noqa: E402
 import media  # noqa: E402
 import pomodoro  # noqa: E402
+import projects  # noqa: E402
 import recurring  # noqa: E402
 import skills  # noqa: E402
 
@@ -149,6 +150,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
         if path == "/api/admin/config":
             return self._send(200, {"fields": admin.config(CFG), "file": db.CONFIG_PATH})
+        if path == "/api/admin/projects":
+            return self._send(200, {"projects": db.list_projects()})
         if path == "/oauth/callback":
             return self._oauth_callback()
         self._send(404, {"error": "not found"})
@@ -248,6 +251,15 @@ class Handler(BaseHTTPRequestHandler):
                 CFG["bgm"].append({"title": title, "url": url})
                 db.save_config(CFG)
             return {"bgm": CFG["bgm"]}
+        if path == "/api/admin/project":
+            return projects.update(int(body["id"]), description=body.get("description"), folder=body.get("folder"))
+        if path == "/api/admin/project/draft":
+            p = next((p for p in db.list_projects() if p["id"] == int(body["id"])), None)
+            if not p:
+                raise LookupError("project not found")
+            if body.get("folder") is not None:
+                p = projects.update(p["id"], folder=body["folder"])
+            return {"draft": projects.draft_description(CFG, p), "folder": p.get("folder")}
         if path == "/api/admin/config":
             changed = admin.update_config(CFG, body.get("values") or {})
             return {"changed": changed, "fields": admin.config(CFG)}

@@ -24,6 +24,7 @@ import actions
 import brain
 import db
 import llm
+import projects
 
 SKILLS_DIR = os.path.join(db.ROOT, "skills")
 MAX_STEPS = 8
@@ -238,6 +239,9 @@ Calendar:
 
 Things the user asked you to remember:
 {memories}
+
+What the projects are about:
+{projects.context_lines() or "(no notes)"}
 
 Arguments the user typed after /{skill['name']}: {args or "(none)"}
 

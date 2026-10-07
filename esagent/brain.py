@@ -12,6 +12,7 @@ import time
 import db
 import handoff
 import llm
+import projects
 import recurring
 
 WEEKDAYS = "月火水木金土日"
@@ -131,7 +132,9 @@ def _task_line(t, notes=False):
 
 
 def _router_prompt(today):
-    projects = ", ".join(p["name"] for p in db.list_projects())
+    notes = {p["name"]: p["description"].strip()[:60] for p in projects.described()}
+    project_names = ", ".join(f"{p['name']} (= {notes[p['name']]})" if p["name"] in notes else p["name"]
+                              for p in db.list_projects())
     task_lines = "\n".join(_task_line(t) for t in db.list_tasks()) or "(none)"
     friday = (today + dt.timedelta(days=(4 - today.weekday()) % 7)).isoformat()
 
@@ -170,7 +173,7 @@ Dates written like 金曜(=2026-10-09) are already resolved; copy the date exact
 Calendar:
 {_calendar(today)}
 
-Projects: {projects}
+Projects: {project_names}
 
 Open tasks:
 {task_lines}
@@ -686,16 +689,18 @@ def _template_reply(intent, events, touched):
 
 def _first_step(cfg, text, task):
     memo = task["notes"].strip()[-200:]
+    about = projects.context_lines([task["project"]])
+    project_note = f"\nProject note (what this project is about): {about[2:]}" if about else ""
     note_hint = ("This is an essay/note topic: suggest writing three bullet points based on the memo."
                  if task["title"].startswith("ノート") else "")
     system = f"""Write ONE concrete first step (15-30 minutes) for the task below.
 Reply in friendly Japanese that starts with 「最初の20分で」. Keep it under 4 short lines.
 If you suggest points or bullets, write them out right away (e.g. 「・…」), never "以下の".
 Use the memo if there is one. {note_hint}
-Do not mention other tasks, deadlines, companies or tools that are not in the task.
+Do not mention other tasks, deadlines, companies or tools that are not in the task or the project note.
 
 Task: 「{task['title']}」
-Project: {task['project'] or '未分類'}
+Project: {task['project'] or '未分類'}{project_note}
 Memo: {memo or '(none)'}"""
     step = llm.chat(cfg, [{"role": "system", "content": system}, {"role": "user", "content": text}],
                     options={"temperature": 0.4, "num_predict": 120}, on_text=_partial).strip()

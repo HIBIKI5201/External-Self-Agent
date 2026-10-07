@@ -75,6 +75,20 @@ legend { font-weight: 600; padding: 0 6px; }
 }
 .field input[type=checkbox] { justify-self: start; width: 18px; height: 18px; }
 .field small { display: block; color: var(--muted); font-size: 11.5px; }
+/* projects */
+#projects { overflow-y: auto; height: 100%; padding: 18px; }
+#projects .wrap { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.proj { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 10px 14px; display: grid; gap: 6px; }
+.proj h3 { margin: 0; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+.proj input, .proj textarea {
+  font: inherit; font-size: 13px; width: 100%; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--ink);
+}
+.proj textarea { min-height: 54px; resize: vertical; }
+.proj .row { display: flex; gap: 8px; align-items: center; }
+.proj .row span.msg { font-size: 12px; }
+.proj .row span.msg.ok { color: var(--ok); } .proj .row span.msg.bad { color: var(--warn); }
+#projfilter { display: flex; gap: 8px; align-items: center; }
 #savebar { display: flex; align-items: center; gap: 12px; position: sticky; bottom: 0; padding: 10px 0; background: var(--bg); }
 #msg.ok { color: var(--ok); } #msg.bad { color: var(--warn); }
 
@@ -93,6 +107,7 @@ dialog pre { white-space: pre-wrap; word-break: break-word; max-height: 70vh; ov
   <h1><span>E.S.</span> Agent 管理</h1>
   <nav>
     <button data-tab="data" class="on">データ</button>
+    <button data-tab="projects">プロジェクト</button>
     <button data-tab="settings">設定</button>
   </nav>
   <span class="muted" id="where"></span>
@@ -110,6 +125,14 @@ dialog pre { white-space: pre-wrap; word-break: break-word; max-height: 70vh; ov
         <button id="reload">更新</button>
       </div>
       <div id="grid"></div>
+    </div>
+  </section>
+  <section id="projects" hidden>
+    <div class="wrap">
+      <p class="muted">プロジェクトの<b>説明</b>は、相談・/morning・判定のときにモデルへ渡します。「就活」のような大きなくくりほど、中身を書いておくと伝わります。
+        <b>関連フォルダ</b>は Claude Code に引き継ぐときの作業フォルダにもなり、「説明を自動で作る」はそのフォルダの README / AGENTS.md から下書きを作ります（保存するまで反映されません）。</p>
+      <label id="projfilter" class="muted"><input type="checkbox" id="showunity"> Unity プロジェクトも表示</label>
+      <div id="projlist"></div>
     </div>
   </section>
   <section id="settings" hidden>
@@ -151,7 +174,9 @@ document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click
   document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
   $("#data").hidden = b.dataset.tab !== "data";
   $("#settings").hidden = b.dataset.tab !== "settings";
+  $("#projects").hidden = b.dataset.tab !== "projects";
   if (b.dataset.tab === "settings") loadSettings();
+  if (b.dataset.tab === "projects") loadProjects();
 }));
 
 // ---- data ----
@@ -243,6 +268,41 @@ $("#form").addEventListener("submit", async (ev) => {
     msg.textContent = err.message;
   }
 });
+
+// ---- projects ----
+function projectCard(p) {
+  const desc = el("textarea", { value: p.description || "", placeholder: "例: C:\\HIBIKI_5201 配下の就活用リポジトリ（プロフィール・ポートフォリオ・ロゴ・名刺・技術ブログ）の作業" });
+  const folder = el("input", { type: "text", value: p.folder || "", placeholder: "関連フォルダ（例: C:\\HIBIKI_5201）" });
+  const msg = el("span", { className: "msg" });
+  const show = (cls, text) => { msg.className = "msg " + cls; msg.textContent = text; };
+  const save = el("button", { className: "primary", type: "button" }, "保存");
+  const draft = el("button", { type: "button" }, "説明を自動で作る");
+  save.addEventListener("click", async () => {
+    try {
+      await api("/api/admin/project", { id: p.id, description: desc.value, folder: folder.value });
+      show("ok", "保存しました");
+    } catch (err) { show("bad", err.message); }
+  });
+  draft.addEventListener("click", async () => {
+    draft.disabled = true; show("", "README を読んで下書き中…");
+    try {
+      const r = await api("/api/admin/project/draft", { id: p.id, folder: folder.value });
+      if (r.draft) { desc.value = r.draft; show("ok", "下書きしました。直してから「保存」してください"); }
+      else show("bad", "フォルダに README などが見つかりませんでした");
+    } catch (err) { show("bad", err.message); }
+    draft.disabled = false;
+  });
+  return el("div", { className: "proj" },
+    el("h3", {}, p.name, el("span", { className: "muted" }, p.kind)), desc, folder,
+    el("div", { className: "row" }, save, draft, msg));
+}
+
+async function loadProjects() {
+  const { projects } = await api("/api/admin/projects");
+  const all = $("#showunity").checked;
+  $("#projlist").replaceChildren(...projects.filter((p) => all || p.kind !== "unity").map(projectCard));
+}
+$("#showunity").addEventListener("change", loadProjects);
 
 loadTables().catch((err) => { $("#grid").textContent = "読み込めませんでした: " + err.message; });
 </script>
