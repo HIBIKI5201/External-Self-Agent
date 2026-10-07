@@ -5,6 +5,15 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)(esagent/chat_requests|tests/test_chat_requests)\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_chat_queue\\.js$"
+    },
+    {
+      "pathPattern": "(^|/)spec/test/chat-retry-40\\.md$"
+    },
+    {
       "pathPattern": "(^|/)(esagent/diagnose|tests/test_diagnose)\\.py$"
     },
     {
@@ -38,7 +47,8 @@
   ],
   "specRefs": [
     "spec/feature/app-spec.md#as-01-全体構成と常駐",
-    "spec/feature/app-spec.md#as-17-安全とプライバシー"
+    "spec/feature/app-spec.md#as-17-安全とプライバシー",
+    "spec/feature/app-spec.md#as-16-返事待ちと再送"
   ],
   "rationale": "起動・常駐・API 境界を一か所にまとめ、ほかのドメインはこの上で動く。"
 }

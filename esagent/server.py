@@ -16,6 +16,7 @@ sys.path.insert(0, HERE)
 
 import admin  # noqa: E402
 import brain  # noqa: E402
+import chat_requests  # noqa: E402
 import companion  # noqa: E402
 import db  # noqa: E402
 import gauth  # noqa: E402
@@ -96,12 +97,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, code, obj=None, body=None, ctype="application/json; charset=utf-8"):
         data = body if body is not None else json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+        except ConnectionError:
+            self.close_connection = True
+            log.info("response delivery interrupted status=%d", code)
 
     def _host_ok(self):
         # Blocks DNS-rebinding: only accept requests addressed to the loopback host.
@@ -180,16 +185,33 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
-            result = self._route(urlparse(self.path).path, body)
-            gsync.request()  # any change made here should reach Google soon
-            self._send(200, result)
-        except LookupError as e:
-            self._send(404, {"error": str(e)})
-        except ValueError as e:  # bad input from the screen
-            self._send(400, {"error": str(e)})
-        except Exception as e:
+            if not isinstance(body, dict):
+                raise ValueError("body must be an object")
+            path = urlparse(self.path).path
+            if path == "/api/chat" and "requestId" in body:
+                code, result = chat_requests.execute(body["requestId"], str(body.get("text") or "").strip(),
+                                                    lambda: self._post_result(path, body))
+            else:  # old clients without an ID retain their original behavior
+                code, result = self._post_result(path, body)
+        except ValueError as e:
+            code, result = 400, {"error": str(e)}
+        except Exception:
             log.exception("POST %s failed", self.path)
-            self._send(500, {"error": str(e)})
+            code, result = 500, {"error": "処理結果を確認できません。履歴やタスクを確認してください。"}
+        self._send(code, result)
+
+    def _post_result(self, path, body):
+        try:
+            result = self._route(path, body)
+            gsync.request()  # any change made here should reach Google soon
+            return 200, result
+        except LookupError as e:
+            return 404, {"error": str(e)}
+        except ValueError as e:  # bad input from the screen
+            return 400, {"error": str(e)}
+        except Exception:
+            log.exception("POST %s failed", self.path)
+            return 500, {"error": "処理結果を確認できません。履歴やタスクを確認してください。"}
 
     def _route(self, path, body):
         if path == "/api/chat":
