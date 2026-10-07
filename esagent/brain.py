@@ -790,7 +790,7 @@ def drop_false_claims(reply):
     return f"{kept}\n{NO_CHANGE_NOTE}" if kept else NO_CHANGE_NOTE
 
 
-_progress = {"stage": None, "since": None, "detail": "", "partial": ""}
+_progress = {"stage": None, "since": None, "detail": "", "partial": "", "text": "", "message_id": None}
 
 _INTENT_LABELS = {"chat": "雑談・質問として受け取りました", "advise": "次にやることを考えます",
                   "summary": "全体をまとめます", "add": "タスクを追加します", "update": "タスクを更新します",
@@ -922,14 +922,110 @@ def _feature_flow(cfg, text):
     return None
 
 
-def chat(text, cfg, message_id=None):
-    """Answer a message. With message_id, answer a stored message that was waiting."""
+def chat(text, cfg, message_id=None, queued_at=None):
+    """Answer a message. With message_id, answer a stored message that was waiting.
+
+    Questions about the wait itself ("考えるの長くない？") are answered at once from the
+    measured timings, without the lock or the model (#23)."""
+    received = db.now()
+    if message_id is None and is_status_question(text):
+        return _status_answer(text, queued_at, received)
     with _lock:
+        started = db.now()
         _stage("判断中")
+        _progress.update(text=text, message_id=message_id)
+        result = None
         try:
-            return _chat(text, cfg, message_id)
+            result = _chat(text, cfg, message_id)
+            return result
         finally:
+            mid = _progress.get("message_id")
+            if mid:
+                done = None if result is None or result.get("pending") else db.now()
+                db.set_message_timing(mid, queued_at=queued_at, received_at=received, started_at=started,
+                                      finished_at=done)
+            _progress.update(text="", message_id=None)
             _stage(None)
+
+
+# "考えるの長くない？" / "何が起きてたの？" / "まだ？" -- about the wait, not about a task (#23).
+# The chat window sends these right away instead of queueing them (GET /api/chat/bypass).
+_STATUS_RE = re.compile(r"(考え|返事|返信|返答|処理|反応)[^。\n]{0,8}(長|遅|かか)|遅(い|かった|すぎ|くない)|"
+                        r"まだ[？?]|まだかな|どうなって|何(が|か)(起き|あっ)|止まって|固まって|フリーズ|待たされ|"
+                        r"時間が?かか")
+
+
+def is_status_question(text):
+    return bool(_STATUS_RE.search(text)) and not _ACTION_HINT_RE.search(text) and len(text) <= 60
+
+
+def _ago(stamp, now):
+    secs = max(0, int((now - dt.datetime.fromisoformat(stamp)).total_seconds()))
+    return _span(secs)
+
+
+def _span(secs):
+    secs = int(secs)
+    if secs < 60:
+        return f"{secs}秒"
+    if secs < 3600:
+        return f"{secs // 60}分{secs % 60:02d}秒" if secs < 600 else f"{secs // 60}分"
+    return f"{secs // 3600}時間{secs % 3600 // 60}分"
+
+
+def status_lines(now=None):
+    """What is going on, from measurements only. Unknown causes are said to be unknown."""
+    now = now or dt.datetime.now()
+    lines = []
+    if _progress["since"] is not None:
+        what = f"「{_progress.get('text', '')[:20]}」の" if _progress.get("text") else ""
+        lines.append(f"いま{what}返事を作っているところ（{_progress['stage'] or '処理中'}、"
+                     f"{_span(time.time() - _progress['since'])}経過）。")
+    waiting = db.pending_messages()
+    if waiting:
+        lines.append(f"モデルの準備ができていないので、返事を保留しているメッセージが {len(waiting)} 件あるよ"
+                     f"（いちばん古いのは {_ago(waiting[0]['created_at'], now)}前）。準備ができたら古い順に返事するね。")
+    last = db.last_timed_message()
+    if last:
+        sent = last.get("queued_at") or last["created_at"]
+        t = {k: dt.datetime.fromisoformat(last[k]) for k in ("received_at", "started_at", "finished_at") if last.get(k)}
+        t0 = dt.datetime.fromisoformat(sent)
+        total = (t["finished_at"] - t0).total_seconds()
+        parts = []
+        if last.get("wait_reason") == "model":
+            parts.append(f"モデルの準備待ちで {_span((t['started_at'] - t0).total_seconds())}")
+        else:
+            client = (t["received_at"] - t0).total_seconds() if "received_at" in t else 0
+            lock = (t["started_at"] - t["received_at"]).total_seconds() if "received_at" in t else 0
+            if client >= 5:
+                parts.append(f"画面で前のメッセージの返事を待っていて {_span(client)}")
+            if lock >= 5:
+                parts.append(f"前のメッセージの処理が終わるのを待って {_span(lock)}")
+        parts.append(f"返事を作るのに {_span((t['finished_at'] - t['started_at']).total_seconds())}")
+        head = f"直前の「{last['content'][:20]}」は、送ってから返事まで {_span(total)} かかったよ"
+        lines.append(head + "（" + "、".join(parts) + "）。" + ("待たせてごめんね。" if total >= 60 else ""))
+    elif not lines:
+        lines.append("時間を測った記録がまだないので、何に時間がかかったのかはわからないんだ。")
+    st = llm.status(_status_cfg) if _status_cfg else {}
+    if st and not st.get("ollama"):
+        lines.append("いまモデル（Ollama）に接続できていないよ。")
+    elif st and not st.get("model"):
+        lines.append(f"いまモデル（{st.get('name')}）が見つからないよ。")
+    return lines
+
+
+_status_cfg = {}
+
+
+def _status_answer(text, queued_at, received):
+    message_id = db.add_message("user", text)
+    reply = "\n".join(status_lines())
+    db.add_message("assistant", reply)
+    db.set_message_timing(message_id, queued_at=queued_at, received_at=received, started_at=received,
+                          finished_at=db.now())
+    with db.connect() as con:
+        con.execute("UPDATE messages SET wait_reason = 'status' WHERE id = ?", (message_id,))
+    return {"reply": reply, "events": [], "handoffs": [], "intent": "status"}
 
 
 PENDING_NOTE = "モデルの準備ができたら、このメッセージに返事するね（自動）。"
@@ -944,6 +1040,7 @@ def _chat(text, cfg, message_id=None):
         message_id = db.add_message("user", text)
     else:
         db.set_message_status(message_id, None)
+    _progress["message_id"] = message_id
     wants = "talk" if _MODE_TALK_RE.search(text) and not _MODE_WORK_RE.search(text) else \
         "work" if _MODE_WORK_RE.search(text) else None
     if wants and not _ACTION_HINT_RE.search(text):
