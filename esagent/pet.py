@@ -80,15 +80,29 @@ class Pet:
         self.pomo, self.last_event, self.online, self.warned_day = {}, None, True, ""
         self.bubble = None
         self.drag = None
+        self._hidden = winfocus.chat_window_visible()
         self._place()
         self._bind()
-        self.root.deiconify()
+        if not self._hidden:
+            self.root.deiconify()
+        self.root.after(500, self._visibility_tick)
         self.root.after(50, self._animate)
         self.root.after(200, self._poll)
         self.root.after(12000, self._fidget)
         self.root.after(1500, lambda: self.say(self._greeting()))
 
     # ---- placement ------------------------------------------------------------------
+    def _visibility_tick(self):
+        hidden = winfocus.chat_window_visible()
+        if hidden != self._hidden:
+            self._hidden = hidden
+            if hidden:
+                self._close_bubble()
+                self.root.withdraw()
+            else:
+                self.root.deiconify()
+        self.root.after(500, self._visibility_tick)
+
     def _place(self):
         try:
             pos = json.load(open(STATE_FILE, encoding="utf-8"))
@@ -156,6 +170,8 @@ class Pet:
 
     # ---- speech bubble ------------------------------------------------------------------
     def say(self, text, buttons=None, secs=None):
+        if self._hidden:
+            return  # the chat window owns companion speech while the desktop cat is hidden
         self._close_bubble()
         b = tk.Toplevel(self.root)
         b.overrideredirect(True)
