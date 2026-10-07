@@ -108,6 +108,27 @@
 #bgm.winmode #bgm-frame { display: none; }
 #bgm.winmode #bgm-win { display: block; }
 
+.bgm-heading { display: flex; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+#bgm .bgm-heading h2 { margin: 0; }
+#yt-open { padding: 4px 8px; font-size: 12px; }
+#yt-dialog { width: min(620px, calc(100vw - 64px)); max-height: 80vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; padding: 20px; color: var(--ink); background: var(--panel); }
+#yt-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+.yt-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.yt-dialog-header h2 { margin: 0; font-size: 18px; }
+#yt-library { margin-top: 12px; }
+#yt-auth-status, #yt-status, .yt-note { font-size: 12px; color: var(--muted); margin: 6px 0; line-height: 1.5; }
+#yt-status { overflow-wrap: anywhere; }
+#yt-results { max-height: 320px; overflow-y: auto; display: grid; gap: 5px; }
+.yt-item { display: flex; gap: 8px; align-items: center; text-align: left; width: 100%; padding: 7px; }
+.yt-item img { width: 72px; height: 54px; object-fit: cover; flex-shrink: 0; border-radius: 4px; }
+.yt-item span { min-width: 0; }
+.yt-item strong, .yt-item small { display: block; overflow-wrap: anywhere; }
+.yt-item strong { font-size: 12px; font-weight: 500; }
+.yt-item small { font-size: 11px; color: var(--muted); margin-top: 3px; }
+#yt-pages[hidden] { display: none; }
+#yt-pages button { flex: 1; font-size: 12px; }
+.yt-note a { color: var(--accent); }
+
 /* compact bar (the cat lives on the desktop now) */
 #scene { display: block; height: auto; overflow: visible; }
 #scene #controls { border-left: 0; flex-direction: row; align-items: center; gap: 18px; padding: 8px 18px; flex-wrap: wrap; }

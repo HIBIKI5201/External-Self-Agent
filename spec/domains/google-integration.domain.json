@@ -1,6 +1,6 @@
 {
   "name": "Google Integration",
-  "description": "Google の OAuth、ToDo リストとの双方向同期、締切のカレンダー反映を所有する。",
+  "description": "Google の OAuth、ToDo リストとの双方向同期、締切のカレンダー反映、YouTube の検索とプレイリスト読取を所有する。",
   "presetRules": [],
   "templateRules": [],
   "membership": [
@@ -18,6 +18,15 @@
     },
     {
       "pathPattern": "(^|/)esagent/gcal\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/youtube\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_offline_youtube\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)spec/test/youtube-2026-10-08\\.md$"
     }
   ],
   "source": "manual",
@@ -26,7 +35,8 @@
   ],
   "specRefs": [
     "spec/feature/app-spec.md#as-10-google-todo-リストとの同期",
-    "spec/feature/app-spec.md#as-11-google-カレンダー"
+    "spec/feature/app-spec.md#as-11-google-カレンダー",
+    "spec/feature/app-spec.md#as-14-bgm-と環境音"
   ],
   "rationale": "外部サービスとの境界。オフライン時は変更を溜め、オンラインで送る。"
 }

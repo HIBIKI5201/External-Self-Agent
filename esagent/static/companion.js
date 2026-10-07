@@ -244,8 +244,27 @@
 
   function buildBgm() {
     $("#bgm").innerHTML = `
-      <h2 id="bgm-toggle" title="クリックで開く / 閉じる（閉じると一時停止）"><span class="caret">▾</span> BGM</h2>
+      <div class="bgm-heading">
+      <h2 id="bgm-toggle" title="クリックで開く / 閉じる（閉じると一時停止）"><span class="caret">▾</span> YouTube・BGM</h2>
+      <button id="yt-open" class="ghost" title="動画検索と自分のプレイリスト">動画・プレイリスト</button>
+      </div>
       <div id="bgm-body">
+      <div id="yt-library">
+        <div class="bgm-row"><button id="yt-connect" class="ghost">GoogleでYouTubeに接続</button></div>
+        <p id="yt-auth-status">接続状態を確認しています…</p>
+        <form id="yt-search" class="bgm-row">
+          <input id="yt-query" maxlength="200" placeholder="動画を検索" aria-label="YouTubeで検索する言葉">
+          <button id="yt-search-button" class="ghost" type="submit" disabled>検索</button>
+        </form>
+        <div class="bgm-row"><button id="yt-playlists" class="ghost" disabled>自分のプレイリスト</button></div>
+        <p id="yt-status" role="status" aria-live="polite"></p>
+        <div id="yt-results" aria-label="YouTubeの一覧"></div>
+        <div id="yt-pages" class="bgm-row" hidden>
+          <button id="yt-prev" class="ghost">前のページ</button><button id="yt-next" class="ghost">次のページ</button>
+        </div>
+        <p class="yt-note">Google連携でプレイリストを表示できます。再生できない動画はYouTubeで開いてください。
+          <a href="/youtube-setup" target="_blank" rel="noopener">接続の設定・再生の制限</a></p>
+      </div>
       <div class="bgm-modes">
         <label><input type="radio" name="bgm-mode" value="embed"> この中で再生</label>
         <label><input type="radio" name="bgm-mode" value="window"> YouTube（動画）— ログイン・Premium で再生</label>
@@ -265,6 +284,7 @@
       </div>
       <label class="bgm-opt"><input type="checkbox" id="bgm-focus"> 集中中だけ流す（休憩で一時停止）</label>
       </div>`;
+    buildYouTube();
     setBgmOpen(store.get("bgm.open", true));
     $("#bgm-toggle").onclick = () => setBgmOpen($("#bgm").classList.contains("closed"));
     $("#bgm-focus").checked = bgm.focusOnly;
@@ -288,6 +308,93 @@
       setUrl(e.target.value); e.target.value = "";
       if (bgm.mode !== "embed") openWindow(); else playBgm();
     };
+  }
+
+  const yt = { connected: false, client: false, busy: false, kind: "playlists", query: "", playlist: "", title: "", next: "", previous: "" };
+
+  function updateYouTube(auth) {
+    const disconnected = yt.connected && !auth.connected;
+    yt.connected = !!auth.connected; yt.client = !!auth.client;
+    $("#yt-connect").textContent = yt.connected ? "Googleに再接続" : "GoogleでYouTubeに接続";
+    $("#yt-auth-status").textContent = yt.connected ? "接続済み · プレイリストを開くか、動画を検索できます。"
+      : yt.client ? "接続すると通常のブラウザでGoogleの確認画面が開きます。" : "Google接続の設定が必要です。下の「接続の設定」を開いてください。";
+    $("#yt-connect").disabled = yt.busy || !yt.client;
+    $("#yt-search-button").disabled = yt.busy || !yt.connected;
+    $("#yt-playlists").disabled = yt.busy || !yt.connected;
+    $("#yt-query").disabled = yt.busy || !yt.connected;
+    if (disconnected) {
+      $("#yt-results").replaceChildren(); $("#yt-pages").hidden = true;
+      $("#yt-status").textContent = "Googleへの接続が切れました。再接続してください。";
+    }
+  }
+
+  function buildYouTube() {
+    const dialog = document.createElement("dialog"); dialog.id = "yt-dialog";
+    const header = document.createElement("div"); header.className = "yt-dialog-header";
+    header.innerHTML = '<h2>YouTube</h2><button class="ghost" type="button" aria-label="YouTubeの一覧を閉じる">閉じる</button>';
+    header.querySelector("button").onclick = () => dialog.close();
+    dialog.append(header, $("#yt-library")); document.body.append(dialog);
+    $("#yt-open").onclick = () => { if (bgm.mode === "embed") pauseEmbed(); dialog.showModal(); };
+    $("#yt-connect").onclick = async () => {
+      yt.busy = true; updateYouTube(yt);
+      try {
+        await post("/api/youtube/connect");
+        $("#yt-status").textContent = "ブラウザで読み取りを許可してから、ここに戻ってください。";
+      } catch (e) { $("#yt-status").textContent = e.message; }
+      finally { yt.busy = false; updateYouTube(yt); }
+    };
+    $("#yt-search").onsubmit = (e) => {
+      e.preventDefault();
+      const query = $("#yt-query").value.trim();
+      if (!query) { $("#yt-status").textContent = "検索する言葉を入力してください。"; return; }
+      loadYouTube("search", { query });
+    };
+    $("#yt-playlists").onclick = () => loadYouTube("playlists");
+    $("#yt-prev").onclick = () => loadYouTube(yt.kind, { query: yt.query, playlist: yt.playlist, title: yt.title }, yt.previous);
+    $("#yt-next").onclick = () => loadYouTube(yt.kind, { query: yt.query, playlist: yt.playlist, title: yt.title }, yt.next);
+  }
+
+  async function loadYouTube(kind, options = {}, page = "") {
+    if (yt.busy || !yt.connected) return;
+    yt.busy = true; updateYouTube(yt);
+    $("#yt-status").textContent = "読み込んでいます…";
+    $("#yt-results").replaceChildren(); $("#yt-pages").hidden = true;
+    try {
+      const data = await post(`/api/youtube/${kind}`, { query: options.query || "", playlist: options.playlist || "", page });
+      // Discard private library results if the connection changed during the request.
+      if (!yt.connected) return;
+      Object.assign(yt, { kind, query: options.query || "", playlist: options.playlist || "", title: options.title || "",
+                         next: data.next || "", previous: data.previous || "" });
+      const items = data.items || [];
+      $("#yt-status").textContent = (kind === "items" ? `${yt.title} · ` : kind === "search" ? `「${yt.query}」 · ` : "プレイリスト · ")
+        + (items.length ? `${items.length}件` : "表示できる項目がありません。")
+        + (data.unavailable ? `（閲覧できない動画 ${data.unavailable}件）` : "");
+      const container = $("#yt-results");
+      for (const item of items) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "yt-item ghost";
+        if (kind !== "playlists" && item.thumbnail) {
+          const img = document.createElement("img"); img.src = item.thumbnail; img.alt = ""; img.loading = "lazy";
+          button.append(img);
+        }
+        const text = document.createElement("span");
+        const title = document.createElement("strong"); title.textContent = item.title; text.append(title);
+        const detail = document.createElement("small"); detail.textContent = kind === "playlists" ? `${item.count}本の動画` : item.channel;
+        text.append(detail); button.append(text);
+        button.onclick = () => kind === "playlists" ? loadYouTube("items", { playlist: item.id, title: item.title }) : playYouTubeVideo(item.id);
+        container.append(button);
+      }
+      $("#yt-pages").hidden = !yt.next && !yt.previous;
+      $("#yt-prev").disabled = !yt.previous; $("#yt-next").disabled = !yt.next;
+    } catch (e) { $("#yt-status").textContent = e.message; }
+    finally { yt.busy = false; updateYouTube(yt); }
+  }
+
+  function playYouTubeVideo(id) {
+    $("#yt-dialog").close();
+    document.querySelector('[name="bgm-mode"][value="embed"]').checked = true;
+    setMode("embed"); setBgmOpen(true);
+    setUrl(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`);
+    syncBgm(); playBgm();
   }
 
   function setMode(mode) {
@@ -381,11 +488,18 @@
       $("#bgm-empty")?.remove();
       bgm.player = new YT.Player("bgm-player", {
         width: "100%", height: "100%", videoId: v.id || undefined,
-        playerVars: { playsinline: 1, rel: 0, ...(v.list ? { listType: "playlist", list: v.list } : {}),
+        playerVars: { playsinline: 1, rel: 0, origin: location.origin, ...(v.list ? { listType: "playlist", list: v.list } : {}),
                       ...(v.channel ? { channel: v.channel } : {}) },
         events: {
-          onReady: () => { bgm.ready = true; bgm.player.setVolume(Math.round(store.get("volume", 0.4) * 100)); bgm.pending?.(); bgm.pending = null; },
+          onReady: () => {
+            bgm.ready = true; bgm.player.setVolume(Math.round(store.get("volume", 0.4) * 100));
+            const latest = parseYouTube(bgm.url);
+            if (latest && !latest.channel && (latest.id !== v.id || latest.list !== v.list)) setUrl(bgm.url);
+            const pending = bgm.pending; bgm.pending = null;
+            if (embedVisible()) pending?.(); else pauseEmbed();
+          },
           onStateChange: () => {
+            if (bgm.player.getPlayerState?.() === 1 && !embedVisible()) { pauseEmbed(); return; }
             $("#bgm-play").textContent = isPlaying() ? "⏸" : "▶";
             // Remember a pasted URL once it really plays, with its title.
             if (isPlaying() && bgm.url && !bgm.presets.some((p) => p.url === bgm.url)) {
@@ -395,8 +509,10 @@
           },
           onError: (e) => {
             const url = bgm.url;
-            say(e.data === 101 || e.data === 150 || e.data === 153
-              ? "この動画はここでは再生できないみたい（埋め込みが許可されてない）。" : "BGM の再生でエラーが出ちゃった。",
+            say(e.data === 101 || e.data === 150
+              ? "この動画はアプリ内での再生が許可されていません。"
+              : e.data === 153 ? "YouTubeが再生元を確認できませんでした。YouTubeで開いてください。"
+              : "この動画を再生できませんでした。ログインや年齢確認が必要な場合はYouTubeで開いてください。",
               { buttons: [{ label: "YouTube ウィンドウで流す", onClick: () => {
                   document.querySelector('[name="bgm-mode"][value="window"]').checked = true;
                   setMode("window"); openWindow(); } }, { label: "閉じる" }] });
@@ -427,17 +543,20 @@
   function pauseBgm() { if (bgm.mode !== "embed") media("pause"); else pauseEmbed(); }
 
   function playEmbed() {
+    if (!embedVisible()) return;
     if (!bgm.url) {
       const first = bgm.presets[0];
       if (!first) { $("#bgm-url").focus(); return say("好きな lo-fi の YouTube URL を、BGM の欄に貼ってね。"); }
       setUrl(first.url);
     }
     loadApi(() => {
+      if (!embedVisible()) return;
       bgm.player.playVideo();
       if (!bgm.greeted) { bgm.greeted = true; say(pick(["BGM かけるね。", "いい感じの曲、流しとくね。"]), { ms: 2500 }); }
     });
   }
-  function pauseEmbed() { if (bgm.ready) bgm.player.pauseVideo(); }
+  function embedVisible() { return bgm.mode === "embed" && !$("#bgm").classList.contains("closed") && !$("#yt-dialog").open; }
+  function pauseEmbed() { bgm.pending = null; if (bgm.ready) bgm.player.pauseVideo(); }
 
   // ---- なかよし度 ------------------------------------------------------------
   function renderBond(c) {
@@ -482,6 +601,7 @@
       pollEvents();
     },
     update(S) {
+      updateYouTube(S.youtube || {});
       tasks = S.tasks || [];
       if (JSON.stringify(bgm.presets) !== JSON.stringify(S.bgm || [])) { bgm.presets = S.bgm || []; renderPresets(); }
       const sel = $("#pomo-task");
