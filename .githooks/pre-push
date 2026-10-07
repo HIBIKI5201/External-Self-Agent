@@ -1,0 +1,10 @@
+#!/bin/sh
+# Refuse direct pushes to main: changes reach main only through Pull Requests
+# (docs/git-workflow.md). GitHub branch protection is not available for this private repo.
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    echo "pre-push: main への直接 push は禁止です。ブランチから Pull Request を作ってください。" >&2
+    exit 1
+  fi
+done
+exit 0
