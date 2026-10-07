@@ -147,6 +147,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margi
   <span class="spacer"></span>
   <button id="gconnect" class="ghost" hidden>Google ToDo に接続</button>
   <button id="gsync" class="ghost" hidden>今すぐ同期</button>
+  <button id="adminBtn" class="ghost" title="データベースの中身と設定">管理</button>
 </header>
 <main>
   <section id="chat">
@@ -301,6 +302,10 @@ $("#gsync").addEventListener("click", async () => {
   $("#gsync").disabled = true;
   try { await api("/api/google/sync", {}); } catch (err) { alert(err.message); }
   $("#gsync").disabled = false; refresh();
+});
+$("#adminBtn").addEventListener("click", () => {
+  const w = window.open("/admin", "esagent-admin", "width=1100,height=760");
+  if (w) w.focus();
 });
 
 // ---- sending: a queue, so you can keep typing while Es is thinking ----------

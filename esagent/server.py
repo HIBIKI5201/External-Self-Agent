@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import admin  # noqa: E402
 import brain  # noqa: E402
 import companion  # noqa: E402
 import db  # noqa: E402
@@ -66,7 +67,7 @@ def pet_state():
         mood = "idle"
     return {"mood": mood, "pomo": pomo, "stage": prog["stage"], "overdue": overdue,
             "last_event": events.last_id(), "port": CFG["port"],
-            "enabled": pet_enabled(), "cat": CFG.get("pet_cat", 2)}
+            "enabled": pet_enabled(), "cat": CFG.get("pet_cat", 2), "scale": CFG.get("pet_scale", 3)}
 
 
 def pet_enabled():
@@ -109,8 +110,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return self._send(403, {"error": "forbidden"})
         path = urlparse(self.path).path
-        if path in ("/", "/index.html"):
-            with open(os.path.join(STATIC, "index.html"), "rb") as f:
+        if path in ("/", "/index.html", "/admin"):
+            page = "admin.html" if path == "/admin" else "index.html"
+            with open(os.path.join(STATIC, page), "rb") as f:
                 return self._send(200, body=f.read(), ctype="text/html; charset=utf-8")
         m = re.fullmatch(r"/static/(.+\.(js|css|svg|png))", unquote(path))
         if m:
@@ -137,6 +139,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, brain.progress())
         if path == "/api/commands":
             return self._send(200, skills.catalog())
+        if path == "/api/admin/tables":
+            return self._send(200, {"tables": admin.tables(), "db": db.DB_PATH})
+        if path == "/api/admin/table":
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            try:
+                return self._send(200, admin.table(q.get("name", ""), q.get("limit", 50), q.get("offset", 0)))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/admin/config":
+            return self._send(200, {"fields": admin.config(CFG), "file": db.CONFIG_PATH})
         if path == "/oauth/callback":
             return self._oauth_callback()
         self._send(404, {"error": "not found"})
@@ -167,6 +179,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, result)
         except LookupError as e:
             self._send(404, {"error": str(e)})
+        except ValueError as e:  # bad input from the screen
+            self._send(400, {"error": str(e)})
         except Exception as e:
             log.exception("POST %s failed", self.path)
             self._send(500, {"error": str(e)})
@@ -232,10 +246,11 @@ class Handler(BaseHTTPRequestHandler):
             url, title = (body.get("url") or "").strip(), (body.get("title") or "YouTube").strip()[:80]
             if url and not any(b["url"] == url for b in CFG.setdefault("bgm", [])):
                 CFG["bgm"].append({"title": title, "url": url})
-                with open(db.CONFIG_PATH, "w", encoding="utf-8") as f:
-                    json.dump(CFG, f, ensure_ascii=False, indent=2)
-                    f.write("\n")
+                db.save_config(CFG)
             return {"bgm": CFG["bgm"]}
+        if path == "/api/admin/config":
+            changed = admin.update_config(CFG, body.get("values") or {})
+            return {"changed": changed, "fields": admin.config(CFG)}
         if path == "/api/mode":
             mode = body.get("mode")
             if mode not in brain.MODES:

@@ -1,6 +1,6 @@
 {
   "name": "Chat UI",
-  "description": "チャット画面のレイアウト、送信キュー、考え中の表示、タスク一覧とメモ、スキルの補完を所有する。",
+  "description": "チャット画面のレイアウト、送信キュー、考え中の表示、タスク一覧とメモ、スキルの補完を所有する。 管理画面（DB の表示と設定の変更）も所有する。",
   "presetRules": [],
   "templateRules": [],
   "membership": [
@@ -9,6 +9,12 @@
     },
     {
       "pathPattern": "(^|/)esagent/static/companion\\.(js|css)$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/static/admin\\.html$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/admin\\.py$"
     }
   ],
   "source": "manual",

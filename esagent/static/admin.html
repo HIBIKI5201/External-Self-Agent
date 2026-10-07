@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>E.S. Agent 管理</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1c1a; --muted: #6d6a64; --line: #e4e1da;
+  --accent: #6a4bd8; --accent-ink: #ffffff; --soft: #f1efe8; --ok: #2f8a4f; --warn: #b4542b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161514; --panel: #1f1e1c; --ink: #ecebe7; --muted: #9c988f; --line: #33312d;
+    --accent: #9b83ff; --accent-ink: #14121c; --soft: #26241f; --ok: #6cc58b; --warn: #f0906a;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 14px/1.6 "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
+  display: grid; grid-template-rows: auto 1fr;
+}
+header {
+  display: flex; align-items: center; gap: 14px; padding: 10px 18px;
+  border-bottom: 1px solid var(--line); background: var(--panel);
+}
+header h1 { font-size: 16px; margin: 0; letter-spacing: .04em; }
+header h1 span { color: var(--accent); }
+nav { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; gap: 2px; }
+nav button { background: transparent; color: var(--muted); border-radius: 999px; padding: 3px 14px; }
+nav button.on { background: var(--accent); color: var(--accent-ink); }
+button {
+  font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 8px; padding: 4px 12px; cursor: pointer;
+}
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+.muted { color: var(--muted); font-size: 12px; }
+main { min-height: 0; }
+section[hidden] { display: none !important; }
+
+/* data */
+#data { display: grid; grid-template-columns: 220px minmax(0, 1fr); height: 100%; min-height: 0; }
+#tables { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 8px; }
+#tables button {
+  display: flex; justify-content: space-between; width: 100%; border: 0; border-radius: 6px;
+  padding: 6px 10px; background: transparent; text-align: left;
+}
+#tables button.on { background: var(--soft); font-weight: 600; }
+#tables button small { color: var(--muted); }
+#view { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+#viewbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+#viewbar h2 { font-size: 14px; margin: 0; }
+#grid { overflow: auto; }
+table { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
+th, td { border-bottom: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; }
+th { position: sticky; top: 0; background: var(--panel); font-weight: 600; white-space: nowrap; }
+td { max-width: 420px; white-space: pre-wrap; word-break: break-word; }
+td.null { color: var(--muted); }
+td.long { cursor: pointer; }
+td.long:hover { background: var(--soft); }
+
+/* settings */
+#settings { overflow-y: auto; height: 100%; padding: 18px; }
+#settings form { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+fieldset { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 10px 16px 14px; }
+legend { font-weight: 600; padding: 0 6px; }
+.field { display: grid; grid-template-columns: 1fr 220px; gap: 12px; align-items: center; padding: 5px 0; }
+.field input[type=number], .field input[type=text], .field select {
+  font: inherit; width: 100%; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--ink);
+}
+.field input[type=checkbox] { justify-self: start; width: 18px; height: 18px; }
+.field small { display: block; color: var(--muted); font-size: 11.5px; }
+#savebar { display: flex; align-items: center; gap: 12px; position: sticky; bottom: 0; padding: 10px 0; background: var(--bg); }
+#msg.ok { color: var(--ok); } #msg.bad { color: var(--warn); }
+
+dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); max-width: min(900px, 90vw); }
+dialog pre { white-space: pre-wrap; word-break: break-word; max-height: 70vh; overflow: auto; font-size: 12.5px; margin: 0 0 10px; }
+@media (max-width: 720px) {
+  #data { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  #tables { border-right: 0; border-bottom: 1px solid var(--line); display: flex; overflow-x: auto; }
+  #tables button { width: auto; gap: 8px; white-space: nowrap; }
+  .field { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1><span>E.S.</span> Agent 管理</h1>
+  <nav>
+    <button data-tab="data" class="on">データ</button>
+    <button data-tab="settings">設定</button>
+  </nav>
+  <span class="muted" id="where"></span>
+</header>
+<main>
+  <section id="data">
+    <div id="tables"></div>
+    <div id="view">
+      <div id="viewbar">
+        <h2 id="tname">—</h2>
+        <span class="muted" id="range"></span>
+        <span style="flex:1"></span>
+        <button id="prev">← 新しい方</button>
+        <button id="next">古い方 →</button>
+        <button id="reload">更新</button>
+      </div>
+      <div id="grid"></div>
+    </div>
+  </section>
+  <section id="settings" hidden>
+    <form id="form">
+      <div id="fields"></div>
+      <div id="savebar">
+        <button class="primary" type="submit">保存して反映</button>
+        <span id="msg"></span>
+      </div>
+      <p class="muted">保存すると <code id="cfgfile">config.json</code> に書き込み、再起動せずに反映します（モデルは次の会話から、猫はすぐに）。
+        ポート・フォルダ・BGM などはここでは変えられません。</p>
+    </form>
+  </section>
+</main>
+<dialog id="cell"><pre></pre><form method="dialog"><button>閉じる</button></form></dialog>
+<script>
+const $ = (s) => document.querySelector(s);
+const PAGE = 50, CLIP = 160;
+let current = "", offset = 0, total = 0, fields = [];
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json", "X-EsAgent": "1" }, body: JSON.stringify(body),
+  };
+  const r = await fetch(path, opt);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+function el(tag, props = {}, ...kids) {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...kids);
+  return e;
+}
+
+// ---- tabs ----
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
+  $("#data").hidden = b.dataset.tab !== "data";
+  $("#settings").hidden = b.dataset.tab !== "settings";
+  if (b.dataset.tab === "settings") loadSettings();
+}));
+
+// ---- data ----
+async function loadTables() {
+  const { tables, db } = await api("/api/admin/tables");
+  $("#where").textContent = db;
+  $("#tables").replaceChildren(...tables.map((t) => {
+    const b = el("button", { className: t.name === current ? "on" : "" }, el("span", {}, t.name), el("small", {}, String(t.count)));
+    b.addEventListener("click", () => { current = t.name; offset = 0; loadTables(); loadTable(); });
+    return b;
+  }));
+  if (!current && tables.length) { current = tables.find((t) => t.name === "tasks") ? "tasks" : tables[0].name; loadTables(); loadTable(); }
+}
+
+async function loadTable() {
+  const t = await api(`/api/admin/table?name=${encodeURIComponent(current)}&limit=${PAGE}&offset=${offset}`);
+  total = t.total;
+  $("#tname").textContent = t.name;
+  $("#range").textContent = total ? `${offset + 1}〜${offset + t.rows.length} 件目 / ${total} 件（新しい順）` : "0 件";
+  $("#prev").disabled = offset === 0;
+  $("#next").disabled = offset + PAGE >= total;
+  const head = el("tr", {}, ...t.columns.map((c) => el("th", {}, c)));
+  const body = t.rows.map((r) => el("tr", {}, ...r.map((v) => {
+    if (v === null) return el("td", { className: "null" }, "—");
+    const s = String(v);
+    if (s.length <= CLIP) return el("td", {}, s);
+    const td = el("td", { className: "long", title: "クリックで全文" }, s.slice(0, CLIP) + "…");
+    td.addEventListener("click", () => { $("#cell pre").textContent = s; $("#cell").showModal(); });
+    return td;
+  })));
+  $("#grid").replaceChildren(el("table", {}, el("thead", {}, head), el("tbody", {}, ...body)));
+  $("#grid").scrollTop = 0;
+}
+
+$("#prev").addEventListener("click", () => { offset = Math.max(0, offset - PAGE); loadTable(); });
+$("#next").addEventListener("click", () => { offset += PAGE; loadTable(); });
+$("#reload").addEventListener("click", () => { loadTables(); loadTable(); });
+
+// ---- settings ----
+function input(f) {
+  if (f.type === "bool") return el("input", { type: "checkbox", checked: !!f.value, name: f.key });
+  if (f.choices) {
+    const s = el("select", { name: f.key }, ...f.choices.map((c) => el("option", { value: c.value, textContent: c.label })));
+    s.value = String(f.value);
+    return s;
+  }
+  if (f.type === "int") return el("input", { type: "number", name: f.key, value: f.value, min: f.min, max: f.max, step: 1 });
+  return el("input", { type: "text", name: f.key, value: f.value });
+}
+
+function renderSettings(list, file) {
+  fields = list;
+  if (file) $("#cfgfile").textContent = file;
+  const groups = {};
+  for (const f of list) (groups[f.group] ||= []).push(f);
+  $("#fields").replaceChildren(...Object.entries(groups).map(([g, fs]) => el("fieldset", {}, el("legend", {}, g),
+    ...fs.map((f) => el("label", { className: "field" },
+      el("span", {}, f.label, el("small", {}, f.type === "int" ? `${f.key}（${f.min}〜${f.max}）` : f.key)), input(f))))));
+}
+
+async function loadSettings() {
+  const { fields: list, file } = await api("/api/admin/config");
+  renderSettings(list, file);
+}
+
+function value(f) {
+  const e = $("#form").elements[f.key];
+  if (f.type === "bool") return e.checked;
+  if (f.type === "int" || f.type === "choice") return e.value.trim() === "" ? "" : Number(e.value);
+  return e.value;
+}
+
+$("#form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const values = {};
+  for (const f of fields) {
+    const v = value(f);
+    if (v !== f.value) values[f.key] = v;
+  }
+  const msg = $("#msg");
+  if (!Object.keys(values).length) { msg.className = ""; msg.textContent = "変更はありません"; return; }
+  try {
+    const r = await api("/api/admin/config", { values });
+    renderSettings(r.fields);
+    msg.className = "ok";
+    msg.textContent = `保存しました（${r.changed.join(", ")}）`;
+  } catch (err) {
+    msg.className = "bad";
+    msg.textContent = err.message;
+  }
+});
+
+loadTables().catch((err) => { $("#grid").textContent = "読み込めませんでした: " + err.message; });
+</script>
+</body>
+</html>

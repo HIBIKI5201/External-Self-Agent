@@ -104,6 +104,19 @@ class Pet:
             json.dump({"x": self.root.winfo_x(), "y": self.root.winfo_y()}, f)
 
     # ---- sprites --------------------------------------------------------------------
+    def _restyle(self, cat, scale):
+        """Switch the cat or its size (admin page), keeping the bottom-right corner in place."""
+        global CAT, SCALE
+        right, bottom = self.root.winfo_x() + self.w, self.root.winfo_y() + self.h
+        CAT, SCALE = cat, scale
+        self.cache, self.anim = {}, ""
+        self.w = (CROP[2] - CROP[0]) * SCALE
+        self.h = (CROP[3] - CROP[1]) * SCALE + FX_H
+        self.canvas.config(width=self.w, height=self.h)
+        self.canvas.coords(self.fx, self.w - 14, FX_H // 2 + 2)
+        self.root.geometry(f"{self.w}x{self.h}+{right - self.w}+{bottom - self.h}")
+        self._save_pos()
+
     def _frames(self, name):
         if name not in self.cache:
             strip = tk.PhotoImage(file=os.path.join(SPRITES, f"Cat-{CAT}", f"Cat-{CAT}-{name}.png"))
@@ -181,6 +194,8 @@ class Pet:
             if not st.get("enabled", True):  # switched off in the chat window
                 self.root.destroy()
                 return
+            if (st.get("cat", CAT), st.get("scale", SCALE)) != (CAT, SCALE):
+                self._restyle(st.get("cat", CAT), st.get("scale", SCALE))
             self.online = True
             self.pomo = st["pomo"]
             self.mood = st["mood"]
