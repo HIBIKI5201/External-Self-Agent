@@ -25,6 +25,28 @@ def _parse_date(token, today):
     return None
 
 
+ADD_USAGE = ("使い方: /add タイトル [日付] [#プロジェクト]（[ ] は省略できる）\n"
+             "例: /add A社のES提出 金曜 #就活\n"
+             "例: /add 牛乳を買う（プロジェクトなし＝未分類）")
+NO_PROJECT = {"未分類", "なし", "無し"}
+
+
+def _unknown_project_reply(project, title, due):
+    """#22: an unknown #project stops /add before anything is saved."""
+    names = [p["name"] for p in db.list_projects()]
+    close = [n for n in names if n.lower() in title.lower() or project.lower() in n.lower() or n.lower() in project.lower()]
+    lines = [f"プロジェクト「{project}」が見つからないので、まだ登録していないよ。",
+             "# はプロジェクト名の前だけに付けてね。"]
+    if close:
+        # The #word was most likely meant as the title, the bare project name as the project.
+        rest = " ".join([project] + [w for w in title.split() if w.lower() != close[0].lower()])
+        example = " ".join(x for x in (rest, due or "", f"#{close[0]}") if x)
+        lines.append(f"もしかして: /add {example}")
+    lines.append("プロジェクト: " + "、".join(names[:20]))
+    lines.append("プロジェクトなしで登録するなら #未分類 を付けるか、# を書かずに送ってね。")
+    return "\n".join(lines)
+
+
 def _split_args(args, today):
     """Pull a date and a #project out of free text; the rest is the title."""
     due, project, words = None, None, []
@@ -99,14 +121,20 @@ def run_action(action, args, cfg):
                 brain._stage(None)
     elif name == "/add":
         title, due, project = _split_args(args, today)
+        if project in NO_PROJECT:
+            project = None
+        known = True
+        if project:
+            with db.connect() as con:
+                known = db.find_project(con, project) is not None
         if not title:
-            reply = "使い方: /add タイトル [日付] [#プロジェクト]"
+            reply = ADD_USAGE
+        elif not known:
+            reply = _unknown_project_reply(project, title, due)
         else:
             t = db.add_task(title, project=project, due=due)
             proj = t["project"] or "未分類"
             reply = f"＋ #{t['id']} {t['title']}（{proj}{' / 〆' + t['due'] if t['due'] else ''}）"
-            if project and not t["project"]:
-                reply += f"\n※ プロジェクト「{project}」が見つからなかったので未分類にしました。"
     elif name == "/done":
         task, cands = _find_task(args) if args else (None, [])
         if not args:
