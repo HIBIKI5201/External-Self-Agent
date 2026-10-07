@@ -8,6 +8,7 @@
 
 ## 検証
 
+- 自律マージ前に#35も含む最新mainを統合して再検証: オフライン39 passed / 0 failed / 13 skipped、モデル込み52 passed / 0 failed / 0 skipped。JavaScript再送テストと構文検査も成功。
 - `python tests/run.py --offline`: 37 passed / 0 failed / 13 skipped（モデルテスト）。
 - `python tests/run.py`: 50 passed / 0 failed / 0 skipped（ローカルOllamaを含む）。
 - 作業中に取り込まれた#33の最新mainへ競合を解消してリベースした後、上記の全テストを再実行した。
