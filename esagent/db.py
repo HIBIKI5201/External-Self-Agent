@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS memories(
 
 # Columns added after the first release; init() adds any that are missing.
 MIGRATIONS = {
-    "projects": [("glist_id", "TEXT")],
+    "projects": [("glist_id", "TEXT"), ("description", "TEXT")],
     "messages": [("status", "TEXT")],  # "pending" = waiting for the model to be ready
     "tasks": [("gtask_id", "TEXT"), ("glist_id", "TEXT"), ("g_updated", "TEXT"), ("synced_at", "TEXT"),
               ("repeat", "TEXT"), ("last_reset", "TEXT")],
@@ -182,6 +182,22 @@ def ensure_project(name, kind="general"):
             return False
         con.execute("INSERT INTO projects(name, kind) VALUES(?, ?)", (name.strip(), kind))
         return True
+
+
+def update_project(project_id, description=None, folder=None):
+    """None leaves a field as it is; "" clears it."""
+    sets, args = [], []
+    if description is not None:
+        sets.append("description = ?"); args.append(description.strip())
+    if folder is not None:
+        sets.append("folder = ?"); args.append(folder.strip() or None)
+    with connect() as con:
+        if sets:
+            con.execute(f"UPDATE projects SET {', '.join(sets)} WHERE id = ?", (*args, project_id))
+        row = con.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not row:
+        raise LookupError(f"project {project_id} not found")
+    return dict(row)
 
 
 def list_projects():

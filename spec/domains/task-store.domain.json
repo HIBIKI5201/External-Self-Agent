@@ -9,6 +9,9 @@
     },
     {
       "pathPattern": "(^|/)esagent/recurring\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/projects\\.py$"
     }
   ],
   "source": "manual",
