@@ -196,7 +196,9 @@ async function api(path, body) {
   let r;
   try { r = await fetch(path, opt); }
   catch (e) { const err = new Error("E.S. Agent のサーバーに接続できません"); err.offline = true; throw err; }
-  const data = await r.json();
+  let data;
+  try { data = await r.json(); }
+  catch (e) { const err = new Error("返答を受け取れませんでした。再接続を待っています"); err.offline = true; throw err; }
   if (!r.ok) throw new Error(data.error || r.statusText);
   return data;
 }
@@ -311,8 +313,9 @@ $("#adminBtn").addEventListener("click", () => {
 // ---- sending: a queue, so you can keep typing while Es is thinking ----------
 // Messages not yet delivered; queue[0] is in flight while busy. Saved so a reload keeps them.
 // Items are {text, at}: at = when send was pressed, so Es can tell how long a message waited (#23).
+const requestId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, "0")).join("");
 const queue = (() => { try { return JSON.parse(localStorage.getItem("es.queue") || "[]"); } catch { return []; } })()
-  .map((q) => (typeof q === "string" ? { text: q, at: null } : q));
+  .map((q) => ({ ...(typeof q === "string" ? { text: q, at: null } : q), id: q.id || requestId() }));
 const localIso = (d = new Date()) => {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
@@ -321,6 +324,7 @@ const localIso = (d = new Date()) => {
 let bypassRe = null;
 api("/api/chat/bypass").then((r) => { bypassRe = new RegExp(r.pattern); }).catch(() => {});
 const saveQueue = () => { try { localStorage.setItem("es.queue", JSON.stringify(queue)); } catch {} };
+saveQueue(); // persist migrated IDs before the first request, including after a reload
 let offline = false;
 let thinkStart = 0, thinkStage = "", thinkDetail = "", thinkPartial = "", thinkTimer = null, stagePoll = null;
 
@@ -363,7 +367,7 @@ async function pump() {
     renderLive();
     let delivered = true;
     try {
-      const r = await api("/api/chat", { text: queue[0].text, queuedAt: queue[0].at });
+      const r = await api("/api/chat", { text: queue[0].text, queuedAt: queue[0].at, requestId: queue[0].id });
       offline = false;
       if (r.pending) window.Es?.say(r.note, { ms: 6000 });
       else window.Es?.react(r);  // a "うん" to a focus offer is started by the server
@@ -392,13 +396,13 @@ $("#send").addEventListener("submit", (e) => {
   if (!text) return;
   $("#input").value = ""; hidePop();
   if (busy && bypassRe && bypassRe.test(text) && !text.startsWith("/")) {
-    api("/api/chat", { text, queuedAt: localIso() })
+    api("/api/chat", { text, queuedAt: localIso(), requestId: requestId() })
       .then((r) => { window.Es?.say(r.reply, { ms: 9000 }); return refresh(); })
       .catch((err) => window.Es?.say(`送れなかった… ${err.message}`, { ms: 6000 }));
     $("#input").focus();
     return;
   }
-  queue.push({ text, at: localIso() });
+  queue.push({ text, at: localIso(), id: requestId() });
   saveQueue();
   renderLive();
   pump();

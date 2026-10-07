@@ -14,6 +14,12 @@ CONFIG_PATH = os.path.join(ROOT, "config.json")
 STATUSES = ("todo", "doing", "delegated", "done")
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS chat_requests(
+    id TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    code INTEGER,
+    result TEXT
+);
 CREATE TABLE IF NOT EXISTS projects(
     id INTEGER PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
