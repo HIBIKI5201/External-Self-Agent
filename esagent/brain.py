@@ -461,6 +461,26 @@ def _intended_update(task, title, due, project, notes, said):
     return change
 
 
+def _report_flow(text):
+    """'これから自分で直す' / 'Claude Code にはもう頼んだ' are reports, not requests (#21).
+    Nothing is created or handed over; the reply says what Es understood."""
+    asked, self_do = _ASKED_RE.search(text), _SELF_DO_RE.search(text)
+    if not (asked or self_do) or _DELEGATE_ASK_RE.search(text) or _DATE_WORD_RE.search(text) \
+            or _EXPLICIT_ADD_RE.search(text):
+        return None
+    scored = sorted(((_similarity(text, t["title"]), t) for t in db.list_tasks()), key=lambda x: -x[0])
+    task = scored[0][1] if scored and scored[0][0] >= 0.35 else None
+    if asked:
+        ready = task and any(h["task_id"] == task["id"] for h in db.list_handoffs())
+        about = f"「{task['title']}」は" if task else ""
+        tail = (f"#{task['id']} の引き継ぎは準備済みのままにしておくね。" if ready else "")
+        return f"了解、{about}もう Claude Code に頼んであるんだね。{tail}結果が戻ったら教えてね。", None
+    if task:
+        db.set_setting("pending_focus", str(task["id"]))
+        return f"了解、「{task['title']}」は自分で進めるんだね。集中タイマー、始める？", None
+    return "了解、自分で進めるんだね。終わったら教えてね。タスクにしておくなら「タスクにして」と言ってね。", None
+
+
 def _policy_flow(text):
     """A wish about how Es behaves is not a task change (#20): explain and offer to register it."""
     if not (_POLICY_WISH_RE.search(text) and _POLICY_RE.search(text)):
@@ -528,6 +548,14 @@ _NOTE_HINT_RE = re.compile(r"メモ|詳細|補足|追記|書き足|書いて|残
 _POLICY_WISH_RE = re.compile(r"(して|するように|しないで|やめて)(ほしい|欲しい|ください|くれ|ね$)|ようにして|しないで$|やめて$")
 _POLICY_RE = re.compile(r"(質問|確認|聞い|聞き返)(して)?から|聞き返して|勝手に|曖昧な|あいまいな|返事は|返答は|答え方|話し方|口調|"
                         r"(君|きみ|キミ|Es|エス)(は|には|に|が)|これからは|今後は|次からは")
+# Reports about the user's own work are not requests for Es (#21).
+_SELF_DO_RE = re.compile(r"自分で|これから(直|やる|やり|作業|修正|取り掛か|進め)|"
+                         r"(直し|やり|進め|修正し|作業し|取り掛かり)(ます|てくる|てみる|に行く)|やってくる|取り掛かる")
+_ASKED_RE = re.compile(r"(もう|既に|すでに|さっき)[^。\n]{0,15}(依頼|頼ん|お願いし|渡し|任せ)|"
+                       r"(依頼|お願い)(した|済み|ずみ)|頼んだ|任せた|渡した|投げた")
+_DELEGATE_ASK_RE = re.compile(r"(任せ|お願い|依頼)(たい|して|します|する|しよう)|頼(む|みたい|んで|める)|"
+                              r"やって(ほしい|欲しい|くれ|おいて)|準備して|用意して")
+_DATE_WORD_RE = re.compile(r"まで|締め?切|期限|〆|\(=\d{4}-")
 _META_TITLE_RE = re.compile(r"関連タスク|タスクの開始|タスク$|内容(の)?(取り出し|取得|取り込)|取ってく")
 
 
@@ -635,6 +663,11 @@ def _next_suggestion(project_id, exclude_id=None):
 def _template_reply(intent, events, touched):
     """Replies after task changes are built from what actually happened, not generated."""
     done = [e for e in events if e[:1] in "＋✎✔→"]
+    if not done and events and all("引き継ぎ準備済み" in e for e in events):  # not a failure (#21)
+        return "それは Claude Code への引き継ぎをもう準備してあるよ。右の「Claude Codeで開く」から始められるよ。"
+    if not done and events and all("変えていません" in e for e in events):
+        return ("どのタスクをどう変えるのか読み取れなかったので、タスクはそのままにしたよ。"
+                "変えるなら「〇〇の締切を金曜に」「〇〇の名前を△△に」のように教えてね。")
     if not done:
         return "うまく反映できませんでした。下のメッセージを見て、タスク名をもう少し具体的に教えてください。"
     if intent == "complete":
@@ -930,6 +963,10 @@ def _chat(text, cfg, message_id=None):
             reply = "了解、じゃあ私も集中するね。終わったら教えて。"
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "intent": "ack"}
+        report = _report_flow(text)
+        if report:
+            db.add_message("assistant", report[0])
+            return {"reply": report[0], "events": [], "handoffs": [], "intent": "report"}
         policy = None if db.get_setting("pending_feature") else _policy_flow(text)
         if policy:
             db.add_message("assistant", policy)
