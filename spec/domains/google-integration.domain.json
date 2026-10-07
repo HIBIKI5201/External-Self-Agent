@@ -5,6 +5,9 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)(tests/test_sync_revisions\\.py|spec/test/sync-revisions-33\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)esagent/gauth\\.py$"
     },
     {

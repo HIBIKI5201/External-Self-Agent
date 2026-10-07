@@ -1,7 +1,7 @@
 """Two-way sync between EsAgent tasks and Google Tasks (Google ToDo リスト).
 
 Each Google task list is one EsAgent project; the default list ("マイタスク") is 未分類.
-EsAgent works offline from SQLite: a task whose updated_at differs from synced_at has
+EsAgent works offline from SQLite: a task whose rev differs from synced_rev has
 unsynced changes and is pushed the next time Google is reachable. When both sides
 changed, the later edit wins.
 """
@@ -61,10 +61,10 @@ def _body(t):
     return body
 
 
-def _mark_synced(task_id, g, list_id, local_updated_at):
+def _mark_synced(task_id, g, list_id, local_updated_at, local_rev):
     with db.connect() as con:
-        con.execute("UPDATE tasks SET gtask_id = ?, glist_id = ?, g_updated = ?, synced_at = ? WHERE id = ?",
-                    (g["id"], list_id, g["updated"], local_updated_at, task_id))
+        con.execute("UPDATE tasks SET gtask_id = ?, glist_id = ?, g_updated = ?, synced_at = ?, synced_rev = ? WHERE id = ?",
+                    (g["id"], list_id, g["updated"], local_updated_at, local_rev, task_id))
 
 
 # ---- lists <-> projects -----------------------------------------------------
@@ -130,9 +130,9 @@ def _apply_remote(local, g, list_id, project_id):
     with db.connect() as con:
         con.execute(
             "UPDATE tasks SET title = ?, notes = ?, due = ?, status = ?, project_id = ?, glist_id = ?, "
-            "g_updated = ?, updated_at = ?, synced_at = ? WHERE id = ?",
+            "g_updated = ?, updated_at = ?, synced_at = ?, rev = rev + 1, synced_rev = rev + 1 WHERE id = ? AND rev = ?",
             ((g.get("title") or "").strip() or local["title"], g.get("notes") or "", _l_due(g), status,
-             project_id, list_id, g["updated"], ts, ts, local["id"]))
+             project_id, list_id, g["updated"], ts, ts, local["id"], local["rev"]))
 
 
 def _push_existing(t, current_list, project_list, default_id):
@@ -146,7 +146,7 @@ def _push_existing(t, current_list, project_list, default_id):
             gid = _req("POST", f"/lists/{target}/tasks", body=_body(t))["id"]
             _req("DELETE", f"/lists/{current_list}/tasks/{t['gtask_id']}")
     g = _req("PATCH", f"/lists/{target}/tasks/{gid}", body=_body(t))
-    _mark_synced(t["id"], g, target, t["updated_at"])
+    _mark_synced(t["id"], g, target, t["updated_at"], t["rev"])
 
 
 def _reconcile(list_id, project_id, g, project_list, default_id, stats):
@@ -167,14 +167,14 @@ def _reconcile(list_id, project_id, g, project_list, default_id, stats):
         with db.connect() as con:
             con.execute(
                 "INSERT INTO tasks(title, project_id, status, due, notes, created_at, updated_at, "
-                "gtask_id, glist_id, g_updated, synced_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "gtask_id, glist_id, g_updated, synced_at, synced_rev) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                 (g["title"].strip(), project_id, "done" if g.get("status") == "completed" else "todo",
                  _l_due(g), g.get("notes") or "", ts, ts, g["id"], list_id, g["updated"], ts))
         stats["pulled"] += 1
         return
 
     remote_changed = g["updated"] != local["g_updated"] or local["glist_id"] != list_id
-    local_changed = local["updated_at"] != local["synced_at"]
+    local_changed = local["rev"] != local["synced_rev"]
     if remote_changed and local_changed:
         remote_wins = _g_time(g["updated"]) >= _l_time(local["updated_at"])
     else:
@@ -208,7 +208,7 @@ def sync_once():
         if not t["gtask_id"]:
             list_id = _list_for(t["project_id"], project_list, default_id)
             g = _req("POST", f"/lists/{list_id}/tasks", body=_body(t))
-            _mark_synced(t["id"], g, list_id, t["updated_at"])
+            _mark_synced(t["id"], g, list_id, t["updated_at"], t["rev"])
             stats["pushed"] += 1
         elif t["gtask_id"] not in seen:  # gone from Google entirely (e.g. its list was deleted)
             _delete_local(t["id"])
@@ -237,8 +237,7 @@ def status():
     s["cal_last_sync"] = db.get_setting("google_cal_last_sync")
     with db.connect() as con:
         s["pending"] = con.execute(
-            "SELECT COUNT(*) FROM tasks WHERE gtask_id IS NULL OR synced_at IS NULL "
-            "OR updated_at != synced_at").fetchone()[0]
+            "SELECT COUNT(*) FROM tasks WHERE gtask_id IS NULL OR rev != synced_rev").fetchone()[0]
     return s
 
 

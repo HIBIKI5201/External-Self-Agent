@@ -66,6 +66,7 @@ MIGRATIONS = {
                  ("queued_at", "TEXT"), ("received_at", "TEXT"), ("started_at", "TEXT"), ("finished_at", "TEXT"),
                  ("wait_reason", "TEXT")],
     "tasks": [("gtask_id", "TEXT"), ("glist_id", "TEXT"), ("g_updated", "TEXT"), ("synced_at", "TEXT"),
+              ("rev", "INTEGER NOT NULL DEFAULT 1"), ("synced_rev", "INTEGER NOT NULL DEFAULT 0"),
               ("repeat", "TEXT"), ("last_reset", "TEXT")],
 }
 
@@ -123,6 +124,9 @@ def init():
             for name, decl in cols:
                 if name not in have:
                     con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+                    if table == "tasks" and name == "synced_rev":
+                        con.execute("UPDATE tasks SET synced_rev = rev WHERE gtask_id IS NOT NULL "
+                                    "AND synced_at IS NOT NULL AND updated_at = synced_at")
 
 
 def get_setting(key, default=None):
@@ -302,7 +306,8 @@ def update_task(task_id, title=None, status=None, due=None, project=None, notes_
             joined = (task["notes"] + "\n" if task["notes"] else "") + f"[{stamp}] {notes_append.strip()}"
             sets.append("notes = ?"); args.append(joined)
         if sets:
-            sets.append("updated_at = ?"); args.append(now())
+            sets.append("rev = rev + 1")
+            sets.append("updated_at = ?"); args.append(dt.datetime.now().isoformat(timespec="microseconds"))
             con.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", (*args, task_id))
         return _task(con, task_id)
 
@@ -402,7 +407,8 @@ def create_handoff(task_id, folder):
         cur = con.execute(
             "INSERT INTO handoffs(task_id, folder, created_at, updated_at) VALUES(?, ?, ?, ?)",
             (task_id, folder, ts, ts))
-        con.execute("UPDATE tasks SET status = 'delegated', updated_at = ? WHERE id = ?", (ts, task_id))
+        con.execute("UPDATE tasks SET status = 'delegated', updated_at = ?, rev = rev + 1 WHERE id = ?",
+                    (dt.datetime.now().isoformat(timespec="microseconds"), task_id))
         return cur.lastrowid
 
 
