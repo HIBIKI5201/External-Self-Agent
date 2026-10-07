@@ -1,0 +1,25 @@
+{
+  "name": "BGM and Ambience",
+  "description": "YouTube の埋め込み・動画ウィンドウ・音楽ウィンドウ、Windows のメディア操作、環境音を所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/media\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/media\\.ps1$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/static/companion\\.js$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-14-bgm-と環境音"
+  ],
+  "rationale": "YouTube の規約上の制約（表示したまま再生）をこの境界で守る。"
+}

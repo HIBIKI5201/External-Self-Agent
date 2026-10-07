@@ -1,0 +1,122 @@
+/* Es's desk: the companion scene above the chat. */
+#scene {
+  position: relative; height: 210px; display: grid; grid-template-columns: minmax(0, 1fr) 250px;
+  border-bottom: 1px solid var(--line); overflow: hidden;
+}
+#room { position: relative; overflow: hidden; }
+#sky { position: absolute; left: 6%; top: 14px; width: 40%; height: 120px; border-radius: 8px;
+  border: 6px solid #6b5640; box-shadow: inset 0 0 0 2px #8a7155; overflow: hidden; transition: background 2s; }
+#sky::after { /* window cross bar */
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(#8a7155, #8a7155) center / 4px 100% no-repeat,
+              linear-gradient(#8a7155, #8a7155) center / 100% 4px no-repeat; }
+#sky.morning { background: linear-gradient(#ffd7a8, #bfe3ff); }
+#sky.day     { background: linear-gradient(#8fcaff, #d8efff); }
+#sky.evening { background: linear-gradient(#ff9f80, #ffcf9a 60%, #a58bd8); }
+#sky.night   { background: linear-gradient(#141a3a, #2b2f5e); }
+#sky .moon { position: absolute; right: 18%; top: 14px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff6c8; box-shadow: 0 0 14px #fff6c8; display: none; }
+#sky.night .moon { display: block; }
+#sky .stars { position: absolute; inset: 0; display: none;
+  background-image: radial-gradient(1px 1px at 20% 30%, #fff, transparent), radial-gradient(1px 1px at 60% 20%, #fff, transparent),
+    radial-gradient(1px 1px at 35% 70%, #fff, transparent), radial-gradient(1px 1px at 80% 55%, #fff, transparent),
+    radial-gradient(1px 1px at 10% 80%, #fff, transparent); }
+#sky.night .stars { display: block; }
+#sky .rain { position: absolute; inset: -20px 0 0 0; display: none; opacity: .55;
+  background-image: repeating-linear-gradient(105deg, transparent 0 9px, rgba(220,235,255,.8) 9px 10px, transparent 10px 23px);
+  animation: rain .45s linear infinite; }
+#room.raining #sky .rain { display: block; }
+@keyframes rain { to { transform: translate(-6px, 20px); } }
+#wall { position: absolute; inset: 0; background: linear-gradient(#efe4d6, #e6d6c3); }
+#room.night #wall { background: linear-gradient(#3a3348, #2c2738); }
+#lamp { position: absolute; right: 12%; bottom: 52px; width: 120px; height: 120px; border-radius: 50%;
+  background: radial-gradient(rgba(255,214,140,.55), transparent 70%); display: none; pointer-events: none; }
+#room.night #lamp { display: block; }
+#desk { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; background: linear-gradient(#a07a55, #8a6644);
+  border-top: 3px solid #b88d63; }
+#es { position: absolute; cursor: pointer; }
+
+/* the cat sprite: 50x50 frames drawn 6x. The cat itself spans x11-36, y16-32 of a frame,
+   so the box hangs below the desk line to put its feet (y=32 -> 192px) on the desk top. */
+#es { --s: 6; width: calc(50px * var(--s)); height: calc(50px * var(--s)); left: calc(50% - 90px);
+  bottom: calc(44px - (50px - 32px) * var(--s)); pointer-events: none; }
+#cat { width: 100%; height: 100%; image-rendering: pixelated; background-repeat: no-repeat;
+  background-position: 0 0; background-size: calc(var(--frames, 1) * 50px * var(--s)) 100%; pointer-events: auto;
+  clip-path: inset(30% 25% 34% 20%); }
+@keyframes catplay { to { background-position: calc(var(--frames, 1) * -50px * var(--s)) 0; } }
+#catfx { position: absolute; left: 200px; top: 70px; font-weight: 700; color: #9b83ff; font-size: 18px;
+  animation: fxfloat 2.4s ease-in-out infinite; pointer-events: none; }
+@keyframes fxfloat { 50% { transform: translate(4px, -6px); opacity: .6; } }
+#deskstuff { position: absolute; left: calc(50% - 230px); bottom: 30px; width: 120px; height: 40px; }
+#deskstuff svg { width: 100%; height: 100%; }
+#deskstuff .steam path { animation: steam 2.6s ease-in-out infinite; opacity: .55; }
+#deskstuff .steam path:nth-child(2) { animation-delay: 1.3s; }
+@keyframes steam { 0% { transform: translateY(4px); opacity: 0; } 50% { opacity: .6; } 100% { transform: translateY(-8px); opacity: 0; } }
+#catpick { font: inherit; font-size: 12px; padding: 2px 6px; border-radius: 7px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink); }
+
+#bubble {
+  position: absolute; left: calc(50% + 140px); bottom: 118px; max-width: min(300px, 40%);
+  background: #fffdf8; color: #2a2433; border-radius: 12px; padding: 8px 12px; font-size: 13px; line-height: 1.5;
+  box-shadow: 0 4px 14px rgba(0,0,0,.15); opacity: 0; transform: translateY(6px); transition: .25s; pointer-events: none; z-index: 3;
+}
+#bubble.show { opacity: 1; transform: none; pointer-events: auto; }
+#bubble::before { content: ""; position: absolute; left: -7px; bottom: 14px; border: 7px solid transparent;
+  border-right-color: #fffdf8; border-left: 0; }
+#bubble .btns { display: flex; gap: 6px; margin-top: 6px; }
+#bubble button { padding: 2px 10px; font-size: 12px; }
+@media (max-width: 1050px) { #bubble { left: 8px; right: 8px; bottom: auto; top: 8px; max-width: none; } #bubble::before { display: none; } }
+
+/* timer, sounds and friendship */
+#controls { border-left: 1px solid var(--line); background: var(--panel); padding: 10px 14px; display: flex;
+  flex-direction: column; gap: 6px; font-size: 12.5px; }
+#pomo-mode { color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; }
+#pomo-time { font-size: 34px; font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+#pomo-time.focus { color: var(--accent); } #pomo-time.break { color: var(--ok); }
+#pomo-btns { display: flex; gap: 6px; }
+#pomo-btns button { padding: 3px 10px; font-size: 12.5px; }
+#pomo-task { font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 7px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink); min-width: 0; }
+#sounds { display: flex; gap: 6px; align-items: center; }
+#sounds button { padding: 2px 8px; font-size: 12px; }
+#sounds button.on { background: var(--user); color: var(--accent); border-color: var(--accent); }
+#sounds input { flex: 1; min-width: 0; accent-color: var(--accent); }
+#bond { color: var(--muted); font-size: 12px; }
+#bond b { color: var(--accent); }
+
+/* BGM (YouTube embed; must stay visible while playing) */
+#bgm h2 { margin-top: 2px; }
+#bgm-frame { position: relative; width: 100%; height: 200px; border-radius: 10px; overflow: hidden; background: #111; }
+#bgm-frame iframe, #bgm-player { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+#bgm-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #aaa; font-size: 12.5px; }
+.bgm-row { display: flex; gap: 6px; margin-top: 6px; }
+.bgm-row select, .bgm-row input { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 4px 8px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+.bgm-row button { padding: 3px 12px; }
+.bgm-opt { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.bgm-opt input { accent-color: var(--accent); }
+#bgm-toggle { cursor: pointer; user-select: none; }
+#bgm-toggle .caret { display: inline-block; transition: transform .15s; }
+#bgm.closed #bgm-toggle .caret { transform: rotate(-90deg); }
+#bgm.closed #bgm-body { display: none; }
+#bgm.closed #bgm-toggle { margin-bottom: 0; }
+.bgm-modes { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.bgm-modes input { accent-color: var(--accent); }
+#bgm-win { display: none; border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; }
+#bgm-win small { color: var(--muted); }
+#bgm-win button { margin-top: 6px; padding: 3px 10px; font-size: 12px; }
+#bgm.winmode #bgm-frame { display: none; }
+#bgm.winmode #bgm-win { display: block; }
+
+/* compact bar (the cat lives on the desktop now) */
+#scene { display: block; height: auto; overflow: visible; }
+#scene #controls { border-left: 0; flex-direction: row; align-items: center; gap: 18px; padding: 8px 18px; flex-wrap: wrap; }
+#scene .pomo-main { min-width: 120px; }
+#scene .pomo-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#scene #pomo-time { font-size: 28px; }
+#esline { display: flex; align-items: center; gap: 8px; padding: 6px 18px; font-size: 13px;
+  background: var(--notice); border-top: 1px solid var(--line); }
+#esline .who { font-weight: 700; color: var(--accent); }
+#esline button { padding: 2px 10px; font-size: 12px; }
+#esline-btns { display: flex; gap: 6px; margin-left: auto; }
+#esline[hidden] { display: none; }

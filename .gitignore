@@ -1,0 +1,19 @@
+# ---- personal data and secrets: never commit ----
+# chat history, tasks, logs, handoff texts (SQLite)
+data/
+# Google OAuth client and tokens
+secrets/
+# Claude Code working folder for handoffs
+workspace/
+# machine-specific settings; copy config.example.json to config.json to start
+config.json
+
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# ---- local tool settings ----
+.claude/settings.local.json
+.vscode/
+*.log
+Thumbs.db

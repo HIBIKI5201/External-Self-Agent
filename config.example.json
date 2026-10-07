@@ -1,0 +1,34 @@
+{
+  "port": 8765,
+  "ollama_url": "http://127.0.0.1:11434",
+  "model": "qwen3:8b",
+  "keep_alive": "10m",
+  "num_ctx": 8192,
+  "history_messages": 12,
+  "google_sync_minutes": 3,
+  "calendar_name": "EsAgent 締切",
+  "calendar_reminder_minutes": 900,
+  "timezone": "Asia/Tokyo",
+  "project_roots": [
+    "C:\\Users\\<you>\\GameProject"
+  ],
+  "extra_projects": [
+    {
+      "name": "就活",
+      "kind": "jobhunt"
+    },
+    {
+      "name": "全般",
+      "kind": "general"
+    }
+  ],
+  "default_folder": "C:\\ESAgent\\workspace",
+  "edge_path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  "think_router": false,
+  "bgm": [
+    {
+      "title": "Lofi Girl ライブ（YouTube ウィンドウ向け）",
+      "url": "https://www.youtube.com/channel/UCSJ4gkVC6NrvII8umztf0Ow/live"
+    }
+  ]
+}

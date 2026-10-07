@@ -1,0 +1,3 @@
+Pet Cats Pack by LuizMelo — https://luizmelo.itch.io/pet-cat-pack
+License: Creative Commons Zero (CC0). Downloaded 2026-10-07. Files are in pack/ unchanged.
+EsAgent uses Cat-2 (black cat) by default; the cat can be changed in the scene.

@@ -1,0 +1,23 @@
+{
+  "name": "Task Store",
+  "description": "タスク・プロジェクト・メモ・繰り返し規則の保存と、追加・更新・完了の規則を所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/db\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/recurring\\.py$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-04-タスク管理",
+    "spec/feature/app-spec.md#as-05-繰り返しタスク"
+  ],
+  "rationale": "Google 同期・スキル・MCP はすべてこのストアを通して読み書きする。"
+}

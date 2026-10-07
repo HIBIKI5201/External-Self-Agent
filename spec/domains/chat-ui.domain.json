@@ -1,0 +1,23 @@
+{
+  "name": "Chat UI",
+  "description": "チャット画面のレイアウト、送信キュー、考え中の表示、タスク一覧とメモ、スキルの補完を所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/static/index\\.html$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/static/companion\\.(js|css)$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-15-チャット画面",
+    "spec/feature/app-spec.md#as-16-返事待ちと再送"
+  ],
+  "rationale": "画面はサーバーの状態を表示するだけで、判断は持たない。"
+}

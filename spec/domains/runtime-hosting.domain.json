@@ -1,0 +1,35 @@
+{
+  "name": "Runtime Hosting",
+  "description": "常駐サーバー、ログオン時の自動起動、チャット画面の起動と前面化、設定とデータの配置、ローカル API の安全策を所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/server\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/launch\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/winfocus\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/db\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)install\\.ps1$"
+    },
+    {
+      "pathPattern": "(^|/)config\\.json$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-01-全体構成と常駐",
+    "spec/feature/app-spec.md#as-17-安全とプライバシー"
+  ],
+  "rationale": "起動・常駐・API 境界を一か所にまとめ、ほかのドメインはこの上で動く。"
+}

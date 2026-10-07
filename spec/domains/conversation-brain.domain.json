@@ -1,0 +1,26 @@
+{
+  "name": "Conversation Brain",
+  "description": "1 通のメッセージの判定・検証・返事、モード、日付解釈、記憶、返事待ちの処理を所有する。モデルへの依存を最小にし、判断はコードで行う。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/brain\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/llm\\.py$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-02-モデルと判断の流れ",
+    "spec/feature/app-spec.md#as-03-会話モード",
+    "spec/feature/app-spec.md#as-06-日付の解釈",
+    "spec/feature/app-spec.md#as-08-記憶",
+    "spec/feature/app-spec.md#as-16-返事待ちと再送"
+  ],
+  "rationale": "小さいモデルの誤りを封じ込める安全装置は、すべてこの境界にある。"
+}

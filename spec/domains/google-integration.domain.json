@@ -1,0 +1,29 @@
+{
+  "name": "Google Integration",
+  "description": "Google の OAuth、ToDo リストとの双方向同期、締切のカレンダー反映を所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/gauth\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/gapi\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/gsync\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/gcal\\.py$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-10-google-todo-リストとの同期",
+    "spec/feature/app-spec.md#as-11-google-カレンダー"
+  ],
+  "rationale": "外部サービスとの境界。オフライン時は変更を溜め、オンラインで送る。"
+}

@@ -1,0 +1,25 @@
+{
+  "name": "Skills",
+  "description": "/ で呼び出すスキルの定義形式（SKILL.md）、固定動作、手順スキルの実行とツールを所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/skills\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/actions\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)skills/[^/]+/SKILL\\.md$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-07-スキル-の呼び出し"
+  ],
+  "rationale": "スキルの中身はファイルにあり、コードは読み込みと実行だけを持つ。"
+}

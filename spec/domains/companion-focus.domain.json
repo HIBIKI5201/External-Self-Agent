@@ -1,0 +1,32 @@
+{
+  "name": "Companion and Focus",
+  "description": "デスクトップの黒猫、集中タイマー、イベント配信、なかよし度を所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/pet\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/pomodoro\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/events\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/companion\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/static/cat/"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-12-コンパニオンデスクトップの黒猫",
+    "spec/feature/app-spec.md#as-13-集中タイマーとなかよし度"
+  ],
+  "rationale": "タイマーをサーバーに置くことで、黒猫とチャット画面が同じ状態を見る。"
+}

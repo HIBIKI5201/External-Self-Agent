@@ -1,0 +1,22 @@
+{
+  "name": "Claude Code Handoff",
+  "description": "Claude Code への引き継ぎリンクの生成と、Claude Code から結果を書き戻す MCP サーバーを所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/handoff\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/mcp_server\\.py$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-09-claude-code-への引き継ぎ"
+  ],
+  "rationale": "引き継ぎはユーザーが送信して会話を続けられる形にし、結果はタスクへ戻す。"
+}
