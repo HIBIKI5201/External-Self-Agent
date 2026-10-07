@@ -17,6 +17,7 @@ PR ごとに「未リリース」へ追記し、版を上げるときに見出�
 ### 追加
 - Ollama への送信内容・トークン数・所要時間のログ（`data/llm-requests.jsonl`、#12）
 - 会話の記憶のテスト（`tests/test_memory.py`）
+- チャット画面のバーに小さな黒猫と吹き出し、デスクトップの猫の表示切り替え（#3）
 - 自動テスト（`tests/`）: DB のコピーと偽の Google API で動くサンドボックス、オフラインのテスト（日付・繰り返し・固定スキル・モード・Google 同期・カレンダー）
 - CI（`.github/workflows/check.yml`）: 構文チェックとオフラインのテスト
 - main への直接 push を防ぐ pre-push フック（`.githooks/`）

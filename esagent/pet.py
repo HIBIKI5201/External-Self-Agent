@@ -178,6 +178,9 @@ class Pet:
     def _poll(self):
         try:
             st = api("/api/pet")
+            if not st.get("enabled", True):  # switched off in the chat window
+                self.root.destroy()
+                return
             self.online = True
             self.pomo = st["pomo"]
             self.mood = st["mood"]
@@ -257,6 +260,14 @@ class Pet:
             self.root.after(0, lambda: self.say(msg, secs=3))
         threading.Thread(target=run, daemon=True).start()
 
+    def _disable(self):
+        """Same as turning the switch off in the chat window."""
+        try:
+            api("/api/pet/enabled", {"enabled": False})
+        except Exception:
+            pass
+        self.root.destroy()
+
     def _hide(self, minutes=30):
         self._close_bubble()
         self.root.withdraw()
@@ -276,7 +287,7 @@ class Pet:
         m.add_command(label="BGM 再生 / 一時停止（YouTube ウィンドウ）", command=self._bgm_toggle)
         m.add_separator()
         m.add_command(label="30分かくれる", command=self._hide)
-        m.add_command(label="終了（次に E.S. Agent が起動したときに戻ります）", command=self.root.destroy)
+        m.add_command(label="デスクトップから消す（チャット画面の切り替えで戻せます）", command=self._disable)
         m.tk_popup(event.x_root, event.y_root)
 
     # ---- mouse -----------------------------------------------------------------------------

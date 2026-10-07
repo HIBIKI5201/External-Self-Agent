@@ -36,15 +36,51 @@
             <button class="ghost" data-sound="wind" title="風の音">風</button>
             <input id="volume" type="range" min="0" max="1" step="0.05" title="音量">
           </div>
-          <div id="bond"></div>
+          <div class="bond-row">
+            <div id="bond"></div>
+            <div class="cat-col">
+              <div class="minicat-row">
+                <div id="minicat" title="Es"><div id="minicat-sprite"></div></div>
+                <div id="minicat-text">…</div>
+              </div>
+              <label class="pet-toggle" title="デスクトップの黒猫を出す / 消す">
+                <input type="checkbox" id="pet-enabled"> デスクトップに表示
+              </label>
+            </div>
+          </div>
         </div>
       </div>
       <div id="esline" hidden><span class="who">Es</span><span id="esline-text"></span><span id="esline-btns"></span></div>`;
   }
 
+  // ---- the small cat in the bar (mirrors the desktop cat) ------------------------------------
+  // Sprite strips are 50x50 frames; the cat itself sits at x11-36, y16-32, shown here at 2x.
+  const MINI_ANIMS = { Idle: [10, 1.2], Sleeping1: [1, 1], Sleeping2: [1, 1], Laying: [8, 1.2],
+                       Stretching: [13, 1.6], Meow: [4, 0.6], Sitting: [1, 1], Itch: [2, 0.35] };
+  const MOOD_ANIM = { idle: "Idle", focus: "Sleeping1", break: "Laying", stretch: "Stretching", thinking: "Sitting",
+                      happy: "Meow", talk: "Meow", worried: "Itch", sleep: "Sleeping2" };
+  let miniCat = 2, miniAnim = "", miniMood = "idle", miniOverride = null, miniUntil = 0;
+
+  function setMini(mood) {
+    if (mood) miniMood = mood;
+    const m = miniOverride && Date.now() < miniUntil ? miniOverride : miniMood;
+    const name = MOOD_ANIM[m] || "Idle";
+    if (name === miniAnim) return;
+    miniAnim = name;
+    const [frames, secs] = MINI_ANIMS[name];
+    const el = $("#minicat-sprite");
+    el.style.backgroundImage = `url("${encodeURI(`/static/cat/pack/Cat-${miniCat}/Cat-${miniCat}-${name}.png`)}")`;
+    el.style.setProperty("--frames", frames);
+    el.style.animation = "none";
+    void el.offsetWidth;
+    el.style.animation = frames > 1 ? `minicat ${secs}s steps(${frames}) infinite` : "none";
+  }
+  function flashMini(mood, ms = 2500) { miniOverride = mood; miniUntil = Date.now() + ms; setMini(); setTimeout(() => setMini(), ms + 50); }
+
   // ---- Es's lines in this window ---------------------------------------------------------
   let lineTimer = null;
   function say(text, opts = {}) {
+    $("#minicat-text").textContent = text;
     $("#esline-text").textContent = text;
     $("#esline-btns").innerHTML = (opts.buttons || []).map((x, i) =>
       `<button class="${i ? "ghost" : ""}" data-i="${i}">${esc(x.label)}</button>`).join("");
@@ -87,6 +123,11 @@
   async function pollEvents() {
     try {
       setP(await (await fetch("/api/pomo")).json());
+      const pet = await (await fetch("/api/pet")).json();
+      miniCat = pet.cat || 2;
+      setMini(pet.mood);
+      const box = $("#pet-enabled");
+      if (document.activeElement !== box) box.checked = !!pet.enabled;
       const r = await (await fetch(`/api/events?after=${lastEvent ?? 0}`)).json();
       if (lastEvent === null) lastEvent = r.last;  // don't replay older events
       else for (const ev of r.events) { lastEvent = ev.id; onEvent(ev); }
@@ -100,6 +141,7 @@
       say(ev.task ? `「${ev.task}」、いこう。` : "集中タイム。がんばろ。", { ms: 3000 });
     } else if (ev.kind === "focus_end") {
       chime();
+      flashMini("stretch", 1700);
       if (embed) pauseEmbed();
       if (ev.leveled_up) say(`なかよし度が上がった！ Lv${ev.level}「${ev.level_name}」`, { ms: 7000 });
       else if (ev.task_id) say(`おつかれさま！「${ev.task}」、終わった？`, { buttons: [
@@ -421,6 +463,14 @@
       };
       buildBgm();
       syncBgm();
+      $("#pet-enabled").onchange = async (e) => {
+        try {
+          await post("/api/pet/enabled", { enabled: e.target.checked });
+          say(e.target.checked ? "デスクトップに出るね。" : "デスクトップからは消えるね。ここにはいるよ。", { ms: 3000 });
+        } catch { e.target.checked = !e.target.checked; say("切り替えられなかった…"); }
+      };
+      $("#minicat").onclick = () => { flashMini("talk", 1500); say(pick(["にゃ？", "なになに？", "にゃー"]), { ms: 2000 }); };
+      setMini("idle");
       document.querySelectorAll('[name="bgm-mode"]').forEach((r) => r.addEventListener("change", syncBgm));
       $("#bgm-focus").addEventListener("change", syncBgm);
       document.querySelectorAll("[data-sound]").forEach((b) => b.onclick = () => setSound(b.dataset.sound, !soundOn[b.dataset.sound]));
@@ -449,7 +499,7 @@
     },
     react(result) {
       const ev = (result && result.events) || [];
-      if (ev.some((e) => e.startsWith("✔"))) say(pick(["やったね！", "えらい！その調子。", "ひとつ片づいたね。"]), { ms: 3000 });
+      if (ev.some((e) => e.startsWith("✔"))) { flashMini("happy"); say(pick(["やったね！", "えらい！その調子。", "ひとつ片づいたね。"]), { ms: 3000 }); }
       else if (ev.some((e) => e.startsWith("→"))) say("Claude に頼んでおくね。右のボタンから開けるよ。", { ms: 3500 });
     },
     say,

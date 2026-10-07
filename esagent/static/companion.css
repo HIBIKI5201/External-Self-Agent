@@ -120,3 +120,17 @@
 #esline button { padding: 2px 10px; font-size: 12px; }
 #esline-btns { display: flex; gap: 6px; margin-left: auto; }
 #esline[hidden] { display: none; }
+
+/* the small cat in the bar (#3): 50px frames shown 2x, cropped to the cat (x11-36, y16-32) */
+.bond-row { display: flex; gap: 14px; align-items: flex-start; }
+.cat-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.minicat-row { display: flex; align-items: center; gap: 8px; }
+#minicat { position: relative; width: 56px; height: 36px; overflow: hidden; cursor: pointer; flex: none;
+  border-radius: 10px; background: linear-gradient(#f3e9dc, #e6d6c3); }  /* light cushion: a black cat on a dark theme was invisible */
+#minicat-sprite { position: absolute; left: -20px; top: -31px; width: 100px; height: 100px; image-rendering: pixelated;
+  background-repeat: no-repeat; background-position: 0 0; background-size: calc(var(--frames, 1) * 100px) 100px; }
+@keyframes minicat { to { background-position: calc(var(--frames, 1) * -100px) 0; } }
+#minicat-text { font-size: 12px; line-height: 1.4; padding: 4px 8px; border-radius: 8px; background: var(--notice);
+  max-width: 170px; max-height: 3.2em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pet-toggle { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.pet-toggle input { accent-color: var(--accent); }
