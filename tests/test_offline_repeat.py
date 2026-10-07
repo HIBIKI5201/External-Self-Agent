@@ -1,6 +1,4 @@
 """Repeating tasks are reset by E.S. Agent, not by Google's own repeat (AS-05, #6)."""
-import time
-
 import db
 import recurring
 from support import FakeTasks, Sandbox
@@ -30,13 +28,11 @@ def test_reset_reaches_google_as_a_plain_change():
             t = recurring.set_rule(db.add_task("深淵アルキメディア")["id"], "weekly 0 09:00")
             nxt = t["due"]
             assert sb.sync_once() == "online"
-            time.sleep(1.05)  # local timestamps have one-second resolution (see the sync Issue)
             db.update_task(t["id"], status="done")
             assert sb.sync_once() == "online"
             remote = next(x for ts in fake.tasks.values() for x in ts.values() if x["title"] == "深淵アルキメディア")
             assert remote["status"] == "completed"
 
-            time.sleep(1.05)
             with db.connect() as con:  # pretend the last reset was a week ago
                 con.execute("UPDATE tasks SET last_reset = '2000-01-01T00:00' WHERE id = ?", (t["id"],))
             assert [x["id"] for x in recurring.tick()] == [t["id"]]

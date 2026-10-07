@@ -1,6 +1,4 @@
 """Google ToDo two-way sync and the deadline calendar, against in-memory fakes (AS-10, AS-11)."""
-import time
-
 import db
 from support import FakeCalendar, FakeTasks, Sandbox
 
@@ -13,7 +11,6 @@ def test_tasks_sync_scenarios():
         gauth.status = lambda: {"client": True, "connected": True}
 
         def sync(expect="online"):
-            time.sleep(1.05)  # local timestamps have one-second resolution
             got = sb.sync_once()
             assert got == expect, f"{got}: {db.get_setting('google_last_error')}"
 
