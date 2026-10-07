@@ -3,6 +3,11 @@ import ctypes
 from ctypes import wintypes
 
 user32 = ctypes.windll.user32
+user32.IsWindowVisible.argtypes = [wintypes.HWND]
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 SW_RESTORE = 9
 NAMES = ("E.S. Agent", "EsAgent")  # current and former window titles
 VK_MENU = 0x12
@@ -22,13 +27,14 @@ def _class(hwnd):
     return buf.value
 
 
-def find_chat_window():
+def find_chat_window(include_minimized=True):
     """The chat window's title is "E.S. Agent", or "12:34 集中 – E.S. Agent" while the timer runs."""
     found = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def visit(hwnd, _):
-        if user32.IsWindowVisible(hwnd) and _class(hwnd) == "Chrome_WidgetWin_1":
+        if user32.IsWindowVisible(hwnd) and (include_minimized or not user32.IsIconic(hwnd)) \
+                and _class(hwnd) == "Chrome_WidgetWin_1":
             title = _title(hwnd)
             if title in NAMES or any(title.endswith("– " + n) for n in NAMES):
                 found.append(hwnd)
@@ -37,6 +43,11 @@ def find_chat_window():
 
     user32.EnumWindows(visit, 0)
     return found[0] if found else None
+
+
+def chat_window_visible():
+    """A matching chat app is open and not minimized, even when another app covers it."""
+    return find_chat_window(include_minimized=False) is not None
 
 
 def focus_chat_window():
