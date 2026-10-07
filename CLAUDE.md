@@ -22,10 +22,13 @@ E.S. Agent（External Self Agent）は、この Windows PC に常駐するロー
 
 ## 動作確認の約束
 
-- 本番の `data/esagent.db` は Google ToDo・カレンダーと同期している。**会話・同期の検証は DB のコピーで行う**
-  （`sqlite3` の `backup` でコピーし、`db.DB_PATH` を差し替える）。
-- Google API の検証は `gsync._req` / `gsync._paged` / `gcal._req` を偽物に差し替える。
-  さらに `gapi.request` を例外にして、**実 API に届かないことを保証する**。
+- テストは `python tests/run.py`（全部）／`python tests/run.py --offline`（モデル不要のみ、CI と同じ）。
+  PR の前に必ず全部を実行する。不具合を直したら再現テストを足す。
+- 本番の `data/esagent.db` は Google ToDo・カレンダーと同期している。**会話・同期の検証は DB のコピーで行う**。
+  `tests/support.py` の `Sandbox` が、DB のコピー・偽の Google API（`FakeTasks` / `FakeCalendar`）・
+  実 Google API の遮断・Ollama への送信内容の記録（`sb.llm_calls`）をまとめて用意する。
+- 作業の進め方（Issue の選び方、自己マージの条件、判断待ちの扱い）は `docs/git-workflow.md` に従う。
+  クローン直後は `git config core.hooksPath .githooks`（main への直接 push を止める）。
 - 画面の確認は内蔵ブラウザで `http://127.0.0.1:8765/` を開く。メッセージを送ると本番のチャット履歴に残るので、送るならユーザーに断る。
 
 ## 常駐中のプロセスに変更を反映する
