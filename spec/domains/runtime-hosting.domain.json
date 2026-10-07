@@ -5,6 +5,15 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)(esagent/diagnose|tests/test_diagnose)\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)docs/log-diagnostics\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)spec/test/log-diagnostics-36\\.md$"
+    },
+    {
       "pathPattern": "(^|/)esagent/server\\.py$"
     },
     {
