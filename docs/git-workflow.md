@@ -32,6 +32,15 @@ E.S. Agent の変更は **GitHub の Issue から始まり、ブランチ → Pu
 
 - AI エージェントも同じ規則に従う。エージェント用の別系統（`agent/…`）は作らない。
 
+### 稼働用と開発用の作業ツリーを分ける
+- 常駐中の E.S. Agent は `C:\ESAgent` の作業ツリーから直接動く。ここでブランチを切り替えると稼働中のアプリが変わるので、**`C:\ESAgent` は常に `main` のまま**にする（ブランチを切らない・編集しない）。
+- 開発は git worktree の **`C:\ESAgent-dev`** で行う。
+  ```
+  git -C C:\ESAgent worktree add C:\ESAgent-dev -b <ブランチ> origin/main
+  ```
+  `C:\ESAgent-dev\config.json` はポート `8766`・`desktop_pet: false` にして、稼働中のサーバーや黒猫とぶつからないようにする。
+- マージしたら `C:\ESAgent` で `git pull` し、常駐プロセスを再起動して反映する（§9）。
+
 ## 3. コミット
 
 - 1 コミット = 1 つのまとまった変更。動かない途中状態をコミットしない。
@@ -51,6 +60,7 @@ E.S. Agent の変更は **GitHub の Issue から始まり、ブランチ → Pu
 - 挙動を変えたら、同じ PR で **`spec/feature/app-spec.md` を更新**する。新しいファイルは `spec/domains/*.domain.json` の `membership` に足す。
 - 確認できたこと・できなかったことを分けて正直に書く（「多分大丈夫」で終わらせない）。
 - マージは **Squash and merge**。マージ後はブランチを削除する。
+- `Closes #番号` で Issue が自動で閉じないことがある。マージ後に Issue が開いたままなら、マージした PR を書き添えて手動で閉じる。
 - `CHANGELOG.md` の「未リリース」に 1〜数行で追記する。
 
 ### マージ権限

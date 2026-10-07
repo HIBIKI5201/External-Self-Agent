@@ -9,6 +9,7 @@ E.S. Agent（External Self Agent）は、この Windows PC に常駐するロー
 - どのファイルがどの仕様か: `spec/domains/*.domain.json`
 - 既知のずれ・未確認事項: `spec/plan/spec-gaps.md`
 - Git の運用: `docs/git-workflow.md`（Issue 起点、`main` に直接コミットしない）
+- **`C:\ESAgent` は稼働用（常に `main`）。開発は worktree の `C:\ESAgent-dev`（ポート 8766）で行う。** マージ後に `C:\ESAgent` で `git pull` して再起動する。
 
 ## 構成の要点
 
