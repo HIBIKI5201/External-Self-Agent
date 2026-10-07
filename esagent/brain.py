@@ -903,19 +903,30 @@ def _describe(intent, focus, actions):
     return " ／ ".join(bits)
 
 
+_MEMORY_COMMAND = r"(?:覚えて(?:おいて|て|ね)|記憶して(?:おいて)?)(?:ください|くれる|もらえる|ね)?"
+
+
 def _remember(cfg, text, history):
-    """Turn "覚えておいて" into one stored sentence, using the previous reply as context."""
-    last = next((m["content"] for m in reversed(history) if m["role"] == "assistant"), "")
-    system = """The user asked you to remember something. Write ONE short Japanese sentence (under 60
-characters) stating what to remember, as a fact about the user or an agreement with them.
-If they refer to your previous message ("それ", "それはいいね"), summarise the relevant part of it.
-Output only the sentence."""
-    prompt = f"Your previous message:\n{last[:600]}\n\nUser now says:\n{text}"
-    memo = llm.chat(cfg, [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                    options={"temperature": 0.2, "num_predict": 80}).strip().strip("「」\"")
-    memo = memo.splitlines()[0] if memo else text
-    db.add_memory(memo)
-    return f"覚えました：「{memo}」\n/memory で一覧、/forget 番号 で消せます。"
+    """Only an explicit imperative with literal content authorizes a memory write (#46)."""
+    command = _MEMORY_COMMAND
+    suffix = re.fullmatch(r"(?P<memo>.*?)\s*(?:これを|この内容を)?" + command + r"[。！!？?\s]*", text, re.S)
+    prefix = re.fullmatch(command + r"\s*[:：]\s*(?P<memo>.+)", text, re.S)
+    match = prefix or suffix
+    memo = match.group("memo").strip(" 。\n") if match else ""
+    if memo.endswith("を"):
+        memo = memo[:-1].rstrip()
+    if memo.endswith("って"):
+        memo = memo[:-2].rstrip()
+    reference = re.match(r"^(?:それ|これ)(?:$|[はをがも])|^(?:そのこと|このこと|さっきの|前の)", memo)
+    unsafe = re.search(r"[？?]|なぜ|どうして|仕組み|改善|してほしい|しないで|保存しない|覚えなく|覚えない|ほしくない|欲しくない|"
+                       r"覚えて[^。\n]*(?:言った|頼んだ|という|と言|って)|記憶(?:機能|の扱い)", memo)
+    if match and memo and not reference and not unsafe:
+        db.add_memory(memo)  # no model summary or guessed previous reply enters the stored fact
+        return f"覚えました：「{memo}」\n/memory で一覧、/forget 番号 で消せます。"
+    if re.search(r"仕組み|機能|保存|記憶|どう|なぜ|[？?]", text):
+        return ("記憶は、保存する内容を明示して頼まれたときだけ残すよ。質問・引用・改善要望だけでは保存しないよ。"
+                "一覧は /memory、保存は /remember 内容、削除は /forget 番号でできるよ。今回は何も保存していないよ。")
+    return "何を保存するか確認したいので、/remember 保存したい内容 の形で教えてね。今回は何も保存していないよ。"
 
 
 def _feature_title(cfg, wish):
@@ -1124,10 +1135,18 @@ def _chat(text, cfg, message_id=None):
         db.add_message("assistant", reply)
         return {"reply": reply, "events": [], "handoffs": [], "intent": "mode", "mode": wants}
     try:
+        if re.search(_MEMORY_COMMAND + r"(?:[。！!？?\s]*$|\s*[:：])", text):
+            reply = _remember(cfg, text, history)
+            db.add_message("assistant", reply)
+            return {"reply": reply, "events": [], "handoffs": [], "intent": "remember"}
         unknown = _recall_flow(text, message_id)
         if unknown:
             db.add_message("assistant", unknown)
             return {"reply": unknown, "events": [], "handoffs": [], "intent": "recall"}
+        if _REMEMBER_RE.search(text) or "記憶" in text:
+            reply = _remember(cfg, text, history)
+            db.add_message("assistant", reply)
+            return {"reply": reply, "events": [], "handoffs": [], "intent": "remember"}
         offer = _offer_flow(text)
         if offer:
             reply, ui = offer

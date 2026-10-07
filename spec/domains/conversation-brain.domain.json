@@ -5,6 +5,9 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)(tests/test_memory_intent\\.py|spec/test/memory-intent-46\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)esagent/brain\\.py$"
     },
     {
