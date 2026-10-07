@@ -17,6 +17,8 @@ import support  # noqa: E402  (sets up the import path for esagent/)
 
 
 def main():
+    # CI's Windows console is cp1252; the ✅ / ❌ marks need UTF-8.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     offline = "--offline" in sys.argv
     llm_ok = not offline and support.ollama_ready()
