@@ -65,6 +65,28 @@ def set_rule(task_id, rule):
     return db.update_task(task_id, due=nxt.date().isoformat())
 
 
+GOOGLE_NOTE = "Google ToDo 側の「繰り返し」設定にはならないよ（E.S. Agent が毎回リセットして、その結果が同期される）。"
+
+
+def explain():
+    """How repeating works, for questions like 'Googleで繰り返し設定されてる？' (#6)."""
+    with db.connect() as con:
+        rows = [dict(r) for r in con.execute(
+            "SELECT id, title, repeat, due FROM tasks WHERE repeat IS NOT NULL AND repeat != '' ORDER BY id")]
+    lines = ["繰り返しは E.S. Agent がリセットしているよ。決まった時刻になると、タスクを未完了に戻して締切を次の回にする。"
+             "その変更が Google ToDo とカレンダーに同期されるから、スマホでも次の回のタスクとして見えるよ。",
+             "ただ、Google ToDo 側の「繰り返し」設定は使っていないよ。Google の API では繰り返しを設定も読み取りもできないから。"
+             "Google ToDo アプリで繰り返しを設定しても、E.S. Agent には伝わらないんだ。"]
+    if rows:
+        lines.append("いま繰り返しになっているタスク: " + "、".join(
+            f"「{t['title']}」（{describe(t['repeat'])}、次は {t['due']}）" for t in rows[:8]))
+    else:
+        lines.append("いま繰り返しになっているタスクはないよ。")
+    lines.append("設定するなら「/repeat 番号 毎週月曜9時」、やめるなら「/repeat 番号 なし」。"
+                 "「〇〇を毎週月曜9時にリセットして」と話しかけてもいいよ。")
+    return "\n".join(lines)
+
+
 def tick():
     """Reset every recurring task whose reset point has passed. Returns the tasks reset."""
     now = dt.datetime.now()
