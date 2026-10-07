@@ -65,7 +65,13 @@ def pet_state():
     else:
         mood = "idle"
     return {"mood": mood, "pomo": pomo, "stage": prog["stage"], "overdue": overdue,
-            "last_event": events.last_id(), "port": CFG["port"]}
+            "last_event": events.last_id(), "port": CFG["port"],
+            "enabled": pet_enabled(), "cat": CFG.get("pet_cat", 2)}
+
+
+def pet_enabled():
+    """Whether the desktop cat should be shown (switch in the chat window, #3)."""
+    return db.get_setting("pet_enabled", "1" if CFG.get("desktop_pet", True) else "0") == "1"
 
 
 def redirect_uri():
@@ -235,6 +241,12 @@ class Handler(BaseHTTPRequestHandler):
             if mode not in brain.MODES:
                 raise ValueError("mode must be work or talk")
             return {"mode": mode, "reply": brain.set_mode(mode)}
+        if path == "/api/pet/enabled":
+            on = bool(body.get("enabled"))
+            db.set_setting("pet_enabled", "1" if on else "0")
+            if on:
+                _start_pet()  # the cat keeps a single instance itself
+            return pet_state()
         if path == "/api/poke":  # the MCP server's "something changed" signal
             return {"ok": True}
         if path == "/api/google/connect":
@@ -334,7 +346,7 @@ def main():
     threading.Thread(target=_recurring_loop, name="recurring", daemon=True).start()
     threading.Thread(target=_pomo_loop, name="pomodoro", daemon=True).start()
     threading.Thread(target=_pending_loop, name="pending", daemon=True).start()
-    if CFG.get("desktop_pet", True):
+    if pet_enabled():
         _start_pet()
     log.info("EsAgent listening on http://127.0.0.1:%s", CFG["port"])
     server.serve_forever()
