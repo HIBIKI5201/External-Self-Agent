@@ -52,3 +52,22 @@ def test_mode_switch_is_explicit():
         assert "雑談モード" in sb.skill("/talk")["reply"]
         assert "もう雑談モード" in sb.skill("/talk")["reply"]   # no duplicate switch
         assert "作業モード" in sb.skill("/work")["reply"]
+
+
+def test_history_is_chosen_by_token_budget():
+    import brain
+    history = [{"role": "user", "content": f"発言{i}" * 20} for i in range(30)]
+    history += [{"role": "assistant", "content": "了解"}, {"role": "notice", "content": "＋ #9 C社のES提出"}]
+    picked = brain.conversation(history, 600)
+    assert picked[0]["role"] == "user", "must start with a user turn"
+    assert picked[-1]["role"] == "assistant" and "記録: ＋ #9 C社のES提出" in picked[-1]["content"]
+    assert 3 < len(picked) < len(history), len(picked)          # newest kept, oldest dropped
+    assert sum(brain.estimate_tokens(m["content"]) for m in picked) <= 600
+
+
+def test_recall_questions_are_detected():
+    import brain
+    topic = lambda t: (lambda m: m and (m.group("a") or m.group("b") or m.group("c")))(brain._RECALL_RE.search(t))
+    assert topic("今回の合言葉だけ答えて。") == "合言葉"
+    assert topic("暗証番号覚えてる？") == "暗証番号"
+    assert not topic("Verseって何？") and not topic("何からやればいい？")
