@@ -31,6 +31,7 @@ import skills  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
+brain._status_cfg = CFG
 log = logging.getLogger("esagent")
 
 
@@ -138,6 +139,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, pet_state())
         if path == "/api/progress":
             return self._send(200, brain.progress())
+        if path == "/api/chat/bypass":  # messages the window sends without queueing (#23)
+            return self._send(200, {"pattern": brain._STATUS_RE.pattern})
         if path == "/api/commands":
             return self._send(200, skills.catalog())
         if path == "/api/admin/tables":
@@ -193,7 +196,9 @@ class Handler(BaseHTTPRequestHandler):
             text = (body.get("text") or "").strip()
             if not text:
                 raise ValueError("text is empty")
-            result = skills.run(text, CFG) if text.startswith("/") else brain.chat(text, CFG)
+            queued = body.get("queuedAt")  # when send was pressed (the window queues messages)
+            queued = queued if isinstance(queued, str) and db.valid_datetime(queued) else None
+            result = skills.run(text, CFG) if text.startswith("/") else brain.chat(text, CFG, queued_at=queued)
             if result.get("events"):
                 events.push("chat_events", lines=result["events"])
             if result.get("ui", {}).get("focus"):

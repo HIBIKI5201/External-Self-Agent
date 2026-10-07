@@ -310,7 +310,16 @@ $("#adminBtn").addEventListener("click", () => {
 
 // ---- sending: a queue, so you can keep typing while Es is thinking ----------
 // Messages not yet delivered; queue[0] is in flight while busy. Saved so a reload keeps them.
-const queue = (() => { try { return JSON.parse(localStorage.getItem("es.queue") || "[]"); } catch { return []; } })();
+// Items are {text, at}: at = when send was pressed, so Es can tell how long a message waited (#23).
+const queue = (() => { try { return JSON.parse(localStorage.getItem("es.queue") || "[]"); } catch { return []; } })()
+  .map((q) => (typeof q === "string" ? { text: q, at: null } : q));
+const localIso = (d = new Date()) => {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+// Questions about the wait itself ("まだ？") skip the queue; the server answers them at once.
+let bypassRe = null;
+api("/api/chat/bypass").then((r) => { bypassRe = new RegExp(r.pattern); }).catch(() => {});
 const saveQueue = () => { try { localStorage.setItem("es.queue", JSON.stringify(queue)); } catch {} };
 let offline = false;
 let thinkStart = 0, thinkStage = "", thinkDetail = "", thinkPartial = "", thinkTimer = null, stagePoll = null;
@@ -319,7 +328,7 @@ function renderLive() {
   const live = $("#live");
   if (!live) return;
   let html = "";
-  queue.forEach((text, i) => {
+  queue.forEach(({ text }, i) => {
     if (i === 0 && busy) {
       html += `<div class="msg user">${esc(text)}</div>`;
       const secs = ((performance.now() - thinkStart) / 1000).toFixed(1);
@@ -354,7 +363,7 @@ async function pump() {
     renderLive();
     let delivered = true;
     try {
-      const r = await api("/api/chat", { text: queue[0] });
+      const r = await api("/api/chat", { text: queue[0].text, queuedAt: queue[0].at });
       offline = false;
       if (r.pending) window.Es?.say(r.note, { ms: 6000 });
       else window.Es?.react(r);  // a "うん" to a focus offer is started by the server
@@ -382,7 +391,14 @@ $("#send").addEventListener("submit", (e) => {
   const text = $("#input").value.trim();
   if (!text) return;
   $("#input").value = ""; hidePop();
-  queue.push(text);
+  if (busy && bypassRe && bypassRe.test(text) && !text.startsWith("/")) {
+    api("/api/chat", { text, queuedAt: localIso() })
+      .then((r) => { window.Es?.say(r.reply, { ms: 9000 }); return refresh(); })
+      .catch((err) => window.Es?.say(`送れなかった… ${err.message}`, { ms: 6000 }));
+    $("#input").focus();
+    return;
+  }
+  queue.push({ text, at: localIso() });
   saveQueue();
   renderLive();
   pump();

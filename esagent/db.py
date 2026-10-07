@@ -60,7 +60,11 @@ CREATE TABLE IF NOT EXISTS memories(
 # Columns added after the first release; init() adds any that are missing.
 MIGRATIONS = {
     "projects": [("glist_id", "TEXT"), ("description", "TEXT")],
-    "messages": [("status", "TEXT")],  # "pending" = waiting for the model to be ready
+    "messages": [("status", "TEXT"),  # "pending" = waiting for the model to be ready
+                 # Timing of a user message (#23): pressed send in the window, reached the server,
+                 # Es started on it, reply done; wait_reason = "model" if it waited for the model.
+                 ("queued_at", "TEXT"), ("received_at", "TEXT"), ("started_at", "TEXT"), ("finished_at", "TEXT"),
+                 ("wait_reason", "TEXT")],
     "tasks": [("gtask_id", "TEXT"), ("glist_id", "TEXT"), ("g_updated", "TEXT"), ("synced_at", "TEXT"),
               ("repeat", "TEXT"), ("last_reset", "TEXT")],
 }
@@ -83,6 +87,14 @@ def save_config(cfg):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
         f.write("\n")
+
+
+def valid_datetime(value):
+    try:
+        dt.datetime.fromisoformat(value)
+        return len(value) <= 32
+    except (TypeError, ValueError):
+        return False
 
 
 def now():
@@ -307,6 +319,29 @@ def add_message(role, content, status=None):
 def set_message_status(message_id, status):
     with connect() as con:
         con.execute("UPDATE messages SET status = ? WHERE id = ?", (status, message_id))
+        if status == "pending":
+            con.execute("UPDATE messages SET wait_reason = 'model' WHERE id = ?", (message_id,))
+
+
+def set_message_timing(message_id, queued_at=None, received_at=None, started_at=None, finished_at=None):
+    """Keeps the first queued/received time (a waiting message is picked up again later)."""
+    with connect() as con:
+        con.execute("UPDATE messages SET queued_at = COALESCE(queued_at, ?), received_at = COALESCE(received_at, ?), "
+                    "started_at = COALESCE(?, started_at), finished_at = COALESCE(?, finished_at) WHERE id = ?",
+                    (queued_at, received_at, started_at, finished_at, message_id))
+
+
+def last_timed_message(before=None):
+    """The user message whose reply finished last (questions about the wait itself excluded)."""
+    with connect() as con:
+        sql = ("SELECT * FROM messages WHERE role = 'user' AND finished_at IS NOT NULL "
+               "AND COALESCE(wait_reason, '') != 'status'")
+        args = []
+        if before:
+            sql += " AND id < ?"
+            args.append(before)
+        row = con.execute(sql + " ORDER BY finished_at DESC, id DESC LIMIT 1", args).fetchone()
+        return dict(row) if row else None
 
 
 def pending_messages():
