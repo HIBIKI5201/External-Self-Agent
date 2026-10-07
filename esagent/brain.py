@@ -479,7 +479,7 @@ _ADD_HINT_RE = re.compile(r"追加|登録|まで|締め?切|〆|しなきゃ|し
                           r"タスク(を|に)?(作|追加|登録|して|化)|作ろう|作って")
 _SUMMARY_RE = re.compile(r"理解|まとめ|整理|一覧|全体|把握|状況")
 _EXPLICIT_ADD_RE = re.compile(r"タスク(を|に)?(作|追加|登録|して|化)|(追加|登録)して")
-_CLAIM_RE = re.compile(r"(追加|登録|作成|更新|完了に|変更)(しました|しておきました|したよ|しといた|済み)|"
+_CLAIM_RE = re.compile(r"(追加|登録|作成|更新|完了に|変更|分類|移動|設定|削除)(しました|しておきました|したよ|しといた|済み)|"
                        r"タイマーを?[^。\n]{0,8}(スタート|開始)(します|しました|したよ|！|!)")
 _FORGET_RE = re.compile(r"忘れて|後回し|今はいい|いったん置|一旦置|触れないで|出さないで")
 _ACK_RE = re.compile(r"もう(動いて|始めて|やって|始まって)|始めたよ|やってるよ|動いてるよ")
@@ -690,9 +690,22 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     if _TALK_START_RE.search(text) and db.get_setting("chat_mode", "work") == "work":
         reply += "\n（雑談モードにする？上のボタンか「雑談モードにして」で切り替えられるよ）"
     if not events and _CLAIM_RE.search(reply):
-        reply = _CLAIM_RE.sub("（まだ登録していません）", reply)
-        reply += "\n※ タスクはまだ何も変えていないよ。登録するなら「〇〇をタスクに追加して」と言ってね。"
+        reply = drop_false_claims(reply)
     return reply
+
+
+NO_CHANGE_NOTE = "まだ何も登録・変更していないよ。登録するなら「〇〇をタスクに追加して」と言ってね。"
+
+
+def drop_false_claims(reply):
+    """Remove whole sentences that claim a change which did not happen (#11).
+
+    Replacing just the phrase left broken text such as "（まだ登録していません）。#118は…".
+    Sentences are cut at 。！？ and line breaks; task numbers are dropped from what remains."""
+    sentences = re.split(r"(?<=[。！!？?\n])", reply)
+    kept = "".join(s for s in sentences if not _CLAIM_RE.search(s)).strip()
+    kept = re.sub(r"#\d+\s*", "", kept).strip()
+    return f"{kept}\n{NO_CHANGE_NOTE}" if kept else NO_CHANGE_NOTE
 
 
 _progress = {"stage": None, "since": None, "detail": "", "partial": ""}
