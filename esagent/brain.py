@@ -63,7 +63,10 @@ What you CANNOT do: browse the web, read or edit files, open Unity, run programs
 or change your own program, screen or features. Changes to E.S. Agent itself are made by Claude Code:
 offer to register the idea as a task in the EsAgent project, or to hand it over with /claude.
 If asked for something you cannot do, say so plainly in one sentence and offer what you can do instead.
-Only state facts that appear in this conversation, the records, the task list or your memory. If the answer
+Only state facts that appear in this conversation, the records, the task list or your memory.
+You have not searched anything: keep a word's dictionary meaning apart from guesses, and never describe what a
+name refers to (a place, enemy, item, product) unless the user told you. Your own past actions are only those
+in the records; never talk about tasks or work as if you had done them yourself. If the answer
 is not there (for example a word, code or number the user never told you), say honestly that you do not
 know or do not remember it. Never invent one.
 Never claim you did something that is not listed under "What just happened"."""
@@ -482,6 +485,65 @@ def _report_flow(text):
         db.set_setting("pending_focus", str(task["id"]))
         return f"了解、「{task['title']}」は自分で進めるんだね。集中タイマー、始める？", None
     return "了解、自分で進めるんだね。終わったら教えてね。タスクにしておくなら「タスクにして」と言ってね。", None
+
+
+# "Verdantって何？" -- the meaning of an English name (#24).
+_MEANING_RE = re.compile(r"(?P<term>[A-Za-z][A-Za-z0-9' .\-]{1,40}?)\s*(って|とは|は)?\s*"
+                         r"(何|なに|なん|どういう意味|の意味|って意味)")
+# "最近何してた？" -- what Es itself has been doing (#24).
+_ACTIVITY_RE = re.compile(r"(最近|さっき|今日|今まで|この前|昨日)?(は)?(何|なに|なん)(を|か)?(して|やって)(た|いた|る|ました)|"
+                          r"(最近|今日)の(活動|作業)")
+
+
+def _known_term(term):
+    """Does the term appear in what the user said, the tasks or the memories?"""
+    low = term.lower()
+    if low in PERSONA.lower():  # Unity, Claude Code, Google ToDo ...
+        return True
+    with db.connect() as con:
+        said = con.execute("SELECT 1 FROM messages WHERE role = 'user' AND lower(content) LIKE ? "
+                           "AND id < (SELECT MAX(id) FROM messages) LIMIT 1", (f"%{low}%",)).fetchone()
+    return bool(said) or any(low in t["title"].lower() or low in (t["notes"] or "").lower() for t in db.list_tasks()) \
+        or any(low in m["content"].lower() for m in db.list_memories())
+
+
+def _meaning_flow(cfg, text):
+    """The model only gives the dictionary meaning; what the name refers to is not made up (#24).
+
+    An 8B model "explains" an unknown game name with areas and enemies it invented."""
+    m = _MEANING_RE.search(text)
+    if not m or _ACTION_HINT_RE.search(text):
+        return None
+    term = m.group("term").strip()
+    if len(term) < 3 or _known_term(term):
+        return None
+    system = ("Translate the English word(s) below literally into Japanese, word by word, under 20 characters "
+              "(e.g. Iron Gate -> 鉄の門, Lumen -> 光). Only the word meaning, nothing about games, places or products. "
+              "Output exactly - only if none of the words is an English word.")
+    gloss = llm.chat(cfg, [{"role": "system", "content": system}, {"role": "user", "content": term}],
+                     options={"temperature": 0, "num_predict": 30}).strip().strip("「」\"'。").splitlines()
+    gloss = gloss[0].strip() if gloss else "-"
+    # A katakana reading or an echo of the term is not a meaning.
+    meaningful = re.search(r"[一-龥ぁ-ん]", gloss) and not re.search(r"[A-Za-z]", gloss)
+    word = (f"「{term}」は英語だと「{gloss[:30]}」という意味の言葉だよ。" if meaningful
+            else f"「{term}」は、言葉としての意味もうまく訳せなかった。")
+    return (word + "ただ、それがゲームや作品の中で何を指すのかは、調べていないから私にはわからないんだ。"
+            "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
+
+
+def _activity_flow(text):
+    """What Es did, from the action records only; Es does no work on its own (#24)."""
+    if not _ACTIVITY_RE.search(text) or _ACTION_HINT_RE.search(text):
+        return None
+    since = (dt.datetime.now() - dt.timedelta(days=1)).isoformat(timespec="seconds")
+    with db.connect() as con:
+        rows = con.execute("SELECT content FROM messages WHERE role = 'notice' AND created_at >= ? "
+                           "ORDER BY id DESC LIMIT 5", (since,)).fetchall()
+    done = [line for r in rows for line in r["content"].splitlines() if line[:1] in "＋✎✔→"][:5]
+    tail = "それ以外は、メッセージを待っていただけだよ。私は自分から作業はしないんだ。"
+    if not done:
+        return "この 1 日は、記録に残るような操作はしていないよ。" + tail
+    return "この 1 日で私がしたのは、記録に残っているこれだけだよ:\n" + "\n".join(done) + "\n" + tail
 
 
 def _policy_flow(text):
@@ -1065,6 +1127,14 @@ def _chat(text, cfg, message_id=None):
             reply = "了解、じゃあ私も集中するね。終わったら教えて。"
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "intent": "ack"}
+        activity = _activity_flow(text)
+        if activity:
+            db.add_message("assistant", activity)
+            return {"reply": activity, "events": [], "handoffs": [], "intent": "activity"}
+        meaning = _meaning_flow(cfg, text)
+        if meaning:
+            db.add_message("assistant", meaning)
+            return {"reply": meaning, "events": [], "handoffs": [], "intent": "meaning"}
         report = _report_flow(text)
         if report:
             db.add_message("assistant", report[0])
