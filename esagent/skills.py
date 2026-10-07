@@ -281,7 +281,20 @@ Arguments the user typed after /{skill['name']}: {args or "(none)"}
 
 # ---- entry point ---------------------------------------------------------------
 
-def run(text, cfg, message_id=None):
+def run(text, cfg, message_id=None, queued_at=None):
+    received = db.now()
+    timing, result = {}, None
+    try:
+        result = _run(text, cfg, message_id, timing)
+        return result
+    finally:
+        if timing.get("id"):
+            db.set_message_timing(timing["id"], queued_at=db.normalize_datetime(queued_at),
+                                  received_at=received, started_at=timing["started_at"],
+                                  finished_at=db.now() if result is not None and not result.get("pending") else None)
+
+
+def _run(text, cfg, message_id=None, timing=None):
     """Handle a "/name args" message. Returns the same shape as brain.chat().
     With message_id, run a stored skill call that was waiting for the model."""
     head, _, args = text.strip().partition(" ")
@@ -292,6 +305,7 @@ def run(text, cfg, message_id=None):
         message_id = db.add_message("user", text)
     else:
         db.set_message_status(message_id, None)
+    timing.update(id=message_id, started_at=db.now())
     if not skill:
         reply = f"/{name} というスキルはありません。/help で一覧を出せます。"
         db.add_message("es", reply)
@@ -300,6 +314,7 @@ def run(text, cfg, message_id=None):
     if skill.get("action"):
         if skill["action"] == "next":  # uses the model, so share the chat's lock and progress
             with brain._lock:
+                timing["started_at"] = db.now()
                 brain._stage("次にやることを考え中")
                 try:
                     reply, handoffs = actions.run_action(skill["action"], args, cfg)
@@ -320,6 +335,7 @@ def run(text, cfg, message_id=None):
         memo = f"{dt.date.today().isoformat()}: {args.strip()}"
         saved.append(f"・ 覚えました（#{db.add_memory(memo)}）: {memo}")
     with brain._lock:
+        timing["started_at"] = db.now()
         brain._stage(f"/{skill['name']} を実行中")
         try:
             reply, r = _procedure(skill, args.strip(), cfg, message_id)

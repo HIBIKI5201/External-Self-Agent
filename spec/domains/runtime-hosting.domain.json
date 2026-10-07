@@ -5,6 +5,9 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)(tests/test_message_timing\\.py|spec/test/message-timing-39\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)(esagent/chat_requests|tests/test_chat_requests)\\.py$"
     },
     {
