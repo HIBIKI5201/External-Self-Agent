@@ -220,7 +220,7 @@ _TOOL_LABELS = {"list_tasks": "タスクを確認中", "recently_done": "終わ�
                 "hand_to_claude": "Claude Code への引き継ぎを準備中", "offer_focus": "提案を準備中", "remember": "覚えている", "start_focus": "タイマーを準備中"}
 
 
-def _procedure(skill, args, cfg):
+def _procedure(skill, args, cfg, message_id=None):
     today = dt.date.today()
     run = _Run(cfg)
     memories = "\n".join(f"- {m['content']}" for m in db.list_memories()) or "(none)"
@@ -243,7 +243,10 @@ Arguments the user typed after /{skill['name']}: {args or "(none)"}
 
 --- skill steps ---
 {skill['body']}"""
-    messages = [{"role": "system", "content": system},
+    # Recent conversation, so "それを計画して" or "さっきの話" work inside a skill too.
+    recent = brain.conversation(db.recent_messages(40, roles=("user", "assistant", "notice"), before=message_id),
+                                cfg.get("history_tokens", 2000) // 2)
+    messages = [{"role": "system", "content": system}, *recent,
                 {"role": "user", "content": brain.annotate_dates(f"/{skill['name']} {args}".strip(), today)}]
     reply = ""
     for _ in range(MAX_STEPS):
@@ -315,7 +318,7 @@ def run(text, cfg, message_id=None):
     with brain._lock:
         brain._stage(f"/{skill['name']} を実行中")
         try:
-            reply, r = _procedure(skill, args.strip(), cfg)
+            reply, r = _procedure(skill, args.strip(), cfg, message_id)
             r.events[:0] = saved
         except llm.LLMError:
             db.set_message_status(message_id, "pending")

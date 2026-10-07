@@ -62,6 +62,9 @@ What you CANNOT do: browse the web, read or edit files, open Unity, run programs
 or change your own program, screen or features. Changes to E.S. Agent itself are made by Claude Code:
 offer to register the idea as a task in the EsAgent project, or to hand it over with /claude.
 If asked for something you cannot do, say so plainly in one sentence and offer what you can do instead.
+Only state facts that appear in this conversation, the records, the task list or your memory. If the answer
+is not there (for example a word, code or number the user never told you), say honestly that you do not
+know or do not remember it. Never invent one.
 Never claim you did something that is not listed under "What just happened"."""
 _lock = threading.Lock()
 
@@ -484,10 +487,48 @@ _COMPANY_RE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9一-龥ァ-ヶー]{1,12}社")
 _META_TITLE_RE = re.compile(r"関連タスク|タスクの開始|タスク$|内容(の)?(取り出し|取得|取り込)|取ってく")
 
 
+def estimate_tokens(text):
+    """Rough token count: Japanese is about 1 token per 1.3 characters, ASCII about 1 per 4."""
+    ascii_chars = sum(1 for ch in text if ord(ch) < 128)
+    return int((len(text) - ascii_chars) / 1.3 + ascii_chars / 4) + 4
+
+
+def conversation(history, budget):
+    """Stored messages -> chat messages for the model, newest kept first within a token budget.
+
+    Replaces a fixed "last N messages" window, which made Es forget anything older than two
+    exchanges (Issue #12). Action records (role "notice", e.g. "＋ #12 A社のES提出") are attached
+    to the reply they belong to, so the model knows what was actually done.
+    """
+    turns = []
+    for m in history:
+        if m["role"] == "notice":
+            if turns and turns[-1]["role"] == "assistant":
+                turns[-1]["content"] += f"\n（記録: {m['content']}）"
+            continue
+        if m["role"] in ("user", "assistant"):
+            turns.append({"role": m["role"], "content": m["content"]})
+    picked, used = [], 0
+    for t in reversed(turns):
+        cost = estimate_tokens(t["content"])
+        if used + cost > budget:
+            break
+        picked.append(t)
+        used += cost
+    picked.reverse()
+    while picked and picked[0]["role"] != "user":
+        picked.pop(0)
+    return picked
+
+
+def _budget(cfg):
+    return cfg.get("history_tokens", 2000)
+
+
 def _route(cfg, text, today, history):
     """Stage 1: decide intent and task changes (JSON, no prose)."""
     messages = [{"role": "system", "content": _router_prompt(today)}]
-    messages += [{"role": m["role"], "content": m["content"]} for m in history[-6:]]
+    messages += conversation(history, int(_budget(cfg) * 0.75))
     messages.append({"role": "user", "content": text})
     raw = llm.chat(cfg, messages, schema=ROUTER_SCHEMA, options={"temperature": 0.1},
                    think=cfg.get("think_router", False))
@@ -532,6 +573,9 @@ _STYLE_EXAMPLES = {
          "もう全部ここに入っています。どれから手をつけるか一緒に決めましょうか？"),
         ("こんにちは",
          "こんにちは！今日はどれから手をつけましょうか？締切の近いものから一緒に見ていけます。"),
+        # The model would otherwise invent a plausible answer for something it was never told (#12).
+        ("前に教えた暗証番号って何だっけ？",
+         "ごめんね、その話はまだ聞いてないと思う。もう一度教えてくれたら覚えておくよ。"),
     ],
 }
 
@@ -638,8 +682,7 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     messages = [{"role": "system", "content": _responder_prompt(today, intent, text, focus, events)}]
     for q, a in _STYLE_EXAMPLES[intent]:
         messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
-    depth = 8 if db.get_setting("chat_mode") == "talk" else 4
-    messages += [{"role": m["role"], "content": m["content"]} for m in history[-depth:]]
+    messages += conversation(history, _budget(cfg))
     messages.append({"role": "user", "content": text})
     reply = llm.chat(cfg, messages, options={"temperature": 0.6, "num_predict": 400}, on_text=_partial).strip()
     # Only set_mode() changes the mode; the model must not announce a switch on its own.
@@ -713,6 +756,32 @@ def _feature_title(cfg, wish):
     return (title.splitlines()[0] if title else wish)[:40]
 
 
+_RECALL_RE = re.compile(r"(今回|さっき|前|この前|最初)の(?P<a>[^、。？?\s]{1,12}?)(は|って|だけ|を|、|？|\?)|"
+                        r"(?P<b>[^、。？?\s]{1,12}?)(って|は)(何|なん)だっけ|"
+                        r"(?P<c>[^、。？?\s]{1,12}?)(覚えてる|おぼえてる|教えたよね|言ったよね)")
+
+
+def _recall_flow(text, message_id):
+    """"今回の合言葉は？" about something the user never said -> say so instead of inventing (#12).
+
+    Only for questions that refer back to something the user told Es; general questions
+    ("Verseって何？") do not match. If the topic word appears in any earlier user message or
+    memory, the normal path answers it with the conversation."""
+    m = _RECALL_RE.search(text)
+    if not m:
+        return None
+    topic = (m.group("a") or m.group("b") or m.group("c") or "").strip()
+    if len(topic) < 2:
+        return None
+    with db.connect() as con:
+        said = con.execute("SELECT 1 FROM messages WHERE role = 'user' AND id < ? AND content LIKE ? LIMIT 1",
+                           (message_id, f"%{topic}%")).fetchone()
+    remembered = any(topic in mem["content"] for mem in db.list_memories())
+    if said or remembered:
+        return None
+    return f"ごめんね、「{topic}」はまだ聞いてないと思う。教えてくれたら覚えておくよ。"
+
+
 def _offer_flow(text):
     """A yes to Es's offer to start the focus timer starts it in the window."""
     pending = db.get_setting("pending_focus") or ""
@@ -773,7 +842,7 @@ PENDING_NOTE = "モデルの準備ができたら、このメッセージに返�
 
 def _chat(text, cfg, message_id=None):
     today = dt.date.today()
-    history = db.recent_messages(cfg.get("history_messages", 12), roles=("user", "assistant"), before=message_id)
+    history = db.recent_messages(80, roles=("user", "assistant", "notice"), before=message_id)
     annotated = annotate_dates(text, today)
     late = message_id is not None  # answering a message that waited for the model
     if message_id is None:
@@ -787,6 +856,10 @@ def _chat(text, cfg, message_id=None):
         db.add_message("assistant", reply)
         return {"reply": reply, "events": [], "handoffs": [], "intent": "mode", "mode": wants}
     try:
+        unknown = _recall_flow(text, message_id)
+        if unknown:
+            db.add_message("assistant", unknown)
+            return {"reply": unknown, "events": [], "handoffs": [], "intent": "recall"}
         offer = _offer_flow(text)
         if offer:
             reply, ui = offer
