@@ -21,7 +21,7 @@ ERROR_RETRY_SECONDS = 300
 log = logging.getLogger("esagent.gsync")
 _sync_lock = threading.Lock()
 _wake = threading.Event()
-_cfg = {}
+_cfg = {}  # the server's live config (start() binds it)
 
 SyncError = gapi.SyncError
 
@@ -285,8 +285,8 @@ def run_once():
 
 
 def _loop(cfg):
-    interval = cfg.get("google_sync_minutes", 3) * 60
     while True:
+        interval = cfg.get("google_sync_minutes", 3) * 60  # read each round: the admin page can change it
         result = run_once()
         wait = {"offline": OFFLINE_RETRY_SECONDS, "error": ERROR_RETRY_SECONDS}.get(result, interval)
         if _wake.wait(wait):
@@ -295,5 +295,6 @@ def _loop(cfg):
 
 
 def start(cfg):
-    _cfg.update(cfg)
+    global _cfg
+    _cfg = cfg
     threading.Thread(target=_loop, args=(cfg,), name="gsync", daemon=True).start()
