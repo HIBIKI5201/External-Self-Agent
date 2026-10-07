@@ -1003,6 +1003,7 @@ def chat(text, cfg, message_id=None, queued_at=None):
     Questions about the wait itself ("考えるの長くない？") are answered at once from the
     measured timings, without the lock or the model (#23)."""
     received = db.now()
+    queued_at = db.normalize_datetime(queued_at)
     if message_id is None and is_status_question(text):
         return _status_answer(text, queued_at, received)
     with _lock:

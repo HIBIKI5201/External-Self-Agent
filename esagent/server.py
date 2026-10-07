@@ -219,8 +219,8 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 raise ValueError("text is empty")
             queued = body.get("queuedAt")  # when send was pressed (the window queues messages)
-            queued = queued if isinstance(queued, str) and db.valid_datetime(queued) else None
-            result = skills.run(text, CFG) if text.startswith("/") else brain.chat(text, CFG, queued_at=queued)
+            queued = db.normalize_datetime(queued)
+            result = skills.run(text, CFG, queued_at=queued) if text.startswith("/") else brain.chat(text, CFG, queued_at=queued)
             if result.get("events"):
                 events.push("chat_events", lines=result["events"])
             if result.get("ui", {}).get("focus"):

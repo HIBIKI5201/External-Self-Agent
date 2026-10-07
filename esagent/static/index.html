@@ -317,8 +317,7 @@ const requestId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), n
 const queue = (() => { try { return JSON.parse(localStorage.getItem("es.queue") || "[]"); } catch { return []; } })()
   .map((q) => ({ ...(typeof q === "string" ? { text: q, at: null } : q), id: q.id || requestId() }));
 const localIso = (d = new Date()) => {
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return d.toISOString(); // retain milliseconds and timezone across queued/replayed requests
 };
 // Questions about the wait itself ("まだ？") skip the queue; the server answers them at once.
 let bypassRe = null;

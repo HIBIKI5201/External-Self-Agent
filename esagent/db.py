@@ -104,8 +104,21 @@ def valid_datetime(value):
         return False
 
 
+def normalize_datetime(value):
+    """Screen ISO values may use UTC/offsets; store local naive time like other DB stamps."""
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        stamp = dt.datetime.fromisoformat(value)
+        if stamp.tzinfo is not None:
+            stamp = stamp.astimezone().replace(tzinfo=None)
+        return stamp.isoformat(timespec="milliseconds")
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def now():
-    return dt.datetime.now().isoformat(timespec="seconds")
+    return dt.datetime.now().isoformat(timespec="milliseconds")
 
 
 @contextmanager
