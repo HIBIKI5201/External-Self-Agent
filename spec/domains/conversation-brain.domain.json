@@ -18,6 +18,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|spec/test/conversation-repeat-53\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_duplicate_result\\.py|spec/test/duplicate-result-54\\.md)$"
     }
   ],
   "source": "manual",

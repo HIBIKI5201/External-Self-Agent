@@ -403,6 +403,18 @@ def _apply(actions, cfg, user_text="", context_text=""):
             dup = _duplicate_of(title)
             if dup:
                 events.append(f"・ #{dup['id']} {dup['title']} は登録済みなので追加しませんでした")
+                missing = []
+                if due and due != dup['due']:
+                    missing.append('締切')
+                if project and project != dup['project']:
+                    missing.append('プロジェクト')
+                if notes and notes not in (dup['notes'] or ''):
+                    missing.append('メモ')
+                rule = recurring.parse(user_text) or recurring.parse(context_text)
+                if rule and rule != dup.get('repeat'):
+                    missing.append('繰り返し')
+                if missing:
+                    events.append(f"⚠ #{dup['id']} {dup['title']} の指定された{'・'.join(missing)}は既存の内容と異なるため反映していません。既存タスクは変更していません")
                 continue
             if project and project.lower() in user_text.lower() and db.ensure_project(project):
                 events.append(f"・ プロジェクト「{project}」を作りました")
@@ -803,6 +815,22 @@ def _next_suggestion(project_id, exclude_id=None):
 def _template_reply(intent, events, touched):
     """Replies after task changes are built from what actually happened, not generated."""
     done = [e for e in events if e[:1] in "＋✎✔→"]
+    duplicates = [e for e in events if e.startswith('・ #') and e.endswith(' は登録済みなので追加しませんでした')]
+    rejected = [e for e in events if e[:1] not in '＋✎✔→' and e not in duplicates and
+                not (e.startswith('・ プロジェクト') and e.endswith('を作りました')) and
+                (e.startswith('⚠') or any(w in e for w in ('実行しませんでした', '追加しませんでした',
+                                                           '設定しませんでした', '変えていません')))]
+    def finish(reply):
+        if duplicates:
+            reply += '\n登録済みのタスクは、新しく追加していないよ。'
+        if rejected:
+            reply += '\n一部の条件や操作は反映していないよ。下の記録を確認してね。'
+        return reply
+    if not done and duplicates:
+        reply = 'そのタスクは登録済みなので、新しく追加していないよ。'
+        if rejected:
+            reply += '\nただ、指定された条件や操作の一部は反映していないよ。下の記録を確認して、既存タスクをどう変えるか教えてね。'
+        return reply
     if not done and events and all("引き継ぎ準備済み" in e for e in events):  # not a failure (#21)
         return "それは Claude Code への引き継ぎをもう準備してあるよ。右の「Claude Codeで開く」から始められるよ。"
     if not done and events and all("変えていません" in e for e in events):
@@ -813,15 +841,15 @@ def _template_reply(intent, events, touched):
     if intent == "complete":
         nxt = _next_suggestion(touched.get("project_id"), touched.get("id"))
         tail = f"次は「{nxt['title']}」はどうですか？" if nxt else "残りのタスクはありません！"
-        return f"お疲れさまです！完了にしておきました。{tail}"
+        return finish(f"お疲れさまです！完了にしておきました。{tail}")
     if intent == "delegate":
-        return "Claude Code への引き継ぎを用意しました。右の「Claude Codeで開く」から始められます。"
+        return finish("Claude Code への引き継ぎを用意しました。右の「Claude Codeで開く」から始められます。")
     if intent == "add":
         due = touched.get("due")
         if due and due <= (dt.date.today() + dt.timedelta(days=3)).isoformat():
-            return f"登録しました。締切（{due}）が近いので、今日のうちに少しでも手をつけておくと安心です。"
-        return "登録しました。"
-    return "更新しておきました。"
+            return finish(f"登録しました。締切（{due}）が近いので、今日のうちに少しでも手をつけておくと安心です。")
+        return finish("登録しました。")
+    return finish("更新しておきました。")
 
 
 def _first_step(cfg, text, task):
