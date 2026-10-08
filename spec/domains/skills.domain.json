@@ -12,6 +12,9 @@
     },
     {
       "pathPattern": "(^|/)skills/[^/]+/SKILL\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_output_retry\\.py|spec/test/output-retry-32\\.md)$"
     }
   ],
   "source": "manual",

@@ -118,6 +118,11 @@ class _Run:
         self.cfg, self.events, self.handoffs, self.ui = cfg, [], [], {}
         self.seen = set()  # Qwen3 sometimes repeats the same call; answer repeats without re-running
         self.today = dt.date.today()
+        self.error = None
+
+    def _reject(self, reason):
+        self.error = reason
+        return reason
 
     def _due(self, value):
         if not value:
@@ -132,16 +137,31 @@ class _Run:
         return due, None
 
     def call(self, name, args):
+        self.error = None
+        spec = next((t['function']['parameters'] for t in TOOLS if t['function']['name'] == name), None)
+        if spec is None:
+            return self._reject(f'unknown tool {name}。定義されたツールから選んでください')
+        if not isinstance(args, dict):
+            return self._reject('引数はJSONオブジェクトにしてください')
+        props = spec['properties']
+        if any(k not in args for k in spec['required']) or any(k not in props for k in args):
+            return self._reject('必須引数を指定し、未定義の引数を削除してください')
+        for k, v in args.items():
+            typ = props[k]['type']
+            if (typ == 'integer' and (not isinstance(v, int) or isinstance(v, bool))) or (typ == 'string' and not isinstance(v, str)):
+                return self._reject(f'{k} は {typ} 型で指定してください')
         key = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
         if key in self.seen:
             return "さっきと同じ呼び出しです。結果は上にあります。次の手順へ進むか、返事を書いてください。"
-        self.seen.add(key)
         try:
-            return getattr(self, "t_" + name)(**args)
+            result = getattr(self, "t_" + name)(**args)
         except AttributeError:
-            return f"unknown tool {name}"
-        except TypeError as e:
-            return f"引数が正しくありません: {e}"
+            return self._reject(f"unknown tool {name}")
+        except (TypeError, ValueError) as e:
+            return self._reject(f"引数が正しくありません: {e}")
+        if not self.error:
+            self.seen.add(key)
+        return result
 
     def t_list_tasks(self, project=""):
         tasks = db.list_tasks(project=project or None)
@@ -157,12 +177,14 @@ class _Run:
 
     def t_get_task(self, task_id):
         t = db.get_task(int(task_id))
-        return json.dumps(t, ensure_ascii=False) if t else "そのタスクはありません"
+        return json.dumps(t, ensure_ascii=False) if t else self._reject("そのタスクはありません。一覧から番号を選んでください")
 
     def t_add_task(self, title, project="", due="", notes=""):
         due, err = self._due(due)
         if err:
-            return err
+            return self._reject(err)
+        if not title.strip():
+            return self._reject('タイトルが空です。具体的な内容を指定してください')
         dup = brain._duplicate_of(title)
         if dup:
             return f"#{dup['id']}「{dup['title']}」が既にあるので追加しませんでした"
@@ -173,10 +195,10 @@ class _Run:
 
     def t_update_task(self, task_id, title="", due="", notes_append=""):
         if not db.get_task(int(task_id)):
-            return "そのタスクはありません"
+            return self._reject("そのタスクはありません。一覧から番号を選んでください")
         new_due, err = self._due(due)
         if err:
-            return err
+            return self._reject(err)
         t = db.update_task(int(task_id), title=title or None, due=new_due, notes_append=notes_append or None)
         self.events.append(f"✎ #{t['id']} {t['title']} を更新しました" + (f"（締切 {t['due']}）" if new_due else ""))
         return f"更新しました: 「{t['title']}」締切 {t['due'] or 'なし'}"
@@ -184,7 +206,7 @@ class _Run:
     def t_complete_task(self, task_id):
         t = db.get_task(int(task_id))
         if not t:
-            return "そのタスクはありません"
+            return self._reject("そのタスクはありません。一覧から番号を選んでください")
         db.update_task(t["id"], status="done")
         self.events.append(f"✔ #{t['id']} {t['title']} を完了にしました")
         return "完了にしました"
@@ -192,7 +214,7 @@ class _Run:
     def t_hand_to_claude(self, task_id):
         t = db.get_task(int(task_id))
         if not t:
-            return "そのタスクはありません"
+            return self._reject("そのタスクはありません。一覧から番号を選んでください")
         h = brain.delegate(t["id"], self.cfg)
         self.handoffs.append(h)
         self.events.append(f"→ #{t['id']} {t['title']} を Claude Code 用に準備しました（handoff #{h['id']}）")
@@ -205,13 +227,13 @@ class _Run:
 
     def t_offer_focus(self, task_id):
         if not db.get_task(int(task_id)):
-            return "そのタスクはありません"
+            return self._reject("そのタスクはありません。一覧から番号を選んでください")
         db.set_setting("pending_focus", str(int(task_id)))
         return "提案を記録しました。返事の最後で、このタスクから集中タイマーを始めるか聞いてください"
 
     def t_start_focus(self, task_id):
         if not db.get_task(int(task_id)):
-            return "そのタスクはありません"
+            return self._reject("そのタスクはありません。一覧から番号を選んでください")
         self.ui["focus"] = int(task_id)
         return "集中タイマーを開始します"
 
@@ -253,24 +275,41 @@ Arguments the user typed after /{skill['name']}: {args or "(none)"}
     messages = [{"role": "system", "content": system}, *recent,
                 {"role": "user", "content": brain.annotate_dates(f"/{skill['name']} {args}".strip(), today)}]
     reply = ""
+    failures = 0
     for _ in range(MAX_STEPS):
-        msg = llm.chat_tools(cfg, messages, TOOLS, options={"temperature": 0.3})
+        with llm.validation_attempt('procedure', failures):
+            msg = llm.chat_tools(cfg, messages, TOOLS, options={"temperature": 0.3})
         calls = msg.get("tool_calls") or []
         messages.append({"role": "assistant", "content": msg.get("content", ""), "tool_calls": calls})
         if not calls:
             reply = msg.get("content", "")
             break
+        rejected = []
         for c in calls:
-            fn = c.get("function", {})
-            name, a = fn.get("name", ""), fn.get("arguments") or {}
+            fn = c.get("function", {}) if isinstance(c, dict) else {}
+            if not isinstance(fn, dict):
+                fn = {}
+            name = fn.get("name", "")
+            a = fn.get("arguments") if fn.get("arguments") is not None else {}
             if isinstance(a, str):
                 try:
                     a = json.loads(a)
                 except json.JSONDecodeError:
-                    a = {}
+                    a = {'invalid_json': True}
             brain._progress["detail"] = _TOOL_LABELS.get(name, name)
             result = run.call(name, a)
+            if run.error:
+                rejected.append(run.error)
+                result = '検証で不合格。実行していません: ' + run.error + '。引数を直すか、対象不明なら利用者に確認してください。'
             messages.append({"role": "tool", "content": str(result), "tool_name": name})
+        if rejected:
+            failures += 1
+            if failures > 2:
+                reply = '一部の手順を実行できませんでした。' + ' / '.join(rejected)
+                if run.events:
+                    reply += '\n完了した操作は下の記録を確認してください。'
+                break
+            brain._progress['detail'] = '確認して書き直し中'
     else:
         # Out of steps: write the reply from what has been gathered so far rather than failing.
         messages.append({"role": "user", "content": "ここまでの結果をもとに、ユーザーへの返事を書いてください。"})
