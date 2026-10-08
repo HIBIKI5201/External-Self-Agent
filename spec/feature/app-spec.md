@@ -20,6 +20,8 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 
 ## AS-01 全体構成と常駐
 
+- **実装（#61）:** リリース版は `VERSION` が正本。0.2.0（2026-10-08）の変更一覧は `CHANGELOG.md`、検証と残る確認事項は `spec/test/release-0.2.0.md`。版の確定後にmainのリリースコミットへ `v0.2.0` タグを付ける。
+
 - **決定:** E.S. Agent はこの PC に常駐する。本体は `C:\ESAgent`（階層を浅くするため C ドライブ直下）。ログオン時に自動で起動し、チャット画面はスタートアップアプリのように呼び出せる。
 - **実装:** Python 標準ライブラリだけで動くローカル HTTP サーバー（`esagent/server.py`、`127.0.0.1:8765`）。Windows のタスクスケジューラのタスク `ESAgent` がログオン時に `pythonw server.py` を起動する（`install.ps1`）。
 - **実装:** チャット画面は Edge のアプリウィンドウ（`--app=http://127.0.0.1:8765/`）。**Ctrl+Alt+E** またはスタートメニューの「E.S. Agent」で開く（`esagent/launch.py`）。**既に開いていれば前面に出し、無ければ開く**（`esagent/winfocus.py`）。
