@@ -16,6 +16,7 @@ import projects
 import recurring
 import repeat_chat
 import choices
+import task_context
 
 WEEKDAYS = "月火水木金土日"
 
@@ -578,6 +579,7 @@ def _policy_flow(text):
     if not (_POLICY_WISH_RE.search(text) and _POLICY_RE.search(text)):
         return None
     db.set_setting("pending_feature", text)
+    task_context.begin(text, _progress['message_id'])
     return ("わかった、気をつけるね。ただ、私の受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
             "私が自分で書き換えることはできないんだ。\n"
             "改修のタスクとして EsAgent に登録しておく？「うん」か「登録して」で入れるよ。タスクは何も変えていないよ。")
@@ -1125,9 +1127,23 @@ def _feature_flow(cfg, text):
     if _WISH_RE.search(text) and _FEATURE_RE.search(text) and not _REFERENCE_RE.search(text) \
             and not _REGISTER_RE.search(text):
         db.set_setting("pending_feature", text)
+        task_context.begin(text, _progress['message_id'])
         return ("いいね、それ。でも私は自分の画面やプログラムを直せないんだ。\n"
                 "EsAgent のタスクとして登録しておく？「うん」か「登録して」で入れるよ。", [])
     return None
+
+
+def _register_feature(cfg, wish, statements):
+    db.ensure_project('EsAgent')
+    title = 'E.S. Agent: ' + wish[:45]
+    memo = task_context.notes(statements)
+    events, _, touched = _apply([{'type': 'add_task', 'title': title, 'project': 'EsAgent', 'notes': memo}],
+                                cfg, user_text=wish + 'をタスクにして')
+    task_context.clear()
+    reply = _template_reply('add', events, touched)
+    if touched:
+        reply += '\n保存した詳細:\n' + memo + '\n内容はタスクのメモ欄で確認・訂正できるよ。'
+    return reply, events
 
 
 def _choice_reply(selected, cfg, message_id=None):
@@ -1138,6 +1154,7 @@ def _choice_reply(selected, cfg, message_id=None):
     if kind == 'stale':
         reply = 'いま有効な提案を特定できなかったよ。現在の提案のボタンか、やりたいことを言葉で教えてね。何も変更していないよ。'
     elif value == 'cancel':
+        task_context.clear()
         reply = 'わかった、今回はやめておくね。何も変更していないよ。'
     elif kind == 'mode' and payload.get('mode') in MODES:
         reply = set_mode(payload['mode'])
@@ -1149,12 +1166,7 @@ def _choice_reply(selected, cfg, message_id=None):
             reply = '対象タスクが変わっているので、集中タイマーは開始していないよ。'
     elif kind == 'feature' and isinstance(payload.get('wish'), str):
         wish = payload['wish']
-        db.ensure_project('EsAgent')
-        # Approval needs no model: the full request is kept in notes, the title is literal.
-        title = 'E.S. Agent: ' + wish[:45]
-        events, _, touched = _apply([{'type': 'add_task', 'title': title, 'project': 'EsAgent', 'notes': wish}],
-                                    cfg, user_text=wish + 'をタスクにして')
-        reply = _template_reply('add', events, touched)
+        reply, events = _register_feature(cfg, wish, payload.get('context') or [wish])
     elif kind == 'topic' and value in choices.TOPICS:
         reply = choices.TOPICS[value][1]
     else:
@@ -1291,20 +1303,35 @@ def _chat(text, cfg, message_id=None):
     _progress["message_id"] = message_id
     proposed = choices.proposed_mode(text)
     if proposed:
+        task_context.clear()
         reply = f'{MODES[proposed]}に切り替える？選ぶまでモードは変えていないよ。'
         db.add_message('assistant', reply)
         choices.publish('mode', {'mode': proposed})
         return {'reply': reply, 'events': [], 'handoffs': [], 'intent': 'proposal'}
     if re.fullmatch(r'(?:話題を選びたい|話題を選ばせて|話題を選んで)[。！!\s]*', text):
+        task_context.clear()
         reply = 'どんな話をしよう？選んでも、自由に書いてくれてもいいよ。'
         db.add_message('assistant', reply)
         choices.publish('topic')
         return {'reply': reply, 'events': [], 'handoffs': [], 'intent': 'proposal'}
     wants = choices.explicit_mode(text)
     if wants and not _ACTION_HINT_RE.search(text):
+        task_context.clear()
         reply = set_mode(wants)
         db.add_message("assistant", reply)
         return {"reply": reply, "events": [], "handoffs": [], "intent": "mode", "mode": wants}
+    detail = task_context.detail_request(text)
+    context = detail or task_context.proposal(text, message_id)
+    if context:
+        if context.get('register'):
+            value = context['register']
+            reply, events = _register_feature(cfg, value['wish'], task_context.lines(value))
+        else:
+            reply, events = context['reply'], context.get('events', [])
+        db.add_message('assistant', reply)
+        if events:
+            db.add_message('notice', '\n'.join(events))
+        return {'reply': reply, 'events': events, 'handoffs': [], 'intent': 'feature-context'}
     try:
         if re.search(_MEMORY_COMMAND + r"(?:[。！!？?\s]*$|\s*[:：])", text):
             reply = _remember(cfg, text, history)

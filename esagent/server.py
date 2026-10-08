@@ -31,6 +31,7 @@ import recurring  # noqa: E402
 import skills  # noqa: E402
 import youtube  # noqa: E402
 import choices  # noqa: E402
+import task_context  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
@@ -322,6 +323,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("mode must be work or talk")
             with choices.lock:
                 choices.invalidate()
+                task_context.clear()
                 return {"mode": mode, "reply": brain.set_mode(mode)}
         if path == "/api/pet/enabled":
             on = bool(body.get("enabled"))

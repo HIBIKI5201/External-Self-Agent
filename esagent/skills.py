@@ -26,6 +26,7 @@ import db
 import llm
 import projects
 import choices
+import task_context
 
 SKILLS_DIR = os.path.join(db.ROOT, "skills")
 MAX_STEPS = 8
@@ -327,6 +328,7 @@ def run(text, cfg, message_id=None, queued_at=None):
     try:
         with choices.lock:
             choices.invalidate()
+            task_context.clear()
             result = _run(text, cfg, message_id, timing)
             choices.expose(result)
         return result
