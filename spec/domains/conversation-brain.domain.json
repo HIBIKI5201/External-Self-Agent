@@ -11,6 +11,9 @@
       "pathPattern": "(^|/)esagent/brain\\.py$"
     },
     {
+      "pathPattern": "(^|/)(esagent/write_guard\\.py|tests/test_write_permission\\.py)$"
+    },
+    {
       "pathPattern": "(^|/)esagent/llm\\.py$"
     },
     {

@@ -17,6 +17,7 @@ import recurring
 import repeat_chat
 import choices
 import task_context
+import write_guard
 
 WEEKDAYS = "月火水木金土日"
 
@@ -316,23 +317,82 @@ def _similarity(hint, title):
     return len(_bigrams(hint) & tb) / max(1, len(tb))
 
 
-def _resolve_task(task_id, hint, known_ids):
-    """Pick the task an update/complete refers to.
+def _named_tasks(text, tasks):
+    """Tasks whose full title appears in the text; 「資料の修正案」 hides the shorter 「資料の修正」."""
+    hits = [t for t in tasks if t["title"] and t["title"] in text]
+    return [t for t in hits if not any(t["title"] != o["title"] and t["title"] in o["title"] for o in hits)]
 
-    Small models copy ids from the prompt's examples or guess, so the id is only
-    trusted when it exists and its title is not clearly worse than another
-    open task's match against what the user said.
+
+def _by_project(cands, text):
+    """Same-titled tasks (レビュー in two projects) need the project named to pick one (#72)."""
+    if len(cands) > 1 and len({t["title"] for t in cands}) == 1:
+        cands = [t for t in cands if t["project"] and t["project"] in text] or cands
+    return cands
+
+
+def _missing_target(text):
+    """「提出用チェック」: a quoted name that is no task while no real task is named (#72)."""
+    tasks = db.list_tasks(include_done=True)
+    if _named_tasks(text, tasks) or re.search(r"#\d+", text):
+        return None
+    for name in re.findall(r"[「『]([^」』]{2,40})[」』]", text):
+        if not any(_similarity(name, t["title"]) >= 0.5 or _similarity(t["title"], name) >= 0.5 for t in tasks):
+            return name
+    return None
+
+
+def _word_hit(hint, task, tasks):
+    """A content word of the message names this task and no other one (ES -> 「A社のES提出」)."""
+    words = {w for w in _WORD_RE.findall(hint) if w in task["title"]}
+    return any(not any(w in o["title"] for o in tasks if o["id"] != task["id"]) for w in words)
+
+
+def _resolve_task(task_id, hint, known_ids, context="", include_done=False):
+    """Pick the task an update/complete refers to (#72).
+
+    Small models copy ids from the prompt's examples or guess, and an existing id is not proof that
+    the user meant that task. The user's own words must point at it: its #id, its full title (with the
+    project when titles repeat), or a clear title match. Pronouns use the recent conversation (context)
+    and stay unresolved when it names more than one task.
     """
-    scored = sorted(((_similarity(hint, t["title"]), t["id"]) for t in db.list_tasks()), reverse=True)
+    tasks = db.list_tasks(include_done=include_done)
+    if task_id in known_ids and f"#{task_id}" in hint:
+        return task_id
+    for source in (hint, context):
+        named = _by_project(_named_tasks(source, tasks), f"{hint} {context}") if source else []
+        if named:
+            if len(named) > 1 and len({t["title"] for t in named}) == 1:
+                return None  # two tasks share the name and nothing says which
+            if source is context and len(named) > 1 and not _PLURAL_RE.search(hint):
+                return None  # 「それ」 after two tasks were discussed: ask which one
+            if any(t["id"] == task_id for t in named):
+                return task_id
+            return named[0]["id"] if len(named) == 1 else None
+    scored = sorted(((_similarity(hint, t["title"]), t["id"]) for t in tasks), reverse=True)
     best = None
     if scored and scored[0][0] >= 0.5 and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.2):
         best = scored[0][1]
-    if task_id in known_ids:
-        given = _similarity(hint, db.get_task(task_id)["title"])
-        if best and best != task_id and given < 0.2:
+    given = db.get_task(task_id) if task_id in known_ids else None
+    if given and (given["status"] != "done" or include_done):
+        score = _similarity(hint, given["title"])
+        if best and best != task_id and score < 0.2:
             return best
-        return task_id
+        if score >= 0.3 or _word_hit(hint, given, tasks):
+            return task_id
+        if not context and [t["id"] for t in db.list_tasks()] == [task_id]:
+            return task_id  # the only open task, with no conversation pointing elsewhere
     return best
+
+
+_PLURAL_RE = re.compile(r"それぞれ|全部|全て|すべて|両方|どちらも|どっちも|二つ|2つ|ふたつ|これら|それら|上記")
+
+
+def _ambiguous_targets(hint, context):
+    """「それを終わったことにして」 after talking about two tasks: the titles to ask about."""
+    if _named_tasks(hint, db.list_tasks()) or not context or _PLURAL_RE.search(hint):
+        return []
+    named = _named_tasks(context, db.list_tasks())
+    return [t["title"] for t in named] if len(named) > 1 else []
 
 
 def _duplicate_of(title):
@@ -371,6 +431,10 @@ def _apply(actions, cfg, user_text="", context_text=""):
     """Execute validated actions. Returns (event lines, handoffs created, last task touched)."""
     events, handoffs, touched = [], [], {}
     known_ids = {t["id"] for t in db.list_tasks(include_done=True)}
+    guard = write_guard.analyze(user_text, db.list_tasks(include_done=True))
+    if guard.hold and actions:
+        # Permission comes from the words, not from a well-formed proposal (#67).
+        return [f"・ 「{guard.hold}」とあったので、タスクは変更していません"], [], {}
     actions = _narrow_bulk_updates(actions, user_text)
     for a in actions:
         kind = a.get("type")
@@ -382,6 +446,9 @@ def _apply(actions, cfg, user_text="", context_text=""):
         if due and due < dt.date.today().isoformat():
             events.append(f"・ 締切 {due} は過去の日付なので設定しませんでした")
             due = None
+        if due and not write_guard.due_grounded(due, f"{user_text} {context_text}"):
+            events.append(f"・ 締切 {due} は発言から日付が決まらないので設定しませんでした")  # #74
+            due = None
         explicit = _EXPLICIT_ADD_RE.search(user_text)  # "〜をタスクにして": trust the model's wording
         if kind in ("add_task", "delegate") and not task_id and title \
                 and ((not explicit and max(_similarity(user_text, title), _similarity(context_text, title)) < 0.35)
@@ -391,10 +458,21 @@ def _apply(actions, cfg, user_text="", context_text=""):
             continue
 
         if kind in ("update_task", "complete_task"):
-            task_id = _resolve_task(task_id, f"{user_text} {title or ''}", known_ids)
+            task_id = _resolve_task(task_id, user_text, known_ids, context=context_text)
             if not task_id:
-                events.append(f"⚠ どのタスクのことか特定できなかったため「{kind}」を実行しませんでした")
+                which = _ambiguous_targets(user_text, context_text)
+                if which:
+                    events.append("⚠ " + "".join(f"「{w}」" for w in which)
+                                  + f"のどれのことか分からなかったため「{kind}」を実行しませんでした")
+                else:
+                    events.append(f"⚠ どのタスクのことか特定できなかったため「{kind}」を実行しませんでした")
                 continue
+        if kind in ("add_task", "delegate") and not task_id and not guard.allows(None, "add"):
+            events.append(f"・ 「{title or ''}」は登録しないよう言われたので追加しませんでした")
+            continue
+        if kind == "complete_task" and not guard.allows(task_id, "complete"):
+            events.append(f"・ #{task_id} {db.get_task(task_id)['title']} は完了にしないよう言われたので変えていません")
+            continue
 
         if kind == "add_task":
             if not title:
@@ -431,6 +509,15 @@ def _apply(actions, cfg, user_text="", context_text=""):
                           f"{' / 🔁' + recurring.describe(t['repeat']) if t.get('repeat') else ''}）")
         elif kind == "update_task":
             change = _intended_update(db.get_task(task_id), title, due, project, notes, f"{user_text} {context_text}")
+            kept = [k for k in change if not guard.allows(task_id, _FIELD_OF.get(k, k))]
+            for k in kept:
+                change.pop(k)
+            if kept:
+                cur = db.get_task(task_id)
+                labels = "・".join(_FIELD_LABELS[_FIELD_OF.get(k, k)] for k in kept)
+                events.append(f"・ #{cur['id']} {cur['title']} の{labels}は変更しないよう言われたので変えていません")
+                if not change:
+                    continue
             if not change:
                 cur = db.get_task(task_id)
                 events.append(f"・ #{cur['id']} {cur['title']} は変えていません（何を変えるのか読み取れなかったため）")
@@ -477,9 +564,17 @@ def _intended_update(task, title, due, project, notes, said):
     if project and project != task["project"] and project.lower() in said.lower():
         change["project"] = project
     named = f"#{task['id']}" in said or _similarity(said, task["title"]) >= 0.3
-    if notes and (_NOTE_HINT_RE.search(said) or named):
+    # A memo must carry the user's content: 「完了」「未完了に戻す」「変更しないで保留中」 only echo
+    # the operation and once stood in for a status change the model could not express (#67, #73).
+    echo = re.fullmatch(r"[\s。、!！]*(?:(?:未)?完了|済み?|未完了に戻[すしたま]*|変更しない.*|保留.*|そのまま.*|今のまま.*)[\s。、!！]*",
+                        notes or "")
+    if notes and not echo and (_NOTE_HINT_RE.search(said) or (named and _similarity(said, notes) >= 0.5)):
         change["notes_append"] = notes
     return change
+
+
+_FIELD_OF = {"notes_append": "notes"}
+_FIELD_LABELS = {"title": "タイトル", "due": "締切", "project": "プロジェクト", "notes": "メモ"}
 
 
 def _report_flow(text):
@@ -691,12 +786,16 @@ def _budget(cfg):
     return cfg.get("history_tokens", 2000)
 
 
-def _action_errors(actions, text):
-    """Check a proposal without writes: a rejected batch must never partly execute."""
+def _action_errors(actions, text, context=''):
+    """Check a proposal without writes: a rejected batch must never partly execute.
+
+    text is the user's message, context the earlier messages a reference word points at."""
     errors = []
     known = {t['id'] for t in db.list_tasks(include_done=True)}
     if not isinstance(actions, list):
         return ['actions は配列にしてください']
+    guard = write_guard.analyze(text, db.list_tasks(include_done=True))
+    missing = _missing_target(text)
     for a in actions:
         if not isinstance(a, dict):
             errors.append('操作はオブジェクトにしてください')
@@ -716,31 +815,47 @@ def _action_errors(actions, text):
         title, due = _clean(a.get('title')), _clean(a.get('due'))
         if tid and tid not in known:
             errors.append(f'#{tid} は一覧にありません。一覧から選んでください')
-        elif kind in ('update_task', 'complete_task') and not _resolve_task(tid, f'{text} {title or ""}', known):
-            errors.append('対象タスクを一覧から特定してください')
+        elif kind in ('update_task', 'complete_task') and missing:
+            errors.append(f'「{missing}」は一覧にないタスクです。別のタスクに置き換えず、actions を [] にしてください')
+        elif kind in ('update_task', 'complete_task') and not _resolve_task(tid, text, known, context=context):
+            errors.append(f'#{tid} は利用者が指定したタスクではありません。発言で名前が出たタスクだけを対象にし、'
+                          '特定できなければ actions を [] にしてください')
+        elif kind == 'complete_task' and not guard.allows(tid, 'complete'):
+            errors.append(f'#{tid} は完了にしないよう言われています。この操作は出さないでください')
         if due and (not db.valid_date(due) or due < dt.date.today().isoformat()):
             errors.append(f'締切 {due} は不正または過去の日付です。今日以降にしてください')
+        elif due and not write_guard.due_grounded(due, f'{text} {context}'):
+            errors.append(f'締切 {due} は発言から決まりません。具体的な日付がなければ due は "" にしてください')
         if kind in ('add_task', 'delegate') and not tid:
             if not title:
                 errors.append('追加するタイトルがありません')
-            elif _META_TITLE_RE.search(title) or (not _EXPLICIT_ADD_RE.search(text) and _similarity(text, title) < .35):
+            elif _META_TITLE_RE.search(title) or (not _EXPLICIT_ADD_RE.search(text)
+                                                  and _similarity(f'{text} {context}', title) < .35):
                 errors.append(f'「{title}」は発言から読み取れません。利用者の内容だけを使ってください')
         if kind == 'update_task' and tid in known and not _intended_update(
-                db.get_task(tid), title, due, _clean(a.get('project')), _clean(a.get('notes')), text):
+                db.get_task(tid), title, due, _clean(a.get('project')), _clean(a.get('notes')), f'{text} {context}'):
             errors.append('何を変更する依頼か読み取れません。依頼のある項目だけを指定してください')
+        elif kind == 'update_task' and tid in known:
+            change = _intended_update(db.get_task(tid), title, due, _clean(a.get('project')),
+                                      _clean(a.get('notes')), f'{text} {context}')
+            kept = [_FIELD_LABELS[_FIELD_OF.get(k, k)] for k in change if not guard.allows(tid, _FIELD_OF.get(k, k))]
+            if kept:
+                errors.append(f'#{tid} の{"・".join(kept)}は変更しないよう言われています。その項目は空にしてください')
     return errors
 
 
 def _route(cfg, text, today, history):
     feedback = []
-    context = ' '.join(m['content'] for m in history[-6:] if m['role'] == 'user') if _REFERENCE_RE.search(text) else ''
+    context = _reference_context(text, history)
     for attempt in range(3):
         if attempt:
             _progress['detail'] = '確認して書き直し中'
         with llm.validation_attempt('router', attempt):
             try:
                 result = _route_once(cfg, text, today, history, feedback)
-                errors = _action_errors(result[2], f'{text} {context}')
+                if write_guard.analyze(text, db.list_tasks(include_done=True)).hold:
+                    return result[0], result[1], []  # nothing may run, so nothing to retry (#67)
+                errors = _action_errors(result[2], text, context)
             except (ValueError, TypeError, AttributeError):
                 errors = ['指定されたJSONオブジェクト・intent・focus・actionsの形式で返してください']
         if not errors:
@@ -748,8 +863,25 @@ def _route(cfg, text, today, history):
         available = '\n'.join(f"#{t['id']} {t['title']}" for t in db.list_tasks()) or '(なし)'
         feedback += [{'role': 'user', 'content': '検証で不合格: ' + ' / '.join(errors)
                      + '。操作はまだ実行していません。全体を修正してください。'
+                     + '依頼された操作がない・対象が一覧にない場合は actions を [] にしてください。'
                      + f'\n元の依頼: {text}\n現在のタスク一覧（この番号だけを使う）:\n{available}'}]
     return 'update', '', []  # the operation template honestly reports that nothing was applied
+
+
+_PRONOUN_RE = re.compile(r"それ|これ|あれ|その|この|そっち|こっち")
+
+
+def _reference_context(text, history):
+    """Earlier messages a reference points at: the user's own for 「上記の〜」, the latest exchange
+    (with the operation notices) for 「それ」, so a pronoun is resolved or asked about (#72)."""
+    parts = []
+    if _REFERENCE_RE.search(text):
+        parts += [m['content'] for m in history[-6:] if m['role'] == 'user']
+    # 「メモに〜と書いて」 continues the task just discussed; 「提出用チェックの締切を…」 names its own.
+    implicit = re.match(r"^(?:じゃあ|あと|それと|では|なら)?[、,\s]*(?:メモ|詳細|締め?切|期限|名前|タイトル)(?:に|を|は|も)", text)
+    if _PRONOUN_RE.search(text) or implicit:
+        parts += [m['content'] for m in history[-4:]]
+    return ' '.join(parts)
 
 
 def _route_once(cfg, text, today, history, feedback):
@@ -839,6 +971,12 @@ def _template_reply(intent, events, touched):
     if not done and events and all("変えていません" in e for e in events):
         return ("どのタスクをどう変えるのか読み取れなかったので、タスクはそのままにしたよ。"
                 "変えるなら「〇〇の締切を金曜に」「〇〇の名前を△△に」のように教えてね。")
+    ask = next((e for e in events if "のどれのことか分からなかった" in e), None)
+    if not done and ask:
+        names = re.findall(r"「[^」]+」", ask.split("のどれのことか")[0])
+        return f"{''.join(names)}のどれのことか教えてね。まだ何も変更していないよ。"
+    if not done and not events:
+        return "依頼の内容を確かめられなかったので、タスクは何も変更していないよ。対象のタスク名と変えたい項目を教えてね。"
     if not done:
         return "うまく反映できませんでした。下のメッセージを見て、タスク名をもう少し具体的に教えてください。"
     if intent == "complete":
@@ -1112,6 +1250,62 @@ def _forget_flow(text):
     return f"わかった。「{task['title']}」はしばらく話に出さないね（明日まで）。"
 
 
+_REOPEN_RE = re.compile(r"未完了に(?:戻|もど)|未完了に(?:して|する)|(?:完了|チェック)を?(?:取り消|取消|外|はず|解除)|"
+                        r"まだ終わって(?:い)?なかった|やっぱり終わって(?:い)?ない")
+_OPERATION_RE = re.compile(r"締め?切|期限|完了|終わ|名前|タイトル|メモ|詳細|変更|延期|前倒し|戻して|にして")
+_NEW_TASK_RE = re.compile(r"追加|登録|タスクに(?:して|する)|作って|作成")
+NO_TARGET_NOTE = "何も変更していないよ。"
+
+
+def _guarded_write_flow(text, annotated, history):
+    """Requests the router cannot express or should never guess, decided in code.
+
+    - 「画像の修正を未完了に戻して」: the router has no reopen operation and once wrote a memo on a
+      different task instead (#73). Done tasks are found by name here.
+    - 「存在しない『提出用チェック』の締切を明日にして」: the model moved another task's date (#72).
+    - 「いつか余裕のある日に」「2月30日」: no date follows from the words (#74).
+    Returns (reply, events) or None."""
+    every = db.list_tasks(include_done=True)
+    guard = write_guard.analyze(annotated, every)
+    if guard.hold:
+        return None  # the route step answers without writing
+    if _REOPEN_RE.search(text):
+        # Only a pronoun points at the conversation; 「提出物を未完了に戻して」 names its own target.
+        context = _reference_context(text, history) if _PRONOUN_RE.search(text) or _REFERENCE_RE.search(text) else ""
+        named = _by_project(_named_tasks(text, every), f"{text} {context}") or \
+            _by_project(_named_tasks(context, every), context)
+        if not named:
+            done = sorted(((_similarity(text, t["title"]), t) for t in every if t["status"] == "done"),
+                          key=lambda x: -x[0])
+            named = [done[0][1]] if done and done[0][0] >= 0.5 and (len(done) == 1 or done[0][0] - done[1][0] >= 0.2) else []
+        if len(named) != 1:
+            which = "".join(f"「{t['title']}」" for t in named)
+            return (f"{which}のどれを未完了に戻すか分からなかったよ。タスク名で教えてね。" if which else
+                    "どのタスクを未完了に戻すか特定できなかったよ。タスク名で教えてね。") + NO_TARGET_NOTE, []
+        task = named[0]
+        if not guard.allows(task["id"], "complete"):
+            return f"「{task['title']}」の状態は変えないでおくね。" + NO_TARGET_NOTE, []
+        rest = _REOPEN_RE.sub("", text)
+        other = "\nほかの変更はまだしていないよ。続けて教えてね。" if re.search(r"締め?切|期限|名前|タイトル|メモ|詳細", rest) else ""
+        if task["status"] != "done":
+            return f"「{task['title']}」はもう未完了だよ。" + NO_TARGET_NOTE + other, []
+        t = db.update_task(task["id"], status="todo")
+        return f"「{t['title']}」を未完了に戻したよ。{other}", [f"↺ #{t['id']} {t['title']} を未完了に戻しました"]
+    if not _OPERATION_RE.search(text):
+        return None
+    missing = _missing_target(text)
+    if missing and not _NEW_TASK_RE.search(text):
+        return f"「{missing}」というタスクは見つからなかったよ。ほかのタスクにも当てはめず、" + NO_TARGET_NOTE, []
+    if _DUE_HINT_RE.search(text) and not _NEW_TASK_RE.search(text):
+        bad = write_guard.invalid_date(annotated)
+        if bad:
+            return f"「{bad}」は存在しない日付なので、締切は変えていないよ。日付を確かめてもう一度教えてね。", []
+        if write_guard.vague_due(annotated):
+            return ("締切の日付が言葉からは決められなかったので、変更していないよ。"
+                    "「10月15日」「来週の金曜」のように日付で教えてね。"), []
+    return None
+
+
 def _feature_flow(cfg, text):
     """Returns (reply, events) when the message is about EsAgent's own features, else None."""
     pending = db.get_setting("pending_feature") or ""
@@ -1354,6 +1548,13 @@ def _chat(text, cfg, message_id=None):
         if forget:
             db.add_message("assistant", forget)
             return {"reply": forget, "events": [], "handoffs": [], "intent": "forget"}
+        guarded = _guarded_write_flow(text, annotated, history)
+        if guarded:
+            reply, events = guarded
+            db.add_message("assistant", reply)
+            if events:
+                db.add_message("notice", "\n".join(events))
+            return {"reply": reply, "events": events, "handoffs": [], "intent": "guarded"}
         if _ACK_RE.search(text) and not _ACTION_HINT_RE.search(text):
             reply = "了解、じゃあ私も集中するね。終わったら教えて。"
             db.add_message("assistant", reply)
@@ -1403,14 +1604,22 @@ def _chat(text, cfg, message_id=None):
             intent, focus, actions = _route(cfg, route_text, today, history)
             _progress["detail"] = _describe(intent, focus, actions)
             _stage("タスクを更新中" if actions else "返事を考え中")
-            context = ""
-            if _REFERENCE_RE.search(text):  # "上記の四つ" etc. point at earlier messages
-                context = " ".join(m["content"] for m in history[-6:] if m["role"] == "user")
+            context = _reference_context(text, history)  # "上記の四つ", "それ" point at earlier messages
             if route_text != annotated:  # agreeing to Es's own proposal
                 context += " " + last_reply
-            events, handoffs, touched = _apply(actions, cfg, user_text=annotated, context_text=context)
-            _stage("返事を考え中")
-            reply = _respond(cfg, annotated, today, history, intent, focus, events, touched)
+            hold = write_guard.analyze(annotated, db.list_tasks(include_done=True)).hold
+            if hold and intent in ACTION_INTENTS:
+                # 「実行しないで」「と同僚が言っていた」「迷っている」: no write, whatever was proposed (#67).
+                events, handoffs = [], []
+                reply = "わかった、今回はタスクを何も変更していないよ。実行するときは「〇〇を完了にして」のように頼んでね。"
+            else:
+                events, handoffs, touched = _apply([] if hold else actions, cfg, user_text=annotated,
+                                                   context_text=context)
+                which = intent in ACTION_INTENTS and not events and _ambiguous_targets(annotated, context)
+                if which:  # 「それを終わったことにして」 after two tasks were discussed (#67, #72)
+                    events = ["⚠ " + "".join(f"「{w}」" for w in which) + "のどれのことか分からなかったため実行しませんでした"]
+                _stage("返事を考え中")
+                reply = _respond(cfg, annotated, today, history, intent, focus, events, touched)
     except llm.LLMError:
         # Keep the message; the server answers it once the model is ready.
         db.set_message_status(message_id, "pending")
