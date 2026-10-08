@@ -12,6 +12,9 @@
     },
     {
       "pathPattern": "(^|/)esagent/projects\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|spec/test/conversation-repeat-53\\.md)$"
     }
   ],
   "source": "manual",
