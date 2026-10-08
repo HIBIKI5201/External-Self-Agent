@@ -5,6 +5,15 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)(tests/test_advice_targets\\.py|spec/test/advice-targets-69\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_recall_scope\\.py|spec/test/recall-scope-75\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)spec/test/preprocessor-71\\.md$"
+    },
+    {
       "pathPattern": "(^|/)(tests/test_memory_intent\\.py|spec/test/memory-intent-46\\.md)$"
     },
     {

@@ -225,14 +225,14 @@ def _snoozed():
     return {int(r["key"].split(":")[1]) for r in rows if (r["value"] or "") > today}
 
 
-def _candidates(picked, tasks, limit=5):
+def _candidates(picked, tasks, limit=5, rotate=True):
     """What to suggest: related tasks if any, else everything; dated, then in-progress tasks first.
-    Snoozed tasks and the one suggested last time are skipped when there is anything else."""
-    skip = _snoozed()
+    Rotation and snoozing apply only when the user has not selected a subject."""
+    skip = _snoozed() if rotate else set()
     last = db.get_setting("last_advice")
     pool = [t for t in (picked or tasks) if t["status"] != "delegated" and t["id"] not in skip]
     fresh = [t for t in pool if str(t["id"]) != last]
-    pool = fresh or pool
+    pool = (fresh or pool) if rotate else pool
     soon = (dt.date.today() + dt.timedelta(days=1)).isoformat()
     # Recurring chores (game weeklies etc.) only come first when they are about to reset.
     pool = sorted(pool, key=lambda t: (bool(t.get("repeat")) and (t["due"] or "9999") > soon,
@@ -1011,7 +1011,7 @@ def _template_reply(intent, events, touched):
     return finish("更新しておきました。")
 
 
-def _first_step(cfg, text, task):
+def _first_step(cfg, text, task, forbidden=()):
     memo = task["notes"].strip()[-200:]
     about = projects.context_lines([task["project"]])
     project_note = f"\nProject note (what this project is about): {about[2:]}" if about else ""
@@ -1034,6 +1034,8 @@ Memo: {memo or '(none)'}"""
         with llm.validation_attempt('first_step', attempt):
             step = llm.chat(cfg, messages, options={"temperature": 0.4, "num_predict": 120}).strip()
         errors = _step_errors(step, source)
+        if any(title in step for title in forbidden):
+            errors.append('対象外のタスクに言及しないでください')
         if not errors:
             _partial(step)  # only display the accepted answer
             return step
@@ -1063,9 +1065,40 @@ def _step_errors(step, source):
     return errors
 
 
+def _advice_targets(text, tasks):
+    """Explicit subjects and exclusions precede similarity and recommendation rotation."""
+    included, excluded = set(), set()
+    named = False
+    for clause in re.split(r'[。！？!?、\n]', text):
+        negative = bool(re.search(r'扱わない|勧めない|すすめない|除外|対象にしない|後回し', clause))
+        target_text = clause.split('より')[-1] if 'より' in clause and not negative else clause
+        comparison = re.match(r'(.+?)を.+?より', clause)
+        if comparison and not negative:
+            target_text = comparison[1]
+        exact = [t for t in tasks if t['title'] in target_text or re.search(r'#' + str(t['id']) + r'(?!\d)', target_text)]
+        matches = exact or [t for t in tasks if len(t['title'].split('の')[0]) >= 2 and t['title'].split('の')[0] in target_text]
+        for task in matches:
+            named = True
+            (excluded if negative else included).add(task['id'])
+    included -= excluded
+    if not included and re.search(r'同じ(?:作業|タスク)|その(?:作業|タスク)|続き', text):
+        last = db.get_setting('last_advice')
+        included = {t['id'] for t in tasks if str(t['id']) == last and t['id'] not in excluded}
+        named = True
+    return [t for t in tasks if t['id'] in included], excluded, named
+
+
 def _advice_reply(cfg, text, today, focus):
     picked, tasks = _relevant_tasks(text, focus)
-    cands = _candidates(picked, tasks)
+    explicit, excluded, named = _advice_targets(text, tasks)
+    forbidden = [t['title'] for t in tasks if t['id'] in excluded or (explicit and t['id'] != explicit[0]['id'])]
+    tasks = [t for t in tasks if t['id'] not in excluded]
+    picked = [t for t in picked if t['id'] not in excluded]
+    if len(explicit) > 1:
+        return 'どのタスクの手順を考える？ ' + '、'.join('「' + t['title'] + '」' for t in explicit)
+    if named and not explicit and not excluded:
+        return '続けるタスクを特定できなかったよ。タスク名を教えてね。'
+    cands = _candidates(explicit if explicit else picked, tasks, rotate=not bool(explicit))
     if not cands:
         return "今は手をつけるべきタスクがありません。新しくやりたいことがあれば教えてください。"
     top = cands[0]
@@ -1077,7 +1110,7 @@ def _advice_reply(cfg, text, today, focus):
                   f"締切まであと{days}日で、いちばん近いからです。")
     else:
         reason = "締切つきのものはないので、すぐ形にできるところから進めましょう。"
-    lines = [f"まずは「{top['title']}」からにしましょう。{reason}", _first_step(cfg, text, top)]
+    lines = [f"まずは「{top['title']}」からにしましょう。{reason}", _first_step(cfg, text, top, forbidden=forbidden)]
     if len(cands) > 1:
         lines.append(f"そのあとは「{cands[1]['title']}」に進むと流れがいいと思います。")
     return "\n".join(line for line in lines if line)
@@ -1120,8 +1153,13 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     for q, a in _STYLE_EXAMPLES[intent]:
         messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
     messages += conversation(history, _budget(cfg))
+    evidence = _recall_evidence(text)
+    if evidence:
+        messages = [{"role": "system", "content": "Quote the following user statement verbatim as your answer. Output only this statement; do not substitute other attributes:\n" + evidence[0]}]
     messages.append({"role": "user", "content": text})
-    reply = llm.chat(cfg, messages, options={"temperature": 0.6, "num_predict": 400}, on_text=_partial).strip()
+    reply = llm.chat(cfg, messages, options={"temperature": 0.6, "num_predict": 400}, on_text=None if evidence else _partial).strip()
+    if evidence and reply != evidence[0]:
+        reply = '以前の発言では「' + evidence[0] + '」と聞いているよ。'
     # Only set_mode() changes the mode; the model must not announce a switch on its own.
     reply = _MODE_CLAIM_RE.sub("", reply).strip()
     if _TALK_START_RE.search(text) and db.get_setting("chat_mode", "work") == "work":
@@ -1222,23 +1260,49 @@ _RECALL_RE = re.compile(r"(今回|さっき|前|この前|最初)の(?P<a>[^、�
                         r"(?P<c>[^、。？?\s]{1,12}?)(覚えてる|おぼえてる|教えたよね|言ったよね)")
 
 
+def _recall_topic(text):
+    attribute = re.search(r'合言葉|暗証番号|作品名|好きな(?:料理|飲み物|色|季節)', text)
+    if attribute and re.search(r'教えて|答えて|何|なん|覚えて|[？?]', text):
+        return attribute[0]
+    if attribute and re.search(r'言って|要約して|言い換えて', text):
+        return attribute[0]
+    if re.search(r'(?:最初|次)の一歩|要約して|言い換えて|短く(?:言って|まとめて|説明して)|(?:理由|対象|要約|言い換え|操作).*(?:言って|教えて|説明|まとめ|答えて)', text):
+        return None
+    match = _RECALL_RE.search(text)
+    return (match.group('a') or match.group('b') or match.group('c')).strip() if match else None
+
+
+def _recall_evidence(text, before_id=None):
+    topic = _recall_topic(text)
+    if not topic:
+        return []
+    with db.connect() as con:
+        rows = con.execute("SELECT content FROM messages WHERE role = 'user' AND id < ? AND instr(content, ?) > 0 ORDER BY id DESC",
+                           (before_id if before_id is not None else 2**63 - 1, topic)).fetchall()
+    sources = [row['content'] for row in rows] + [mem['content'] for mem in db.list_memories()]
+    # A previous question is not evidence of an attribute's value.
+    return [s for s in sources if re.search(re.escape(topic) + r'(?:は|って|[:：])', s)
+            and not re.search(r'[？?]|教えて|答えて|何だっけ|なんだっけ|分からなければ|(?:は|って)(?:何|なん)|覚えてる', s)
+            and len(s) <= 1000][:3]
+
+
 def _recall_flow(text, message_id):
     """"今回の合言葉は？" about something the user never said -> say so instead of inventing (#12).
 
-    Only for questions that refer back to something the user told Es; general questions
-    ("Verseって何？") do not match. If the topic word appears in any earlier user message or
-    memory, the normal path answers it with the conversation."""
-    m = _RECALL_RE.search(text)
-    if not m:
+    Advice and semantic summaries bypass this guard. Attribute recall requires an actual
+    user declaration, retrieved again for the responder even outside its history budget."""
+    if re.fullmatch(r'(?:さっき|直前)の(?:(?:二つ|2つ)の)?操作を(?:説明して|教えて)[。\s]*', text):
+        records = [line for row in db.recent_messages(5, roles=('notice',), before=message_id)
+                   for line in row['content'].splitlines() if line[:1] in '＋✎✔→']
+        if not records:
+            return '説明できる操作記録はまだないよ。'
+        return '直近の操作記録はこれだよ:\n' + '\n'.join(records[-2:])
+    topic = _recall_topic(text)
+    if not topic:
         return None
-    topic = (m.group("a") or m.group("b") or m.group("c") or "").strip()
     if len(topic) < 2:
         return None
-    with db.connect() as con:
-        said = con.execute("SELECT 1 FROM messages WHERE role = 'user' AND id < ? AND content LIKE ? LIMIT 1",
-                           (message_id, f"%{topic}%")).fetchone()
-    remembered = any(topic in mem["content"] for mem in db.list_memories())
-    if said or remembered:
+    if _recall_evidence(text, message_id):
         return None
     return f"ごめんね、「{topic}」はまだ聞いてないと思う。教えてくれたら覚えておくよ。"
 
