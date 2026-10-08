@@ -50,7 +50,7 @@ def test_history_outside_budget_is_retrieved_into_reply_request():
 def test_operation_explanation_receives_actual_notice_records():
     with Sandbox(copy_real=False) as sb:
         result = sb.chat('さっきの二つの操作を説明して')
-        assert '記録はまだない' in result['reply'] and not sb.llm_calls, result
+        assert '変更した操作はない' in result['reply'] and not sb.llm_calls, result
         records = '✎ #1 資料の修正 締切を変更\n✎ #2 画像の修正 メモを変更'
         db.add_message('user', '資料と画像を変更して')
         db.add_message('assistant', '変更しました')

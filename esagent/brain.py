@@ -1291,12 +1291,7 @@ def _recall_flow(text, message_id):
 
     Advice and semantic summaries bypass this guard. Attribute recall requires an actual
     user declaration, retrieved again for the responder even outside its history budget."""
-    if re.fullmatch(r'(?:さっき|直前)の(?:(?:二つ|2つ)の)?操作を(?:説明して|教えて)[。\s]*', text):
-        records = [line for row in db.recent_messages(5, roles=('notice',), before=message_id)
-                   for line in row['content'].splitlines() if line[:1] in '＋✎✔→']
-        if not records:
-            return '説明できる操作記録はまだないよ。'
-        return '直近の操作記録はこれだよ:\n' + '\n'.join(records[-2:])
+    # 「さっきの操作を説明して」 is answered earlier from the records (_action_log_flow, #70).
     topic = _recall_topic(text)
     if not topic:
         return None
