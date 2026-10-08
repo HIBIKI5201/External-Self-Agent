@@ -15,6 +15,7 @@ import llm
 import projects
 import recurring
 import repeat_chat
+import choices
 
 WEEKDAYS = "月火水木金土日"
 
@@ -1129,22 +1130,61 @@ def _feature_flow(cfg, text):
     return None
 
 
-def chat(text, cfg, message_id=None, queued_at=None):
+def _choice_reply(selected, cfg, message_id=None):
+    mid = message_id or db.add_message('user', selected['label'])
+    _progress['message_id'] = mid
+    reply, events, ui = '', [], {}
+    kind, value, payload = selected['kind'], selected['value'], selected['payload']
+    if kind == 'stale':
+        reply = 'いま有効な提案を特定できなかったよ。現在の提案のボタンか、やりたいことを言葉で教えてね。何も変更していないよ。'
+    elif value == 'cancel':
+        reply = 'わかった、今回はやめておくね。何も変更していないよ。'
+    elif kind == 'mode' and payload.get('mode') in MODES:
+        reply = set_mode(payload['mode'])
+    elif kind == 'focus':
+        t = db.get_task(payload.get('task_id', 0))
+        if t and t['status'] != 'done' and t['title'] == payload.get('title'):
+            reply, ui = f'じゃあ始めよ！「{t["title"]}」、25分。私も隣でがんばるね。', {'focus': t['id']}
+        else:
+            reply = '対象タスクが変わっているので、集中タイマーは開始していないよ。'
+    elif kind == 'feature' and isinstance(payload.get('wish'), str):
+        wish = payload['wish']
+        db.ensure_project('EsAgent')
+        # Approval needs no model: the full request is kept in notes, the title is literal.
+        title = 'E.S. Agent: ' + wish[:45]
+        events, _, touched = _apply([{'type': 'add_task', 'title': title, 'project': 'EsAgent', 'notes': wish}],
+                                    cfg, user_text=wish + 'をタスクにして')
+        reply = _template_reply('add', events, touched)
+    elif kind == 'topic' and value in choices.TOPICS:
+        reply = choices.TOPICS[value][1]
+    else:
+        reply = 'その選択には対応していないよ。何も変更していないよ。'
+    db.add_message('notice' if kind == 'stale' else 'assistant', reply)
+    if events:
+        db.add_message('notice', '\n'.join(events))
+    if kind == 'mode' and value != 'cancel' and payload.get('mode') == 'talk':
+        choices.publish('topic')
+    return {'reply': reply, 'events': events, 'handoffs': [], 'ui': ui, 'intent': 'choice'}
+
+
+def chat(text, cfg, message_id=None, queued_at=None, selection=None):
     """Answer a message. With message_id, answer a stored message that was waiting.
 
     Questions about the wait itself ("考えるの長くない？") are answered at once from the
     measured timings, without the lock or the model (#23)."""
     received = db.now()
     queued_at = db.normalize_datetime(queued_at)
-    if message_id is None and is_status_question(text):
+    if selection is None and message_id is None and is_status_question(text):
         return _status_answer(text, queued_at, received)
-    with _lock:
+    with choices.lock, _lock:
         started = db.now()
         _stage("判断中")
         _progress.update(text=text, message_id=message_id)
         result = None
         try:
-            result = _chat(text, cfg, message_id)
+            selected = choices.before(text, selection)
+            result = _choice_reply(selected, cfg, message_id) if selected else _chat(text, cfg, message_id)
+            choices.expose(result)
             return result
         finally:
             mid = _progress.get("message_id")
@@ -1249,8 +1289,18 @@ def _chat(text, cfg, message_id=None):
     else:
         db.set_message_status(message_id, None)
     _progress["message_id"] = message_id
-    wants = "talk" if _MODE_TALK_RE.search(text) and not _MODE_WORK_RE.search(text) else \
-        "work" if _MODE_WORK_RE.search(text) else None
+    proposed = choices.proposed_mode(text)
+    if proposed:
+        reply = f'{MODES[proposed]}に切り替える？選ぶまでモードは変えていないよ。'
+        db.add_message('assistant', reply)
+        choices.publish('mode', {'mode': proposed})
+        return {'reply': reply, 'events': [], 'handoffs': [], 'intent': 'proposal'}
+    if re.fullmatch(r'(?:話題を選びたい|話題を選ばせて|話題を選んで)[。！!\s]*', text):
+        reply = 'どんな話をしよう？選んでも、自由に書いてくれてもいいよ。'
+        db.add_message('assistant', reply)
+        choices.publish('topic')
+        return {'reply': reply, 'events': [], 'handoffs': [], 'intent': 'proposal'}
+    wants = choices.explicit_mode(text)
     if wants and not _ACTION_HINT_RE.search(text):
         reply = set_mode(wants)
         db.add_message("assistant", reply)
@@ -1344,4 +1394,7 @@ def _chat(text, cfg, message_id=None):
     db.add_message("assistant", reply or "（返答なし）")
     if events:
         db.add_message("notice", "\n".join(events))
+    if (_TALK_START_RE.search(text) and db.get_setting('chat_mode', 'work') == 'work'
+            and not db.get_setting('pending_focus') and not db.get_setting('pending_feature')):
+        choices.publish('mode', {'mode': 'talk'})
     return {"reply": reply, "events": events, "handoffs": handoffs, "intent": intent}

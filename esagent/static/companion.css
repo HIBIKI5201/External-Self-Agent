@@ -155,3 +155,7 @@
   max-width: 170px; max-height: 3.2em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .pet-toggle { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .pet-toggle input { accent-color: var(--accent); }
+/* Code-defined chat offers: keep normal free text available. */
+.chat-choices { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.chat-choices button { padding: 6px 12px; border-radius: 14px; font: inherit; cursor: pointer; }
+.chat-choices button:disabled { opacity: .5; cursor: default; }

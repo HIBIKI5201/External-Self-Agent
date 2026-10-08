@@ -20,6 +20,9 @@ assert.equal(first[0].at, null);
 assert.match(first[0].id, /^[a-f0-9]{32}$/);
 assert.notEqual(first[0].id, first[1].id);
 assert.deepEqual(screen(), first, 'reload retains the same IDs and sent times');
+saved = JSON.stringify([{text: '切り替える', at: '2026-10-08T00:00:00.123Z', id: first[0].id,
+  choice: {offer_id: 'a'.repeat(32), value: 'accept'}}]);
+assert.deepEqual(screen()[0].choice, {offer_id: 'a'.repeat(32), value: 'accept'}, 'reload retains which offer was selected');
 const timestampCode = source.slice(source.indexOf('const localIso ='), source.indexOf('// Questions about the wait'));
 const clock = vm.createContext({});
 vm.runInContext(timestampCode, clock);

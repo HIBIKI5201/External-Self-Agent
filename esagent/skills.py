@@ -25,6 +25,7 @@ import brain
 import db
 import llm
 import projects
+import choices
 
 SKILLS_DIR = os.path.join(db.ROOT, "skills")
 MAX_STEPS = 8
@@ -324,7 +325,10 @@ def run(text, cfg, message_id=None, queued_at=None):
     received = db.now()
     timing, result = {}, None
     try:
-        result = _run(text, cfg, message_id, timing)
+        with choices.lock:
+            choices.invalidate()
+            result = _run(text, cfg, message_id, timing)
+            choices.expose(result)
         return result
     finally:
         if timing.get("id"):

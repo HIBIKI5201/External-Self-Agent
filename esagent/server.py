@@ -30,6 +30,7 @@ import projects  # noqa: E402
 import recurring  # noqa: E402
 import skills  # noqa: E402
 import youtube  # noqa: E402
+import choices  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
@@ -48,6 +49,7 @@ def state():
         "bgm": CFG.get("bgm", []),
         "google": gsync.status(),
         "youtube": youtube.status(),
+        "choices": choices.public(),
         "mode": db.get_setting("chat_mode", "work"),
         "companion": companion.stats(),
     }
@@ -192,7 +194,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("body must be an object")
             path = urlparse(self.path).path
             if path == "/api/chat" and "requestId" in body:
-                code, result = chat_requests.execute(body["requestId"], str(body.get("text") or "").strip(),
+                fingerprint = str(body.get('text') or '').strip()
+                if body.get('choice') is not None:
+                    fingerprint = json.dumps({'text': fingerprint, 'choice': body['choice']}, sort_keys=True, ensure_ascii=False)
+                code, result = chat_requests.execute(body["requestId"], fingerprint,
                                                     lambda: self._post_result(path, body))
             else:  # old clients without an ID retain their original behavior
                 code, result = self._post_result(path, body)
@@ -240,7 +245,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("text is empty")
             queued = body.get("queuedAt")  # when send was pressed (the window queues messages)
             queued = db.normalize_datetime(queued)
-            result = skills.run(text, CFG, queued_at=queued) if text.startswith("/") else brain.chat(text, CFG, queued_at=queued)
+            result = brain.chat(text, CFG, queued_at=queued, selection=body['choice']) if body.get('choice') is not None else \
+                skills.run(text, CFG, queued_at=queued) if text.startswith('/') else brain.chat(text, CFG, queued_at=queued)
             if result.get("events"):
                 events.push("chat_events", lines=result["events"])
             if result.get("ui", {}).get("focus"):
@@ -314,7 +320,9 @@ class Handler(BaseHTTPRequestHandler):
             mode = body.get("mode")
             if mode not in brain.MODES:
                 raise ValueError("mode must be work or talk")
-            return {"mode": mode, "reply": brain.set_mode(mode)}
+            with choices.lock:
+                choices.invalidate()
+                return {"mode": mode, "reply": brain.set_mode(mode)}
         if path == "/api/pet/enabled":
             on = bool(body.get("enabled"))
             db.set_setting("pet_enabled", "1" if on else "0")
