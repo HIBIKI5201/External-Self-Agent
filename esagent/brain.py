@@ -14,6 +14,7 @@ import handoff
 import llm
 import projects
 import recurring
+import repeat_chat
 
 WEEKDAYS = "月火水木金土日"
 
@@ -1252,6 +1253,13 @@ def _chat(text, cfg, message_id=None):
             reply = "了解、じゃあ私も集中するね。終わったら教えて。"
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "intent": "ack"}
+        repeat_command = repeat_chat.handle(text, history)
+        if repeat_command:
+            reply, events = repeat_command
+            db.add_message('assistant', reply)
+            if events:
+                db.add_message('notice', '\n'.join(events))
+            return {'reply': reply, 'events': events, 'handoffs': [], 'intent': 'repeat'}
         repeat = _repeat_question_flow(text)
         if repeat:
             db.add_message("assistant", repeat)

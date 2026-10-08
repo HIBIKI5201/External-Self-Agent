@@ -22,9 +22,16 @@ def parse(text):
     if not m:
         return None
     if m.group("dh"):
-        return f"daily {int(m.group('dh')):02d}:{int(m.group('dm') or 0):02d}"
+        rule = f"daily {int(m.group('dh')):02d}:{int(m.group('dm') or 0):02d}"
+        return rule if valid_rule(rule) else None
     hour = int(m.group("wh") or 0)
-    return f"weekly {WEEKDAYS.index(m.group('wd'))} {hour:02d}:{int(m.group('wm') or 0):02d}"
+    rule = f"weekly {WEEKDAYS.index(m.group('wd'))} {hour:02d}:{int(m.group('wm') or 0):02d}"
+    return rule if valid_rule(rule) else None
+
+
+def valid_rule(rule):
+    m = re.fullmatch(r'(?:daily|weekly [0-6]) (\d{2}):(\d{2})', rule or '')
+    return bool(m and int(m[1]) < 24 and int(m[2]) < 60)
 
 
 def describe(rule):
@@ -55,6 +62,8 @@ def _points(rule, now):
 def set_rule(task_id, rule):
     """Attach (or with rule=None remove) a schedule; the task's due becomes the next reset."""
     now = dt.datetime.now()
+    if rule and not valid_rule(rule):
+        raise ValueError('invalid recurring rule')
     with db.connect() as con:
         if not rule:
             con.execute("UPDATE tasks SET repeat = NULL, last_reset = NULL WHERE id = ?", (task_id,))
