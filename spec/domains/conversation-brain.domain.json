@@ -24,6 +24,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/choices\\.py|tests/test_chat_choices\\.py|spec/test/chat-choices-45\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/task_context\\.py|tests/test_task_context\\.py|spec/test/task-context-50\\.md)$"
     }
   ],
   "source": "manual",

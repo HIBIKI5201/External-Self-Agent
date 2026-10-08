@@ -5,6 +5,7 @@ import secrets
 import threading
 
 import db
+import task_context
 
 lock = threading.RLock()
 TOPICS = {'daily': ('日常の話', '今日はどんな一日だった？'),
@@ -95,7 +96,8 @@ def expose(result):
     if not current():
         wish, focus = db.get_setting('pending_feature'), db.get_setting('pending_focus')
         if wish:
-            publish('feature', {'wish': wish})
+            context = task_context.draft()
+            publish('feature', {'wish': wish, 'context': task_context.lines(context) if context else [wish]})
         elif focus and str(focus).isdigit():
             t = db.get_task(int(focus))
             if t and t['status'] != 'done':

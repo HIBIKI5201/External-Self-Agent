@@ -78,7 +78,7 @@ def test_feature_offer_consumed_once_across_concurrent_requests():
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: select(sb, offer), range(2)))
         tasks = db.list_tasks()
-        assert len(tasks) == 1 and tasks[0]['notes'] == wish
+        assert len(tasks) == 1 and wish in tasks[0]['notes']
         assert sum(bool(r['events']) for r in results) == 1
         assert any('何も変更していない' in r['reply'] for r in results)
 
