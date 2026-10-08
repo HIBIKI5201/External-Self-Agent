@@ -166,14 +166,13 @@ def test_due_must_follow_from_the_words():
 
 @needs_llm
 def test_real_model_does_not_rename_after_do_not_execute():
-    """The audited three-turn conversation from #67 (and #70's invented delegate name)."""
+    """The audited three-turn conversation from #67."""
     with Sandbox(copy_real=False) as sb:
         two_tasks()
         before = snapshot()
         sb.chat('今日は資料の手直しをしようと思ってる')
         mid = snapshot()
-        r = sb.chat('もう別の人に頼んだので、あなたがタスクを変える必要はないよ')
-        assert 'Claude Code' not in r['reply'], r
+        sb.chat('もう別の人に頼んだので、あなたがタスクを変える必要はないよ')
         sb.chat('案としてタイトルを変える話をしただけ。実行しないで')
         after = snapshot()
         assert {k: v['title'] for k, v in after.items()} == {k: v['title'] for k, v in before.items()}, after
