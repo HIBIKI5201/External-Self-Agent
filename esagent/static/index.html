@@ -227,7 +227,7 @@ function render() {
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   log.innerHTML = S.messages.length
     ? S.messages.map((m) => `<div class="msg ${esc(m.role)}${m.status === "pending" ? " pending" : ""}">${esc(m.content)}` +
-        (m.status === "pending" ? `<small>⏳ 返事待ち — モデルの準備ができたら自動で返事します</small>` : "") + `</div>`).join("")
+        (m.status === "pending" ? `<small>⏳ 返事待ち — モデルの準備ができたら自動で返事します</small>` : "") + renderChoices(m) + `</div>`).join("")
     : `<div class="empty">Es です。予定やタスク、困っていることを話しかけてください。<br>「/」でコマンド、コードの作業は Claude Code に引き継げます。</div>`;
   log.insertAdjacentHTML("beforeend", `<div id="live"></div>`);
   renderLive();
@@ -311,6 +311,22 @@ $("#adminBtn").addEventListener("click", () => {
 });
 
 // ---- sending: a queue, so you can keep typing while Es is thinking ----------
+function renderChoices(message) {
+  const offer = S.choices;
+  if (!offer || offer.message_id !== message.id) return "";
+  const disabled = busy || queue.length ? " disabled" : "";
+  return `<div class="chat-choices">${offer.options.map(o => `<button type="button" data-offer="${esc(offer.id)}" data-choice-value="${esc(o.value)}"${disabled}>${esc(o.label)}</button>`).join("")}</div>`;
+}
+
+$("#log").addEventListener("click", e => {
+  const b = e.target.closest("button[data-offer]");
+  if (!b || b.disabled || busy || queue.length || b.dataset.offer !== S.choices?.id) return;
+  document.querySelectorAll("button[data-offer]").forEach(x => { x.disabled = true; });
+  queue.push({text: b.textContent, at: localIso(), id: requestId(),
+    choice: {offer_id: b.dataset.offer, value: b.dataset.choiceValue}});
+  saveQueue(); renderLive(); pump();
+});
+
 // Messages not yet delivered; queue[0] is in flight while busy. Saved so a reload keeps them.
 // Items are {text, at}: at = when send was pressed, so Es can tell how long a message waited (#23).
 const requestId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, "0")).join("");
@@ -354,6 +370,7 @@ async function pump() {
   if (busy) return;
   while (queue.length) {
     busy = true;
+    document.querySelectorAll("button[data-offer]").forEach(b => { b.disabled = true; });
     thinkStart = performance.now(); thinkStage = thinkDetail = thinkPartial = "";
     window.Es?.thinking(true);
     thinkTimer = setInterval(renderLive, 100);
@@ -366,7 +383,7 @@ async function pump() {
     renderLive();
     let delivered = true;
     try {
-      const r = await api("/api/chat", { text: queue[0].text, queuedAt: queue[0].at, requestId: queue[0].id });
+      const r = await api("/api/chat", { text: queue[0].text, queuedAt: queue[0].at, requestId: queue[0].id, choice: queue[0].choice });
       offline = false;
       if (r.pending) window.Es?.say(r.note, { ms: 6000 });
       else window.Es?.react(r);  // a "うん" to a focus offer is started by the server
