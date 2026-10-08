@@ -20,7 +20,7 @@
       "pathPattern": "(^|/)docs/youtube\\.md$"
     },
     {
-      "pathPattern": "(^|/)(tests/test_bgm_mode\\.js|tests/test_bgm_ui\\.py|spec/test/single-youtube-player-63\\.md)$"
+      "pathPattern": "(^|/)(tests/test_bgm_mode\\.js|tests/test_bgm_ui\\.py|spec/test/(single-youtube-player-63|auto-youtube-source-65)\\.md)$"
     }
   ],
   "source": "manual",
