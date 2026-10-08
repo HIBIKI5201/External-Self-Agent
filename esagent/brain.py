@@ -436,6 +436,8 @@ def _apply(actions, cfg, user_text="", context_text=""):
         # Permission comes from the words, not from a well-formed proposal (#67).
         return [f"・ 「{guard.hold}」とあったので、タスクは変更していません"], [], {}
     actions = _narrow_bulk_updates(actions, user_text)
+    # The model sometimes repeats the same operation; run it once (#80).
+    actions = list({json.dumps(a, sort_keys=True, ensure_ascii=False): a for a in actions}.values())
     for a in actions:
         kind = a.get("type")
         task_id = a.get("task_id") or 0
@@ -573,7 +575,11 @@ def _intended_update(task, title, due, project, notes, said):
     # the operation and once stood in for a status change the model could not express (#67, #73).
     echo = re.fullmatch(r"[\s。、!！]*(?:(?:未)?完了|済み?|未完了に戻[すしたま]*|変更しない.*|保留.*|そのまま.*|今のまま.*)[\s。、!！]*",
                         notes or "")
-    if notes and not echo and (_NOTE_HINT_RE.search(said) or (named and _similarity(said, notes) >= 0.5)):
+    # The model copies the instruction around the content: 「メモに図を一枚追加と書いて」 (#80).
+    notes = re.sub(r"^(?:メモ|詳細|補足)(?:に|へ|として|[:：])\s*", "", notes or "").strip()
+    notes = re.sub(r"\s*(?:と|って)(?:書いて|書く|追記して|残して|メモして)[。\s]*$", "", notes).strip()
+    if notes and not echo and (_NOTE_HINT_RE.search(said) or (named and _similarity(said, notes) >= 0.5)) \
+            and not (task["notes"] or "").rstrip().endswith(notes):
         change["notes_append"] = notes
     return change
 
@@ -895,6 +901,14 @@ def _reference_context(text, history):
     return ' '.join(parts)
 
 
+def _without_titles(text):
+    """The message with task names blanked, so words inside a title do not count as hints."""
+    for t in sorted(db.list_tasks(include_done=True), key=lambda t: -len(t["title"] or "")):
+        if t["title"]:
+            text = text.replace(t["title"], "〇")
+    return text
+
+
 def _route_once(cfg, text, today, history, feedback):
     """Stage 1: decide intent and task changes (JSON, no prose)."""
     messages = [{"role": "system", "content": _router_prompt(today)}]
@@ -910,9 +924,11 @@ def _route_once(cfg, text, today, history, feedback):
     if _STATUS_RE.search(text) and not re.search(r"追加|登録", text):
         return "summary", "", []
     talking = db.get_setting("chat_mode") == "talk"
-    if (talking or _TALK_START_RE.search(text)) and not _ACTION_HINT_RE.search(text):
+    # 「資料の修正」 is a task name, not a request to fix something (#80).
+    said = _without_titles(text)
+    if (talking or _TALK_START_RE.search(text)) and not _ACTION_HINT_RE.search(said):
         return "chat", "", []  # small talk: never push tasks at the user
-    if not _ACTION_HINT_RE.search(text):
+    if not _ACTION_HINT_RE.search(said):
         # The model often reads "〜したい" or plain questions as requests to add tasks.
         if _WISH_RE.search(text) and not _REFERENCE_RE.search(text):
             return "chat", "", []  # ideas and wishes deserve a reaction, not a task suggestion
@@ -933,7 +949,7 @@ def _route_once(cfg, text, today, history, feedback):
         intent = "chat"  # "案を出して" wants ideas in conversation, not one recommended task
     if intent == "add" and not _ADD_HINT_RE.search(text):
         intent = "chat"  # "〜して" requests aimed at Es itself are not new tasks
-    if intent in ("advise", "chat") and _SUMMARY_RE.search(text) and not _ACTION_HINT_RE.search(text) \
+    if intent in ("advise", "chat") and _SUMMARY_RE.search(text) and not _ACTION_HINT_RE.search(said) \
             and not _TOPIC_RE.search(text):  # 「今の話題を一文でまとめて」 is about the conversation (#68)
         intent = "summary"
     if intent not in ACTION_INTENTS:

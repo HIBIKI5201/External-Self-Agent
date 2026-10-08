@@ -188,3 +188,20 @@ def test_real_model_keeps_negated_completion():
         assert t['status'] == 'todo' and t['notes'] == a['notes'], t
         assert t['due'] == (dt.date.today() + dt.timedelta(days=1)).isoformat(), t
         assert db.get_task(b['id'])['due'] == b['due']
+
+
+def test_task_names_are_not_action_hints_and_memos_are_clean():
+    """#80: 「〜の修正」 in a title made an advice request an update; memos kept 「メモに」 and doubled."""
+    with Sandbox(copy_real=False) as sb:
+        a, b = two_tasks()
+        with patch.object(llm, 'chat', return_value=route([], 'chat')):
+            intent, _, _ = brain._route_once(sb.cfg, '今は画像の修正より資料の修正を優先したい。作業を細かく分けて',
+                                             dt.date.today(), [], [])
+        assert intent == 'advise', intent
+        tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+        same = op('update_task', a['id'], due=tomorrow, notes='メモに図を一枚追加')
+        with patch.object(llm, 'chat', return_value=route([same, dict(same)])):
+            sb.chat('資料の修正を明日の締切にして、メモに図を一枚追加と書いて')
+        t = db.get_task(a['id'])
+        assert t['due'] == tomorrow and t['notes'].count('図を一枚追加') == 1, t
+        assert 'メモに図' not in t['notes'] and t['notes'].startswith(a['notes']), t
