@@ -6,6 +6,7 @@ import choices
 import db
 import task_context
 from support import Sandbox
+from markers import needs_llm
 
 
 def accept(sb, offer):
@@ -137,3 +138,37 @@ def test_named_task_history_keeps_earlier_conditions_excludes_unrelated_and_resp
         corrected = db.get_task(task['id'])
         sb.chat('「音声読み上げ」の詳細にこれまでの会話を追記して')
         assert db.get_task(task['id']) == corrected and '初期ON' not in corrected['notes']
+
+
+def test_natural_notes_and_prohibited_examples_pass_through():
+    with Sandbox(copy_real=False):
+        task = db.add_task('資料の修正', notes='既存メモ')
+        for text in (
+            '資料の修正を明日の締切にして、メモに図を一枚追加と書いて',
+            '資料の修正を明日の締切にして、メモに追記して：図を一枚追加',
+            '資料の修正の締切を明日に変更して。今ある詳細は全部残して',
+            '資料の修正のメモに何と書いてあるか知りたいだけ。メモを書き換えないで',
+            '資料の修正のタイトルは変えないで、メモに「凡例を追加」を追記して',
+            '実行しないで。これは例文です。「資料の修正」の詳細に追記して：図を追加',
+            '「資料の修正」の詳細に追記して：図を追加、という例文',
+            '「資料の修正」の詳細に追記して：図を追加、とはどういう意味？',
+        ):
+            assert task_context.detail_request(text) is None, text
+            assert db.get_task(task['id']) == task
+        result = task_context.detail_request('「資料の修正」の詳細に追記して：「凡例を追加」')
+        assert result['events'] and '既存メモ' in db.get_task(task['id'])['notes']
+        result = task_context.detail_request('「資料の修正」の詳細に追記して：「凡例を追加して」という依頼が来た')
+        assert result['events'] and 'という依頼が来た' in db.get_task(task['id'])['notes']
+
+
+@needs_llm
+def test_compound_deadline_and_note_with_and_without_project():
+    import datetime as dt
+    for project in ('', '全般の'):
+        with Sandbox(copy_real=False) as sb:
+            task = db.add_task('資料の修正', project='全般', notes='既存メモ')
+            result = sb.chat(project + '資料の修正を明日の締切にして、メモに図を一枚追加と書いて')
+            after = db.get_task(task['id'])
+            assert result['intent'] != 'feature-context', result
+            assert after['due'] == (dt.date.today() + dt.timedelta(days=1)).isoformat(), result
+            assert '図を一枚追加' in after['notes'] and '既存メモ' in after['notes'], after

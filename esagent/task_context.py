@@ -133,9 +133,19 @@ def detail_request(text):
         return None
     content = re.search(r'(?:追記して|追加して|残して|保存して|訂正して|修正して|書いて)\s*[:：]\s*(.+)$', text, re.S)
     command = text[:content.start(1)] if content else text
+    # Only consume a complete dedicated command, never incidental mentions of notes.
+    dedicated = re.fullmatch(r'(?P<target>「[^」]+」|#[0-9]+(?:\s+#[0-9]+)*|[^「」。\n]+?)?\s*の?(?:詳細|メモ|背景)[にを](?:追記して|追加して|残して|保存して|訂正して|修正して|書いて)\s*[:：]\s*', command)
+    history_command = re.fullmatch(r'(?:「[^」]+」|#[0-9]+)\s*の?(?:詳細|メモ|背景)に(?:これまでの会話|関連する会話|前の会話|これまでの条件)を追記して[。\s]*', text)
+    if re.search(r'実行しないで|書き換えないで|保存しないで|追記しないで|例文|引用|という(?:文|依頼|例)|と(?:言った|書いた)', command) or re.search(r'(?:という(?:例文|引用|指示|依頼)(?:です|だよ|だ|について.*|の意味.*)?|と(?:言った|書いた)(?:文|例)?|とはどういう意味[？?]?)[。\s]*$', text):
+        return None
     if re.search(r'[？?]|していい|しても|できます|できる', command):
         return {'reply': '詳細を保存する方法の相談として受け取ったよ。保存する場合はタスク名と内容を指定してね。何も変更していないよ。', 'events': []}
+    if not dedicated and not history_command:
+        return None
     tasks = db.list_tasks(include_done=True)
+    target = dedicated.group('target') if dedicated else None
+    if target and not target.startswith(('「', '#')) and target.strip() not in {t['title'] for t in tasks}:
+        return None  # A compound natural-language prefix is not a task reference.
     ids = re.findall(r'#(\d+)', command)
     quoted = re.findall(r'「([^」]+)」', command)
     candidates = [t for t in tasks if (str(t['id']) in ids if ids else
