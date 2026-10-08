@@ -223,13 +223,13 @@
   // (about 200px tall) and is never hidden while playing.
   const bgm = { player: null, ready: false, loading: false, presets: [], pending: null,
                 url: store.get("bgm.url", ""), focusOnly: store.get("bgm.focusOnly", true), greeted: false,
-                // Start with the single in-app player, including when an old mode was saved.
-                // "window" is only the explicit fallback after a playback error.
+                // The URL selects the playback destination; saved manual modes are ignored.
                 mode: "embed", winOpen: false, winStatus: "" };
 
   function parseYouTube(url) {
     try {
       const u = new URL(url.trim());
+      if (!youtubeUrl(url)) return null;
       const list = u.searchParams.get("list") || "";
       // A channel's current live stream: /embed/live_stream?channel=UC… or /channel/UC…/live
       const ch = u.searchParams.get("channel") || (u.pathname.match(/\/channel\/(UC[\w-]+)\/live/) || [])[1];
@@ -240,6 +240,22 @@
       if (m) id = m[2];
       return id || list ? { id, list } : null;
     } catch { return null; }
+  }
+
+  function youtubeUrl(url) {
+    try {
+      const u = new URL(url.trim());
+      return ["https:", "http:"].includes(u.protocol) && !u.username && !u.password
+        && ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"].includes(u.hostname) ? u : null;
+    } catch { return null; }
+  }
+
+  function playbackMode(url) {
+    const u = youtubeUrl(url);
+    if (!u) return null;
+    if (u.hostname === "music.youtube.com") return "window";
+    const video = parseYouTube(url);
+    return video ? video.channel ? "window" : "embed" : null;
   }
 
   function buildBgm() {
@@ -285,20 +301,20 @@
     $("#bgm-toggle").onclick = () => setBgmOpen($("#bgm").classList.contains("closed"));
     $("#bgm-focus").checked = bgm.focusOnly;
     $("#bgm-win-open").onclick = () => openWindow();
-    setMode("embed");
+    setMode(playbackMode(bgm.url) || "embed");
     $("#bgm-win-return").onclick = () => useEmbedded(bgm.url);
     $("#bgm-focus").onchange = (e) => { bgm.focusOnly = e.target.checked; store.set("bgm.focusOnly", bgm.focusOnly); };
     $("#bgm-play").onclick = () => isPlaying() ? pauseBgm() : playBgm();
     $("#bgm-select").onchange = (e) => {
       if (!e.target.value) return;
-      return useEmbedded(e.target.value);
+      return selectBgm(e.target.value);
     };
     $("#bgm-url").onkeydown = (e) => {
       if (e.key !== "Enter" || e.isComposing) return;
       e.preventDefault();
-      if (!parseYouTube(e.target.value)) return say("その URL は YouTube の動画として読めなかったよ。");
+      if (!playbackMode(e.target.value)) return say("その URL は YouTube または YouTube Music のリンクとして読めなかったよ。");
       const url = e.target.value; e.target.value = "";
-      return useEmbedded(url);
+      return selectBgm(url);
     };
   }
 
@@ -381,10 +397,22 @@
     finally { yt.busy = false; updateYouTube(yt); }
   }
 
+  async function selectBgm(url) {
+    const mode = playbackMode(url);
+    if (!mode) return say("YouTube または YouTube Music のリンクを選んでね。");
+    if (mode === "embed") return useEmbedded(url);
+    if (bgm.mode === "window") await media("pause");
+    setMode(mode); setBgmOpen(true); setUrl(url.trim());
+    return openWindow();
+  }
+
   async function useEmbedded(url) {
+    const u = youtubeUrl(url);
+    if (!u || !parseYouTube(url)) return say("アプリ内で再生する動画のリンクを選んでね。");
+    if (u.hostname === "music.youtube.com") u.hostname = "www.youtube.com";
     if (bgm.mode === "window") await media("pause");
     setMode("embed"); setBgmOpen(true);
-    if (url) setUrl(url);
+    setUrl(u.href);
     playBgm();
   }
 
@@ -397,6 +425,8 @@
     if (mode !== bgm.mode && bgm.mode === "embed") pauseEmbed();
     bgm.mode = mode; store.set("bgm.mode", mode);
     $("#bgm").classList.toggle("winmode", mode !== "embed");
+    $("#bgm-win-open").textContent = youtubeUrl(bgm.url)?.hostname === "music.youtube.com" ? "YouTube Musicで開く" : "YouTubeで開く";
+    $("#bgm-win-return").disabled = !parseYouTube(bgm.url);
     if (mode !== "embed") refreshWin();
     syncBgm();
   }
@@ -409,7 +439,7 @@
       const title = s[0]?.title;
       $("#bgm-win-status").innerHTML = s.length
         ? `${bgm.winStatus === "Playing" ? "▶ 再生中" : "⏸ 一時停止中"}<br><small>${esc(title || "YouTube")}</small>`
-        : "YouTube のウィンドウは開いていません。";
+        : `${youtubeUrl(bgm.url)?.hostname === "music.youtube.com" ? "YouTube Music" : "YouTube"} のウィンドウは開いていません。`;
       if (bgm.mode === "window") $("#bgm-play").textContent = bgm.winStatus === "Playing" ? "⏸" : "▶";
       // remember a URL the first time we learn its title
       if (title && bgm.mode === "window" && bgm.url && !bgm.presets.some((p) => p.url === bgm.url)) {
@@ -426,9 +456,14 @@
       if (!first) { $("#bgm-url").focus(); return say("流したい YouTube の URL を、BGM の欄に貼ってね。"); }
       setUrl(first.url);
     }
-    await post("/api/bgm/window", { url: bgm.url });
+    const target = youtubeUrl(bgm.url);
+    if (!target || !playbackMode(bgm.url)) return say("YouTube のリンクを選んでね。");
+    const channel = parseYouTube(bgm.url)?.channel;
+    if (channel) { target.hostname = "www.youtube.com"; target.pathname = `/channel/${channel}/live`; target.search = ""; }
+    try { await post("/api/bgm/window", { url: target.href }); }
+    catch (e) { return say(`ウィンドウを開けませんでした。${e.message || "もう一度試してください。"}`); }
     bgm.winOpen = true;
-    say("YouTube のウィンドウを開いたよ。最小化しても流れるからね。", { ms: 3500 });
+    say(`${target.hostname === "music.youtube.com" ? "YouTube Music" : "YouTube"} のウィンドウを開いたよ。`, { ms: 3500 });
     setTimeout(refreshWin, 6000);
   }
 
@@ -449,6 +484,8 @@
 
   function setUrl(url) {
     bgm.url = url; store.set("bgm.url", url); renderPresets();
+    $("#bgm-win-open").textContent = youtubeUrl(url)?.hostname === "music.youtube.com" ? "YouTube Musicで開く" : "YouTubeで開く";
+    $("#bgm-win-return").disabled = !parseYouTube(url);
     const v = parseYouTube(url);
     if (bgm.mode === "embed" && bgm.ready && v) {
       if (v.channel) {  // the API cannot switch to a channel stream in place, so rebuild the player
@@ -529,7 +566,7 @@
     if (!bgm.url) {
       const first = bgm.presets[0];
       if (!first) { $("#bgm-url").focus(); return say("好きな lo-fi の YouTube URL を、BGM の欄に貼ってね。"); }
-      setUrl(first.url);
+      return selectBgm(first.url);
     }
     loadApi(() => {
       if (!embedVisible()) return;

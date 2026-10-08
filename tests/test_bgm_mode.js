@@ -27,7 +27,7 @@ const ctx = vm.createContext({$, URL, encodeURIComponent, console, location: {or
 });
 vm.runInContext(section('  const bgm =', '  function parseYouTube') + '\nthis.bgm=bgm;' +
   section('  function parseYouTube', '  const yt =') +
-  section('  async function useEmbedded', '  async function media') +
+  section('  async function selectBgm', '  async function media') +
   section('  async function openWindow', '  function setBgmOpen') +
   section('  function loadApi', '  const isPlaying'), ctx);
 (async () => {
@@ -35,12 +35,50 @@ vm.runInContext(section('  const bgm =', '  function parseYouTube') + '\nthis.bg
   vm.runInContext('buildBgm()', ctx);
   assert(!$('#bgm').innerHTML.includes('bgm-mode'));
   assert($('#bgm').innerHTML.includes('アプリ内再生に戻る'));
+  for (const url of ['https://youtu.be/abcdefghijk', 'https://www.youtube.com/watch?v=abcdefghijk',
+    'https://m.youtube.com/shorts/abcdefghijk', 'https://www.youtube.com/live/abcdefghijk',
+    'https://www.youtube.com/playlist?list=PLexample']) {
+    assert.equal(ctx.playbackMode(url), 'embed', url);
+  }
+  for (const url of ['https://music.youtube.com/', 'https://music.youtube.com/library',
+    'https://music.youtube.com/playlist?list=PLexample', 'https://music.youtube.com/watch?v=abcdefghijk',
+    'https://www.youtube.com/channel/UCexample/live', 'https://www.youtube.com/embed/live_stream?channel=UCexample']) {
+    assert.equal(ctx.playbackMode(url), 'window', url);
+  }
+  for (const url of ['https://example.com/watch?v=abcdefghijk', 'https://youtube.com.evil.test/watch?v=abcdefghijk',
+    'ftp://youtube.com/watch?v=abcdefghijk', 'https://user@youtube.com/watch?v=abcdefghijk', 'invalid']) {
+    assert.equal(ctx.playbackMode(url), null, url);
+    assert.equal(ctx.parseYouTube(url), null, url);
+  }
   calls.length = 0;
   ctx.bgm.mode = 'window';
   await vm.runInContext('playYouTubeVideo("example1234")', ctx);
   assert.deepEqual(calls.slice(0, 2), ['close-library', 'media:pause']);
   assert.equal(ctx.bgm.mode, 'embed');
   assert.equal(calls.at(-1), 'play-embed');
+  calls.length = 0;
+  await $('#bgm-url').onkeydown({key: 'Enter', isComposing: false, preventDefault() {}, target: {value: 'https://music.youtube.com/library'}});
+  assert.equal(ctx.bgm.mode, 'window');
+  assert(calls.includes('/api/bgm/window:https://music.youtube.com/library'));
+  assert(!calls.includes('play-embed'));
+  calls.length = 0;
+  await $('#bgm-select').onchange({target: {value: 'https://music.youtube.com/watch?v=abcdefghijk'}});
+  assert.equal(calls[0], 'media:pause');
+  assert(calls.includes('/api/bgm/window:https://music.youtube.com/watch?v=abcdefghijk'));
+  calls.length = 0;
+  await $('#bgm-win-return').onclick();
+  assert.equal(ctx.bgm.mode, 'embed');
+  assert.equal(ctx.bgm.url, 'https://www.youtube.com/watch?v=abcdefghijk');
+  await ctx.selectBgm('https://www.youtube.com/embed/live_stream?channel=UCexample');
+  assert(calls.includes('/api/bgm/window:https://www.youtube.com/channel/UCexample/live'));
+  ctx.bgm.url = 'https://music.youtube.com/library'; calls.length = 0;
+  vm.runInContext('buildBgm()', ctx);
+  assert.equal(ctx.bgm.mode, 'window');
+  assert(!calls.some(x => x.startsWith('/api/bgm/window:')), 'reload does not open a browser');
+  assert.equal($('#bgm-win-return').disabled, true);
+  calls.length = 0;
+  await ctx.selectBgm('https://example.com/watch?v=abcdefghijk');
+  assert.equal(calls.length, 0);
   ctx.bgm.mode = 'window'; calls.length = 0;
   await $('#bgm-select').onchange({target: {value: 'https://youtu.be/preset1234'}});
   assert.equal(ctx.bgm.mode, 'embed'); assert.equal(calls[0], 'media:pause');
