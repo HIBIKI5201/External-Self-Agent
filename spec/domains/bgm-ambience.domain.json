@@ -1,6 +1,6 @@
 {
   "name": "BGM and Ambience",
-  "description": "YouTube の埋め込み・動画ウィンドウ・音楽ウィンドウ、Windows のメディア操作、環境音を所有する。",
+  "description": "YouTube のアプリ内再生と再生不可時の外部ウィンドウ、Windows のメディア操作、環境音を所有する。",
   "presetRules": [],
   "templateRules": [],
   "membership": [
@@ -18,6 +18,9 @@
     },
     {
       "pathPattern": "(^|/)docs/youtube\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_bgm_mode\\.js|tests/test_bgm_ui\\.py|spec/test/single-youtube-player-63\\.md)$"
     }
   ],
   "source": "manual",

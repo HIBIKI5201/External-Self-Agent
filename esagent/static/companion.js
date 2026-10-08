@@ -223,9 +223,9 @@
   // (about 200px tall) and is never hidden while playing.
   const bgm = { player: null, ready: false, loading: false, presets: [], pending: null,
                 url: store.get("bgm.url", ""), focusOnly: store.get("bgm.focusOnly", true), greeted: false,
-                // "embed": player inside EsAgent. "window": YouTube's own site in a small Edge window,
-                // where the user's Premium login applies and non-embeddable streams (Lofi Girl) play.
-                mode: store.get("bgm.mode", "embed"), winOpen: false, winStatus: "" };
+                // Start with the single in-app player, including when an old mode was saved.
+                // "window" is only the explicit fallback after a playback error.
+                mode: "embed", winOpen: false, winStatus: "" };
 
   function parseYouTube(url) {
     try {
@@ -265,15 +265,11 @@
         <p class="yt-note">Google連携でプレイリストを表示できます。再生できない動画はYouTubeで開いてください。
           <a href="/youtube-setup" target="_blank" rel="noopener">接続の設定・再生の制限</a></p>
       </div>
-      <div class="bgm-modes">
-        <label><input type="radio" name="bgm-mode" value="embed"> この中で再生</label>
-        <label><input type="radio" name="bgm-mode" value="window"> YouTube（動画）— ログイン・Premium で再生</label>
-        <label><input type="radio" name="bgm-mode" value="music"> YouTube Music（音楽）— ライブラリ・プレイリスト</label>
-      </div>
       <div id="bgm-frame"><div id="bgm-player"></div><div id="bgm-empty">好きな lo-fi の YouTube URL を<br>下に貼って Enter</div></div>
       <div id="bgm-win">
         <div id="bgm-win-status">別ウィンドウで再生します（Edge のログインがそのまま使えます）。<br>最小化しても流れ続けます。</div>
-        <button id="bgm-win-open" class="ghost">ウィンドウを開く</button>
+        <button id="bgm-win-open" class="ghost">YouTubeで開く</button>
+        <button id="bgm-win-return" class="ghost">アプリ内再生に戻る</button>
       </div>
       <div class="bgm-row">
         <select id="bgm-select" title="プリセット"></select>
@@ -288,25 +284,21 @@
     setBgmOpen(store.get("bgm.open", true));
     $("#bgm-toggle").onclick = () => setBgmOpen($("#bgm").classList.contains("closed"));
     $("#bgm-focus").checked = bgm.focusOnly;
-    document.querySelectorAll('[name="bgm-mode"]').forEach((r) => {
-      r.checked = r.value === bgm.mode;
-      r.onchange = () => setMode(r.value);
-    });
     $("#bgm-win-open").onclick = () => openWindow();
-    setMode(bgm.mode);
+    setMode("embed");
+    $("#bgm-win-return").onclick = () => useEmbedded(bgm.url);
     $("#bgm-focus").onchange = (e) => { bgm.focusOnly = e.target.checked; store.set("bgm.focusOnly", bgm.focusOnly); };
     $("#bgm-play").onclick = () => isPlaying() ? pauseBgm() : playBgm();
     $("#bgm-select").onchange = (e) => {
       if (!e.target.value) return;
-      setUrl(e.target.value);
-      if (bgm.mode !== "embed") openWindow(); else playBgm();
+      return useEmbedded(e.target.value);
     };
     $("#bgm-url").onkeydown = (e) => {
       if (e.key !== "Enter" || e.isComposing) return;
       e.preventDefault();
       if (!parseYouTube(e.target.value)) return say("その URL は YouTube の動画として読めなかったよ。");
-      setUrl(e.target.value); e.target.value = "";
-      if (bgm.mode !== "embed") openWindow(); else playBgm();
+      const url = e.target.value; e.target.value = "";
+      return useEmbedded(url);
     };
   }
 
@@ -389,12 +381,16 @@
     finally { yt.busy = false; updateYouTube(yt); }
   }
 
+  async function useEmbedded(url) {
+    if (bgm.mode === "window") await media("pause");
+    setMode("embed"); setBgmOpen(true);
+    if (url) setUrl(url);
+    playBgm();
+  }
+
   function playYouTubeVideo(id) {
     $("#yt-dialog").close();
-    document.querySelector('[name="bgm-mode"][value="embed"]').checked = true;
-    setMode("embed"); setBgmOpen(true);
-    setUrl(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`);
-    syncBgm(); playBgm();
+    return useEmbedded(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`);
   }
 
   function setMode(mode) {
@@ -402,6 +398,7 @@
     bgm.mode = mode; store.set("bgm.mode", mode);
     $("#bgm").classList.toggle("winmode", mode !== "embed");
     if (mode !== "embed") refreshWin();
+    syncBgm();
   }
 
   async function media(action) {
@@ -412,8 +409,8 @@
       const title = s[0]?.title;
       $("#bgm-win-status").innerHTML = s.length
         ? `${bgm.winStatus === "Playing" ? "▶ 再生中" : "⏸ 一時停止中"}<br><small>${esc(title || "YouTube")}</small>`
-        : `${bgm.mode === "music" ? "YouTube Music" : "YouTube"} のウィンドウは開いていません。`;
-      $("#bgm-play").textContent = bgm.winStatus === "Playing" ? "⏸" : "▶";
+        : "YouTube のウィンドウは開いていません。";
+      if (bgm.mode === "window") $("#bgm-play").textContent = bgm.winStatus === "Playing" ? "⏸" : "▶";
       // remember a URL the first time we learn its title
       if (title && bgm.mode === "window" && bgm.url && !bgm.presets.some((p) => p.url === bgm.url)) {
         post("/api/bgm", { url: bgm.url, title }).then((x) => { bgm.presets = x.bgm; renderPresets(); }).catch(() => {});
@@ -423,21 +420,7 @@
   }
   const refreshWin = () => media("status");
 
-  function toMusic(url) {
-    // Same track or playlist on YouTube Music; no URL opens the user's YouTube Music home.
-    const v = url ? parseYouTube(url) : null;
-    if (!v || v.channel) return "https://music.youtube.com/";
-    if (v.list) return `https://music.youtube.com/playlist?list=${encodeURIComponent(v.list)}`;
-    return `https://music.youtube.com/watch?v=${encodeURIComponent(v.id)}`;
-  }
-
   async function openWindow() {
-    if (bgm.mode === "music") {
-      await post("/api/bgm/window", { url: toMusic(bgm.url) });
-      bgm.winOpen = true;
-      say("YouTube Music を開いたよ。好きなプレイリストを流してね。", { ms: 3500 });
-      return setTimeout(refreshWin, 6000);
-    }
     if (!bgm.url) {
       const first = bgm.presets[0];
       if (!first) { $("#bgm-url").focus(); return say("流したい YouTube の URL を、BGM の欄に貼ってね。"); }
@@ -513,9 +496,8 @@
               ? "この動画はアプリ内での再生が許可されていません。"
               : e.data === 153 ? "YouTubeが再生元を確認できませんでした。YouTubeで開いてください。"
               : "この動画を再生できませんでした。ログインや年齢確認が必要な場合はYouTubeで開いてください。",
-              { buttons: [{ label: "YouTube ウィンドウで流す", onClick: () => {
-                  document.querySelector('[name="bgm-mode"][value="window"]').checked = true;
-                  setMode("window"); openWindow(); } }, { label: "閉じる" }] });
+              { buttons: [{ label: "YouTubeで開く", onClick: () => {
+                  setMode("window"); return openWindow(); } }, { label: "閉じる" }] });
           },
         },
       });
@@ -590,7 +572,6 @@
       };
       $("#minicat").onclick = () => { flashMini("talk", 1500); say(pick(["にゃ？", "なになに？", "にゃー"]), { ms: 2000 }); };
       setMini("idle");
-      document.querySelectorAll('[name="bgm-mode"]').forEach((r) => r.addEventListener("change", syncBgm));
       $("#bgm-focus").addEventListener("change", syncBgm);
       document.querySelectorAll("[data-sound]").forEach((b) => b.onclick = () => setSound(b.dataset.sound, !soundOn[b.dataset.sound]));
       // Browsers only allow audio after a click, so restore saved sounds on the first one.
