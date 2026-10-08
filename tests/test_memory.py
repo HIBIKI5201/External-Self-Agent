@@ -62,5 +62,6 @@ def test_model_knows_what_it_actually_did():
     with Sandbox() as sb:
         sb.chat("金曜までにC社のESを出す")
         sb.llm_calls.clear()
-        sb.chat("さっき何を登録した？")
-        assert sb.sent_contains("C社", "reply"), "the action record did not reach the model"
+        r = sb.chat("さっき何を登録した？")
+        # Answered from the operation records in code since #70; the model is not asked.
+        assert "C社" in r["reply"] and r["intent"] == "lookup", r

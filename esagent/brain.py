@@ -522,9 +522,14 @@ def _apply(actions, cfg, user_text="", context_text=""):
                 cur = db.get_task(task_id)
                 events.append(f"・ #{cur['id']} {cur['title']} は変えていません（何を変えるのか読み取れなかったため）")
                 continue
+            old = db.get_task(task_id)
             t = touched = db.update_task(task_id, **change)
-            change = f"（締切 {t['due']}）" if change.get("due") else ""
-            events.append(f"✎ #{t['id']} {t['title']} を更新しました{change}")
+            # The record names every changed field, so a later 「何を変えた？」 can be answered from it (#70).
+            parts = ([f"タイトル: {old['title']} → {t['title']}"] if "title" in change else []) + \
+                    ([f"締切 {t['due']}"] if "due" in change else []) + \
+                    ([f"プロジェクト: {t['project']}"] if "project" in change else []) + \
+                    ([f"メモ追記: {change['notes_append']}"] if "notes_append" in change else [])
+            events.append(f"✎ #{t['id']} {t['title']} を更新しました（{' / '.join(parts)}）")
         elif kind == "complete_task":
             t = touched = db.update_task(task_id, status="done")
             events.append(f"✔ #{t['id']} {t['title']} を完了にしました")
@@ -587,10 +592,13 @@ def _report_flow(text):
     scored = sorted(((_similarity(text, t["title"]), t) for t in db.list_tasks()), key=lambda x: -x[0])
     task = scored[0][1] if scored and scored[0][0] >= 0.35 else None
     if asked:
-        ready = task and any(h["task_id"] == task["id"] for h in db.list_handoffs())
+        # Name only who the user named: 「別の人に頼んだ」 is not Claude Code (#70).
+        claude = re.search(r"Claude|claude|クロード|CC", text)
+        who = "Claude Code に" if claude else "ほかの人に" if re.search(r"人|同僚|友|先輩|上司|誰か|チーム", text) else ""
+        ready = claude and task and any(h["task_id"] == task["id"] for h in db.list_handoffs())
         about = f"「{task['title']}」は" if task else ""
-        tail = (f"#{task['id']} の引き継ぎは準備済みのままにしておくね。" if ready else "")
-        return f"了解、{about}もう Claude Code に頼んであるんだね。{tail}結果が戻ったら教えてね。", None
+        tail = (f"#{task['id']} の引き継ぎは準備済みのままにしておくね。" if ready else "タスクはそのままにしておくね。")
+        return f"了解、{about}もう{who}頼んであるんだね。{tail}結果が戻ったら教えてね。", None
     if task:
         db.set_setting("pending_focus", str(task["id"]))
         return f"了解、「{task['title']}」は自分で進めるんだね。集中タイマー、始める？", None
@@ -687,7 +695,10 @@ def delegate(task_id, cfg):
     return handoff.prepare(task, convo, folder)
 
 
-_TALK_START_RE = re.compile(r"雑談|おしゃべり|話そう|話したい|話でも|別の話|話を変え|話題を変え")
+_TALK_START_RE = re.compile(r"雑談|おしゃべり|話そう|話したい|話でも|別の話|話を変え|話題を変え|"
+                            r"(?:作業|仕事|タスク)の話は(?:一旦|いったん|もう|ちょっと)?(?:やめ|休|置|おしまい|終わり)")
+_CONSULT_RE = re.compile(r"まず相談|相談(?:を)?(?:続け|したい|させて|に乗って)")
+_TOPIC_RE = re.compile(r"話題|会話|今の話|この話|さっきの話")
 _MODE_TALK_RE = re.compile(r"雑談モード")
 _MODE_CLAIM_RE = re.compile(r"[^。！!\n]*(雑談|作業|通常)モード(が|に|へ)[^。！!\n]*(開始|スタート|切り替|入り|なり|しました|します)[^。！!\n]*[。！!]?")
 _MODE_WORK_RE = re.compile(r"(作業|通常|仕事)モード")
@@ -905,8 +916,14 @@ def _route_once(cfg, text, today, history, feedback):
         # The model often reads "〜したい" or plain questions as requests to add tasks.
         if _WISH_RE.search(text) and not _REFERENCE_RE.search(text):
             return "chat", "", []  # ideas and wishes deserve a reaction, not a task suggestion
-        if _ADVICE_RE.search(text):
+        # A word like 「したい」「教えて」「相談」 alone does not turn chat into task advice (#68):
+        # the model's chat stands unless the user asks what to do next or names a task.
+        named = _named_tasks(text, db.list_tasks())
+        if _ADVICE_RE.search(text) and (intent != "chat" or _ASK_NEXT_RE.search(text) or named) \
+                and not (_CONSULT_RE.search(text) and not named):
             intent = "advise"
+        elif _CONSULT_RE.search(text) and not named:
+            intent = "chat"  # 「まだタスクにはしないで。まず相談したい」: talk about the idea itself
         elif _QUESTION_RE.search(text.strip()):
             intent = "chat"
     actions = parsed.get("actions") or []
@@ -916,7 +933,8 @@ def _route_once(cfg, text, today, history, feedback):
         intent = "chat"  # "案を出して" wants ideas in conversation, not one recommended task
     if intent == "add" and not _ADD_HINT_RE.search(text):
         intent = "chat"  # "〜して" requests aimed at Es itself are not new tasks
-    if intent in ("advise", "chat") and _SUMMARY_RE.search(text) and not _ACTION_HINT_RE.search(text):
+    if intent in ("advise", "chat") and _SUMMARY_RE.search(text) and not _ACTION_HINT_RE.search(text) \
+            and not _TOPIC_RE.search(text):  # 「今の話題を一文でまとめて」 is about the conversation (#68)
         intent = "summary"
     if intent not in ACTION_INTENTS:
         actions = []  # advice and chat never touch the task list
@@ -1256,6 +1274,73 @@ _OPERATION_RE = re.compile(r"締め?切|期限|完了|終わ|名前|タイトル
 _NEW_TASK_RE = re.compile(r"追加|登録|タスクに(?:して|する)|作って|作成")
 NO_TARGET_NOTE = "何も変更していないよ。"
 
+_LOOKUP_FIELDS = (("title", r"タイトル|名前|名称"), ("due", r"締め?切|期限|期日|いつまで"),
+                  ("notes", r"メモ|詳細|補足"), ("status", r"状態|ステータス|完了か|終わってるか|進み具合"))
+_LOOKUP_ASK_RE = re.compile(r"教えて|見せて|一覧|表で|表に|知りたい|確認したい|書いてある|どうなって|だっけ|[？?]|何[？?]?$")
+_WRITE_ASK_RE = re.compile(r"(?:に|へ)(?:して|変えて|変更して|延ばして|戻して|ずらして)|変更して|追記して|追加して|登録して|"
+                           r"書いて(?!ある|いる|る)|直して|残して|完了にして|消して")
+_PLURAL_REF_RE = re.compile(r"それぞれ|両方|二つ|2つ|ふたつ|これら|それら|今の(?:タスク|二つ|2つ)")
+_STATUS_LABELS = {"todo": "未完了", "doing": "作業中", "delegated": "Claude Code に依頼中", "done": "完了"}
+_DID_RE = re.compile(r"(?:変え|変更し|更新し|追加し|追加され|登録し|登録され|完了にし|操作し|いじっ|書き換え)た(?![いら])"
+                     r"(?:項目|こと|もの|の|か|って|[？?\s]|$)|操作を(?:説明|教えて|振り返)|何を(?:変え|変更し|し)たの")
+
+
+def _lookup_flow(text, history):
+    """「資料の修正の締切とメモを一覧で教えて」: stored values, read in code (#76, #68).
+
+    The model once answered such questions with invented memos, states and dates, or with task
+    advice. Only the named tasks (done ones too) are shown, with each value exactly as stored and
+    「未設定」 for an empty one. Nothing is written. Returns the reply or None."""
+    fields = [f for f, pattern in _LOOKUP_FIELDS if re.search(pattern, text)]
+    if not fields or not _LOOKUP_ASK_RE.search(text):
+        return None
+    clauses = [c for c in re.split(r"[。、，,！!\n]|(?<=ないで)", text) if c.strip()]
+    if any(_WRITE_ASK_RE.search(c) and not write_guard.NEG_RE.search(c) for c in clauses):
+        return None  # a change request, maybe with a question attached
+    every = db.list_tasks(include_done=True)
+    tasks = _named_tasks(text, every)
+    if not tasks and _PLURAL_REF_RE.search(text):
+        recent = " ".join(m["content"] for m in history[-6:])
+        tasks = _named_tasks(recent, every)
+    if not tasks and re.search(r"全部|すべて|全て|全タスク", text):
+        tasks = db.list_tasks()
+    if not tasks:
+        return None
+    lines =["保存されている内容だよ（何も変更していないよ）。"]
+    for t in tasks:
+        parts = []
+        if "due" in fields:
+            parts.append(f"締切: {t['due'] or '未設定'}")
+        if "status" in fields:
+            parts.append(f"状態: {_STATUS_LABELS.get(t['status'], t['status'])}")
+        head = f"・「{t['title']}」" + (f"（{t['project']}）" if t["project"] and len(
+            [o for o in tasks if o["title"] == t["title"]]) > 1 else "")
+        lines.append(head + (" " + " / ".join(parts) if parts else ""))
+        if "notes" in fields:
+            memo = (t["notes"] or "").strip()
+            lines += [f"　メモ: {memo.splitlines()[0]}" if memo else "　メモ: 未設定"]
+            lines += [f"　　{line}" for line in memo.splitlines()[1:]]
+    return "\n".join(lines)
+
+
+def _action_log_flow(text, history):
+    """「実際に何かタスクを変えた？」: answered from the operation records, not by the model (#70).
+
+    The model denied a change it had just made. The records (notice messages) say what ran; this
+    message itself never changes anything, which the reply says separately."""
+    if not _DID_RE.search(text) or _WRITE_ASK_RE.search(text) or not re.search(r"[？?]|教えて|説明|だけ|か$|の$", text):
+        return None
+    done = [line for m in history[-30:] if m["role"] == "notice"
+            for line in m["content"].splitlines() if line[:1] in "＋✎✔→↺"]
+    if not done:
+        return "この会話の記録では、タスクを変更した操作はないよ。今の質問でも何も変更していないよ。"
+    ids = list(dict.fromkeys(int(i) for line in done for i in re.findall(r"#(\d+)", line[:12])))
+    now = [db.get_task(i) for i in ids]
+    state = [f"・「{t['title']}」 状態: {_STATUS_LABELS.get(t['status'], t['status'])} / 締切: {t['due'] or '未設定'}"
+             for t in now if t]
+    return ("この会話で実際に行った操作は次のとおりだよ（今の質問では何も変更していないよ）。\n"
+            + "\n".join(done[-8:]) + ("\n今の状態:\n" + "\n".join(state) if state else ""))
+
 
 def _guarded_write_flow(text, annotated, history):
     """Requests the router cannot express or should never guess, decided in code.
@@ -1531,6 +1616,10 @@ def _chat(text, cfg, message_id=None):
             reply = _remember(cfg, text, history)
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "intent": "remember"}
+        answer = _action_log_flow(text, history) or _lookup_flow(text, history)
+        if answer:  # read-only questions about the records and stored values (#70, #76)
+            db.add_message("assistant", answer)
+            return {"reply": answer, "events": [], "handoffs": [], "intent": "lookup"}
         unknown = _recall_flow(text, message_id)
         if unknown:
             db.add_message("assistant", unknown)
