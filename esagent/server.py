@@ -29,6 +29,7 @@ import pomodoro  # noqa: E402
 import projects  # noqa: E402
 import recurring  # noqa: E402
 import skills  # noqa: E402
+import youtube  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
@@ -46,6 +47,7 @@ def state():
         "llm": llm.status(CFG),
         "bgm": CFG.get("bgm", []),
         "google": gsync.status(),
+        "youtube": youtube.status(),
         "mode": db.get_setting("chat_mode", "work"),
         "companion": companion.stats(),
     }
@@ -117,8 +119,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return self._send(403, {"error": "forbidden"})
         path = urlparse(self.path).path
-        if path in ("/", "/index.html", "/admin"):
-            page = "admin.html" if path == "/admin" else "index.html"
+        if path in ("/", "/index.html", "/admin", "/youtube-setup"):
+            page = "youtube-setup.html" if path == "/youtube-setup" else "admin.html" if path == "/admin" else "index.html"
             with open(os.path.join(STATIC, page), "rb") as f:
                 return self._send(200, body=f.read(), ctype="text/html; charset=utf-8")
         m = re.fullmatch(r"/static/(.+\.(js|css|svg|png))", unquote(path))
@@ -169,9 +171,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if "error" in q:
                 raise gauth.AuthError(q["error"][0])
-            gauth.finish(q.get("state", [""])[0], q.get("code", [""])[0])
-            page = CALLBACK_PAGE.format(title="Google ToDo リストに接続しました",
-                                        detail="E.S. Agent がタスクの同期を始めます。")
+            purpose = gauth.finish(q.get("state", [""])[0], q.get("code", [""])[0])
+            page = CALLBACK_PAGE.format(title="Google に接続しました",
+                                        detail="E.S. Agent のYouTube欄からプレイリストを開けます。" if purpose == "youtube"
+                                        else "E.S. Agent がタスクの同期を始めます。")
             gsync.request()
         except (gauth.AuthError, gauth.OfflineError) as e:
             page = CALLBACK_PAGE.format(title="接続できませんでした", detail=html.escape(str(e)))
@@ -203,8 +206,11 @@ class Handler(BaseHTTPRequestHandler):
     def _post_result(self, path, body):
         try:
             result = self._route(path, body)
-            gsync.request()  # any change made here should reach Google soon
+            if not path.startswith("/api/youtube/"):
+                gsync.request()  # mutations should reach Google; YouTube reads do not trigger sync
             return 200, result
+        except youtube.YouTubeError as e:
+            return e.code, {"error": str(e)}
         except LookupError as e:
             return 404, {"error": str(e)}
         except ValueError as e:  # bad input from the screen
@@ -214,6 +220,20 @@ class Handler(BaseHTTPRequestHandler):
             return 500, {"error": "処理結果を確認できません。履歴やタスクを確認してください。"}
 
     def _route(self, path, body):
+        if path == "/api/youtube/connect":
+            try:
+                url = gauth.begin(redirect_uri(), youtube=True)
+            except (gauth.AuthError, gauth.OfflineError):
+                raise youtube.YouTubeError("Google接続の設定が必要です。設定手順を確認してください。", 400) from None
+            if body.get("open", True):
+                os.startfile(url)
+            return {"ok": True, "url": url}
+        if path == "/api/youtube/playlists":
+            return youtube.playlists(body.get("page", ""))
+        if path == "/api/youtube/items":
+            return youtube.playlist_items(body.get("playlist", ""), body.get("page", ""))
+        if path == "/api/youtube/search":
+            return youtube.search(body.get("query", ""), body.get("page", ""))
         if path == "/api/chat":
             text = (body.get("text") or "").strip()
             if not text:

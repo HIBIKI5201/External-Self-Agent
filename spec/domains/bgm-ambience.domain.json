@@ -12,6 +12,12 @@
     },
     {
       "pathPattern": "(^|/)esagent/static/companion\\.js$"
+    },
+    {
+      "pathPattern": "(^|/)esagent/static/youtube-setup\\.html$"
+    },
+    {
+      "pathPattern": "(^|/)docs/youtube\\.md$"
     }
   ],
   "source": "manual",

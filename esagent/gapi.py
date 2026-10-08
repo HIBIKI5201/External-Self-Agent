@@ -11,9 +11,10 @@ CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 
 
 class SyncError(Exception):
-    def __init__(self, message, code=None):
+    def __init__(self, message, code=None, reason=None):
         super().__init__(message)
         self.code = code
+        self.reason = reason
 
 
 def request(base, method, path, params=None, body=None):
@@ -29,10 +30,16 @@ def request(base, method, path, params=None, body=None):
             raw = r.read()
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
+        raw = e.read().decode("utf-8", "replace")
+        detail = raw[:300]
+        try:
+            errors = json.loads(raw).get("error", {}).get("errors", [])
+            reason = errors[0].get("reason") if errors else None
+        except (ValueError, AttributeError, TypeError):
+            reason = None
         if e.code == 401:
             raise gauth.AuthError(f"Google が認証を拒否しました: {detail}")
-        raise SyncError(f"Google API {e.code}: {detail}", code=e.code)
+        raise SyncError(f"Google API {e.code}: {detail}", code=e.code, reason=reason)
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
         raise gauth.OfflineError(str(e))
 

@@ -23,6 +23,7 @@ powershell -ExecutionPolicy Bypass -File C:\ESAgent\install.ps1
 
 - 初回起動時に `config.example.json` から `config.json` が作られる。`project_roots` などを自分の環境に合わせる。
 - Google 連携を使う場合は、OAuth クライアント（デスクトップアプリ）の JSON を `secrets/google_client.json` に置き、画面の「Google ToDo に接続」から許可する。
+- YouTube の検索・自分のプレイリストを使う場合は、同じ Google Cloud プロジェクトで YouTube Data API v3 を有効にし、BGM 欄の「GoogleでYouTubeに接続」から読み取りを許可する。[設定手順と再生の制限](docs/youtube.md)。
 - 起動: ログオン時に自動。チャット画面は **Ctrl+Alt+E** または黒猫のダブルクリック。
 
 ## ドキュメント
