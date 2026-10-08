@@ -1,5 +1,7 @@
 """Thin client for the local Ollama server."""
 import json
+import contextvars
+from contextlib import contextmanager
 import os
 import re
 import time
@@ -9,6 +11,19 @@ import urllib.request
 
 class LLMError(Exception):
     pass
+
+
+_VALIDATION = contextvars.ContextVar("validation", default=None)
+
+
+@contextmanager
+def validation_attempt(stage, attempt):
+    """Request-local metadata; never change shared configuration or Ollama options."""
+    token = _VALIDATION.set({"stage": stage, "attempt": attempt})
+    try:
+        yield
+    finally:
+        _VALIDATION.reset(token)
 
 
 def _url(cfg, path):
@@ -71,6 +86,7 @@ def _log(cfg, body, data, started, error=None):
             "total_ms": round((data.get("total_duration") or 0) / 1e6),
             "elapsed_ms": round((time.time() - started) * 1000),
             "error": error,
+            "validation": _VALIDATION.get(),
         }
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

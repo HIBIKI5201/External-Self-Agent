@@ -675,17 +675,78 @@ def _budget(cfg):
     return cfg.get("history_tokens", 2000)
 
 
+def _action_errors(actions, text):
+    """Check a proposal without writes: a rejected batch must never partly execute."""
+    errors = []
+    known = {t['id'] for t in db.list_tasks(include_done=True)}
+    if not isinstance(actions, list):
+        return ['actions は配列にしてください']
+    for a in actions:
+        if not isinstance(a, dict):
+            errors.append('操作はオブジェクトにしてください')
+            continue
+        kind = a.get('type')
+        tid = a.get('task_id') if a.get('task_id') is not None else 0
+        if kind not in ('add_task', 'update_task', 'complete_task', 'delegate'):
+            errors.append('一覧にある操作だけを指定してください')
+            continue
+        if not isinstance(tid, int) or isinstance(tid, bool):
+            errors.append('task_id は整数にしてください')
+            continue
+        if any(a.get(k) is not None and not isinstance(a[k], str)
+               for k in ('title', 'due', 'project', 'notes')):
+            errors.append('title/due/project/notes は文字列にしてください')
+            continue
+        title, due = _clean(a.get('title')), _clean(a.get('due'))
+        if tid and tid not in known:
+            errors.append(f'#{tid} は一覧にありません。一覧から選んでください')
+        elif kind in ('update_task', 'complete_task') and not _resolve_task(tid, f'{text} {title or ""}', known):
+            errors.append('対象タスクを一覧から特定してください')
+        if due and (not db.valid_date(due) or due < dt.date.today().isoformat()):
+            errors.append(f'締切 {due} は不正または過去の日付です。今日以降にしてください')
+        if kind in ('add_task', 'delegate') and not tid:
+            if not title:
+                errors.append('追加するタイトルがありません')
+            elif _META_TITLE_RE.search(title) or (not _EXPLICIT_ADD_RE.search(text) and _similarity(text, title) < .35):
+                errors.append(f'「{title}」は発言から読み取れません。利用者の内容だけを使ってください')
+        if kind == 'update_task' and tid in known and not _intended_update(
+                db.get_task(tid), title, due, _clean(a.get('project')), _clean(a.get('notes')), text):
+            errors.append('何を変更する依頼か読み取れません。依頼のある項目だけを指定してください')
+    return errors
+
+
 def _route(cfg, text, today, history):
+    feedback = []
+    context = ' '.join(m['content'] for m in history[-6:] if m['role'] == 'user') if _REFERENCE_RE.search(text) else ''
+    for attempt in range(3):
+        if attempt:
+            _progress['detail'] = '確認して書き直し中'
+        with llm.validation_attempt('router', attempt):
+            try:
+                result = _route_once(cfg, text, today, history, feedback)
+                errors = _action_errors(result[2], f'{text} {context}')
+            except (ValueError, TypeError, AttributeError):
+                errors = ['指定されたJSONオブジェクト・intent・focus・actionsの形式で返してください']
+        if not errors:
+            return result
+        available = '\n'.join(f"#{t['id']} {t['title']}" for t in db.list_tasks()) or '(なし)'
+        feedback += [{'role': 'user', 'content': '検証で不合格: ' + ' / '.join(errors)
+                     + '。操作はまだ実行していません。全体を修正してください。'
+                     + f'\n元の依頼: {text}\n現在のタスク一覧（この番号だけを使う）:\n{available}'}]
+    return 'update', '', []  # the operation template honestly reports that nothing was applied
+
+
+def _route_once(cfg, text, today, history, feedback):
     """Stage 1: decide intent and task changes (JSON, no prose)."""
     messages = [{"role": "system", "content": _router_prompt(today)}]
     messages += conversation(history, int(_budget(cfg) * 0.75))
     messages.append({"role": "user", "content": text})
+    messages += feedback
     raw = llm.chat(cfg, messages, schema=ROUTER_SCHEMA, options={"temperature": 0.1},
                    think=cfg.get("think_router", False))
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return "chat", "", []
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict) or parsed.get('intent') not in INTENTS or not isinstance(parsed.get('focus', ''), str):
+        raise ValueError('invalid router shape')
     intent = parsed.get("intent") if parsed.get("intent") in INTENTS else "chat"
     if _STATUS_RE.search(text) and not re.search(r"追加|登録", text):
         return "summary", "", []
@@ -777,10 +838,41 @@ Do not mention other tasks, deadlines, companies or tools that are not in the ta
 Task: 「{task['title']}」
 Project: {task['project'] or '未分類'}{project_note}
 Memo: {memo or '(none)'}"""
-    step = llm.chat(cfg, [{"role": "system", "content": system}, {"role": "user", "content": text}],
-                    options={"temperature": 0.4, "num_predict": 120}, on_text=_partial).strip()
-    lines = [l for l in step.splitlines() if l.strip()][:4]
-    return "\n".join(lines)
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": text}]
+    source = f"{text} {task['title']} {memo} {about}".lower()
+    for attempt in range(3):
+        if attempt:
+            _progress['detail'] = '確認して書き直し中'
+        with llm.validation_attempt('first_step', attempt):
+            step = llm.chat(cfg, messages, options={"temperature": 0.4, "num_predict": 120}).strip()
+        errors = _step_errors(step, source)
+        if not errors:
+            _partial(step)  # only display the accepted answer
+            return step
+        messages += [{'role': 'assistant', 'content': step},
+                     {'role': 'user', 'content': '検証で不合格: ' + ' / '.join(errors) + '。修正して全文を書いてください。'}]
+    return '最初の20分で、必要な作業を3つ書き出し、いちばん小さい1つから始めてみよう。'
+
+
+def _step_errors(step, source):
+    errors = []
+    if not step.startswith('最初の20分で'):
+        errors.append('「最初の20分で」から始めてください')
+    if len([l for l in step.splitlines() if l.strip()]) > 4:
+        errors.append('4行以内にしてください')
+    if re.search(r'以下の[。:：\s]*$', step):
+        errors.append('「以下の」で終えず、内容を具体的に書いてください')
+    names = _COMPANY_RE.findall(step) + re.findall(r'[A-Za-z][A-Za-z0-9+.#_-]{1,}|[ァ-ヶー]+', step)
+    # Generic work vocabulary is allowed; new product/tool names must be in the source.
+    generic = {'メモ', 'ノート', 'タスク', 'プロジェクト', 'チェック', 'リスト', 'チェックリスト',
+               'ポイント', 'アイデア', 'テーマ', 'ゴール', 'ステップ', 'タイトル', 'スケジュール',
+               'ページ', 'ファイル', 'フォルダ', 'データ', 'コード', 'テスト', 'ツール', 'タイマー',
+               'パソコン', 'パターン', 'サンプル', 'ラフ', 'イメージ', 'アウトライン', 'ヒント',
+               'シーン', 'キャラクター', 'ゲーム', 'デザイン', 'プラン', 'キーワード', 'スクリプト'}
+    unknown = [n for n in names if n.lower() not in source and n not in generic]
+    if unknown:
+        errors.append('元の内容にない会社・ツール名を使わないでください: ' + '、'.join(unknown))
+    return errors
 
 
 def _advice_reply(cfg, text, today, focus):
