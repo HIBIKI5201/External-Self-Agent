@@ -8,12 +8,18 @@ Each skill is skills/<name>/SKILL.md with a small frontmatter:
     argument-hint: (optional) what to type after the name
     action: tasks        # optional: run a fixed built-in action instead of the model
     save-args: memory    # optional: first save what was typed after the name as a memory
+    tools: list_tasks, add_task   # optional: the tools the steps may use (see below)
     ---
     Steps written in plain language...
 
 Skills without `action:` are procedures: Qwen3 follows the steps and reads or
 changes tasks through the tools below. Files are read on every call, so editing
 or adding a skill takes effect immediately.
+
+What a procedure may change is decided here, not by the model or the steps (#94): only the
+tools in `tools:` are offered and run (without it: reading, plus offering a focus timer), every
+write goes through the same write_guard as the chat (「実行しないで」 or 「締切は変えないで」 in
+the arguments), and an existing task is changed only when the arguments name it.
 """
 import datetime as dt
 import json
@@ -27,6 +33,7 @@ import llm
 import projects
 import choices
 import task_context
+import write_guard
 
 SKILLS_DIR = os.path.join(db.ROOT, "skills")
 MAX_STEPS = 8
@@ -113,14 +120,57 @@ TOOLS = [
 ]
 
 
+TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
+READ_TOOLS = {"list_tasks", "recently_done", "get_task"}
+DEFAULT_TOOLS = READ_TOOLS | {"offer_focus"}  # a skill without `tools:` only reads (#94)
+# Tools that change something, and the write_guard field each argument touches.
+WRITES = {"add_task": {}, "update_task": {"title": "title", "due": "due", "notes_append": "notes"},
+          "complete_task": {}, "hand_to_claude": {}, "remember": {}, "start_focus": {}}
+_EXISTING = {"update_task", "complete_task", "hand_to_claude", "start_focus"}  # act on a task that exists
+
+
+def allowed_tools(skill):
+    """The tools a skill's steps may use: its `tools:` line, or reading only."""
+    raw = (skill.get("tools") or "").strip()
+    if not raw:
+        return set(DEFAULT_TOOLS)
+    return {n for n in re.split(r"[,、\s]+", raw) if n in TOOL_NAMES}
+
+
 class _Run:
     """State of one procedure-skill run: what changed, for the chat and Es's reactions."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, allowed=None, args=""):
         self.cfg, self.events, self.handoffs, self.ui = cfg, [], [], {}
         self.seen = set()  # Qwen3 sometimes repeats the same call; answer repeats without re-running
         self.today = dt.date.today()
         self.error = None
+        self.allowed = set(TOOL_NAMES if allowed is None else allowed)
+        # Permission comes from what the user typed after /name, checked like any chat message.
+        tasks = db.list_tasks(include_done=True)
+        self.guard = write_guard.analyze(args, tasks)
+        self.named = write_guard._named(args, tasks)  # tasks the arguments point at
+
+    def _permission(self, name, args):
+        """Why this call may not run, or None. The model's arguments never widen what is allowed."""
+        if name not in self.allowed:
+            return (f"このスキルでは {name} は使えません（使えるのは {', '.join(sorted(self.allowed))}）。"
+                    "変更が必要なら、返事で提案だけしてください")
+        if name not in WRITES:
+            return None
+        if self.guard.hold:
+            return f"利用者が「{self.guard.hold}」と書いているので、変更は実行しません。案は返事で示してください"
+        tid = args.get("task_id") if name in _EXISTING else None
+        if name in _EXISTING and tid not in self.named:
+            return "利用者が指定していないタスクは変更できません。対象を返事で確認してください"
+        if name == "add_task" and not self.guard.allows(None, "add"):
+            return "利用者が追加しないよう書いているので、追加しません"
+        if name == "complete_task" and not self.guard.allows(tid, "complete"):
+            return "利用者が完了にしないよう書いているので、完了にしません"
+        kept = [f for k, f in WRITES[name].items() if args.get(k) and not self.guard.allows(tid, f)]
+        if kept:
+            return f"利用者が変えないよう書いている項目（{', '.join(kept)}）は変更しません"
+        return None
 
     def _reject(self, reason):
         self.error = reason
@@ -152,6 +202,9 @@ class _Run:
             typ = props[k]['type']
             if (typ == 'integer' and (not isinstance(v, int) or isinstance(v, bool))) or (typ == 'string' and not isinstance(v, str)):
                 return self._reject(f'{k} は {typ} 型で指定してください')
+        denied = self._permission(name, args)
+        if denied:
+            return self._reject(denied)
         key = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
         if key in self.seen:
             return "さっきと同じ呼び出しです。結果は上にあります。次の手順へ進むか、返事を書いてください。"
@@ -247,7 +300,9 @@ _TOOL_LABELS = {"list_tasks": "タスクを確認中", "recently_done": "終わ�
 
 def _procedure(skill, args, cfg, message_id=None):
     today = dt.date.today()
-    run = _Run(cfg)
+    allowed = allowed_tools(skill)
+    run = _Run(cfg, allowed, args)
+    tools = [t for t in TOOLS if t["function"]["name"] in allowed]
     memories = "\n".join(f"- {m['content']}" for m in db.list_memories()) or "(none)"
     system = f"""{brain.PERSONA}
 
@@ -280,7 +335,7 @@ Arguments the user typed after /{skill['name']}: {args or "(none)"}
     failures = 0
     for _ in range(MAX_STEPS):
         with llm.validation_attempt('procedure', failures):
-            msg = llm.chat_tools(cfg, messages, TOOLS, options={"temperature": 0.3})
+            msg = llm.chat_tools(cfg, messages, tools, options={"temperature": 0.3})
         calls = msg.get("tool_calls") or []
         messages.append({"role": "assistant", "content": msg.get("content", ""), "tool_calls": calls})
         if not calls:
@@ -455,6 +510,11 @@ _BUILTIN = {
 }
 
 
+_BUILTIN_TOOLS = {"morning": "list_tasks, get_task, recently_done, offer_focus",
+                  "review": "recently_done, list_tasks, get_task, offer_focus",
+                  "plan": "list_tasks, get_task, add_task"}
+
+
 def _seed():
     """Write the built-in skills once. After that the folder belongs to the user."""
     if os.path.isdir(SKILLS_DIR):
@@ -469,5 +529,7 @@ def _seed():
             meta.append(f"action: {action}")
         if name == "review":
             meta.append("save-args: memory")
+        if name in _BUILTIN_TOOLS:
+            meta.append(f"tools: {_BUILTIN_TOOLS[name]}")
         with open(os.path.join(folder, "SKILL.md"), "w", encoding="utf-8") as f:
             f.write("---\n" + "\n".join(meta) + "\n---\n" + body + "\n")

@@ -3,6 +3,7 @@ name: review
 description: 一日の振り返り。できたことを確かめて明日の一歩を決める
 argument-hint: [今日の感想]
 save-args: memory
+tools: recently_done, list_tasks, get_task, offer_focus
 ---
 （引数の感想は save-args: memory により自動で保存済み。自分では保存しない）
 1. recently_done を呼び、完了日が今日のものを数える。

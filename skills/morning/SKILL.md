@@ -1,6 +1,7 @@
 ---
 name: morning
 description: 朝の作戦会議。今日やる3つを一緒に決める
+tools: list_tasks, get_task, recently_done, offer_focus
 ---
 1. list_tasks で未完了タスクと締切を確認する。締切を過ぎたものと3日以内のものを最優先にする。
 2. 今日やるタスクを最大3つ選ぶ。締切の近さ・すぐ終わるか・勢いがつくかのバランスで選ぶ。

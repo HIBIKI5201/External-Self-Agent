@@ -78,8 +78,10 @@ def test_procedure_feedback_and_no_duplicate_execution():
         def model(cfg, messages, tools, **kw):
             seen.append([dict(m) for m in messages])
             return replies[len(seen) - 1]
+        # The skill may complete and add, and the user names both tasks (#94: permission comes first).
+        skill = {'name': 'example', 'body': '指定したタスクを完了にする', 'tools': 'get_task, complete_task, add_task'}
         with patch.object(llm, 'chat_tools', side_effect=model):
-            reply, run = skills._procedure({'name': 'example', 'body': '指定したタスクを完了にする'}, '', sb.cfg)
+            reply, run = skills._procedure(skill, f"#999 と #{t['id']} を完了にして", sb.cfg)
         assert len(run.events) == 1 and db.get_task(t['id'])['status'] == 'done'
         assert '検証で不合格。実行していません' in seen[1][-1]['content']
         assert '一覧から番号' in seen[1][-1]['content'] and reply == '終わったよ'
