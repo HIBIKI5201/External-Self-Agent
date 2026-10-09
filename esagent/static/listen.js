@@ -68,7 +68,7 @@
     btn.setAttribute("aria-pressed", on ? "true" : "false");
     btn.textContent = on ? "会話モード：オン" : "会話モード";
     const line = $("#listen-line");
-    line.hidden = !on && !text;
+    line.hidden = !on && !state && !text;  // a reason the mode stopped stays visible
     line.textContent = text ? `${state}${text}` : state;
   }
 
@@ -124,6 +124,7 @@
       }
       if (e.error === "audio-capture") { stop(); return show("マイクが見つかりません"); }
       if (e.error === "network" && ++fails >= MAX_FAILS) { stop(); return show("音声認識のサービスにつながりません"); }
+      if (!["no-speech", "aborted", "network"].includes(e.error)) show(`音声認識のエラー（${e.error}）`);
     };
     rec.onend = () => {  // Edge ends a session after a while; keep listening while the mode is on
       if (on) setTimeout(() => on && rec && safeStart(), fails ? 1000 * fails : 250);
@@ -140,10 +141,29 @@
     show("");
   }
 
-  function toggle() {
+  // Edge's speech recognition never asks for the microphone itself: without permission it just
+  // fails with "not-allowed". Asking through getUserMedia shows the prompt; the stream is closed
+  // at once, since recognition opens the microphone on its own.
+  async function askMic() {
+    if (!navigator.mediaDevices?.getUserMedia) return "";
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach((t) => t.stop());
+      return "";
+    } catch (e) {
+      return e.name === "NotFoundError" ? "マイクが見つかりません"
+        : "マイクが許可されていません。Edge の設定（Cookie とサイトのアクセス許可 → マイク）で 127.0.0.1 を許可してください";
+    }
+  }
+
+  async function toggle() {
     if (on) return stop();
     on = true; fails = 0;
     channel?.postMessage("on");  // only one window listens
+    show("マイクの許可を確認しています…");
+    const problem = await askMic();
+    if (!on) return;  // turned off while the prompt was open
+    if (problem) { stop(); return show(problem); }
     start();
   }
 
