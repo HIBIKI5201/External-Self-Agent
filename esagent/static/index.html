@@ -85,6 +85,9 @@ form#send { position: relative; }
 .msg.notice { align-self: flex-start; background: var(--notice); color: var(--muted); font-size: 12.5px; border-radius: 8px; }
 .empty { color: var(--muted); margin: auto; text-align: center; }
 form#send { display: flex; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+#listen { white-space: nowrap; }
+#listen.on { background: var(--user); color: var(--accent); border-color: var(--accent); }
+#listen-line { padding: 4px 18px; font-size: 12.5px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
 textarea {
   flex: 1; resize: none; height: 46px; max-height: 160px; padding: 11px 12px; border-radius: 10px;
   border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit;
@@ -158,9 +161,11 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margi
   <section id="chat">
     <section id="scene"></section>
     <div id="log"></div>
+    <div id="listen-line" hidden></div>
     <form id="send">
       <div id="cmdpop" hidden></div>
       <textarea id="input" placeholder="例: 金曜までにA社のES出す / SymphonyKillChordのジャンプのバグ直したい" autofocus></textarea>
+      <button id="listen" type="button" class="ghost" title="オンの間は話しかけるだけで送ります（Edge の音声認識）">会話モード</button>
       <button id="sendBtn" type="submit">送信</button>
     </form>
   </section>
@@ -185,6 +190,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margi
   </aside>
 </main>
 <script src="/static/companion.js"></script>
+<script src="/static/listen.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 let S = { tasks: [], done: [], projects: [], handoffs: [], messages: [], llm: {} };
@@ -433,19 +439,23 @@ $("#send").addEventListener("submit", (e) => {
   const text = $("#input").value.trim();
   if (!text) return;
   $("#input").value = ""; hidePop();
+  sendText(text);
+  $("#input").focus();
+});
+
+// Typed messages and what 会話モード heard (listen.js) take the same path.
+function sendText(text) {
   if (busy && bypassRe && bypassRe.test(text) && !text.startsWith("/")) {
     api("/api/chat", { text, queuedAt: localIso(), requestId: requestId() })
       .then((r) => { window.Es?.say(r.reply, { ms: 9000, voice: false }); return refresh(); })  // the server reads replies aloud
       .catch((err) => window.Es?.say(`送れなかった… ${err.message}`, { ms: 6000 }));
-    $("#input").focus();
     return;
   }
   queue.push({ text, at: localIso(), id: requestId() });
   saveQueue();
   renderLive();
   pump();
-  $("#input").focus();
-});
+}
 
 // ---- slash command autocomplete --------------------------------------------
 let CMDS = [], popItems = [], popSel = 0;
@@ -528,9 +538,10 @@ document.addEventListener("change", async (e) => {
   refresh();
 });
 
-window.EsHooks = { refresh };
+window.EsHooks = { refresh, send: sendText };
 if (queue.length) setTimeout(pump, 500);  // messages left over from before a reload
 window.Es?.init();
+window.EsListen?.init();
 refresh();
 // Do not re-render while a note is being edited, or the text box would reset.
 setInterval(() => { if (!busy && !document.activeElement?.matches?.("[data-notes]")) refresh(); }, 8000);
