@@ -17,7 +17,7 @@ HOLD_RE = re.compile(
 NEG_RE = re.compile(r"(?:し|変え|書き換え|触ら|いじら|戻さ|消さ|追記し|付け|足さ|入れ|登録し|追加し|"
                     r"延ばさ|ずらさ|動かさ)ないで|変えず|せずに|のまま|そのまま|変更不要")
 # Which field a negative clause is about; none named means every field of the target.
-FIELDS = (("complete", r"完了|終わ|済み"), ("title", r"タイトル|名前|名称"),
+FIELDS = (("complete", r"完了|終わ|済み"), ("title", r"タイトル|名前|名称|タスク名|件名"),
           ("due", r"締め?切|期限|期日|日付"), ("notes", r"メモ|詳細|補足"),
           ("add", r"登録|追加|タスクに"))
 _SPLIT_RE = re.compile(r"[。、，,！!？?\n]|(?<=ないで)|(?<=変えず)|(?<=せずに)|けど|ただし")
