@@ -22,6 +22,7 @@ import db  # noqa: E402
 import gauth  # noqa: E402
 import gsync  # noqa: E402
 import handoff  # noqa: E402
+import linked_todos  # noqa: E402
 import llm  # noqa: E402
 import events  # noqa: E402
 import media  # noqa: E402
@@ -49,6 +50,7 @@ def state():
         "llm": llm.status(CFG),
         "bgm": CFG.get("bgm", []),
         "google": gsync.status(),
+        "linked": linked_todos.status(CFG),
         "youtube": youtube.status(),
         "choices": choices.public(),
         "mode": db.get_setting("chat_mode", "work"),
@@ -427,6 +429,7 @@ def main():
         log.warning("port %s is in use; another EsAgent is probably running", CFG["port"])
         return
     gsync.start(CFG)
+    linked_todos.start(CFG)
     threading.Thread(target=_recurring_loop, name="recurring", daemon=True).start()
     threading.Thread(target=_pomo_loop, name="pomodoro", daemon=True).start()
     threading.Thread(target=_pending_loop, name="pending", daemon=True).start()

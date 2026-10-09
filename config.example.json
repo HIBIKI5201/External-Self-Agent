@@ -23,6 +23,7 @@
       "kind": "general"
     }
   ],
+  "linked_todos": [],
   "default_folder": "C:\\ESAgent\\workspace",
   "edge_path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   "think_router": false,
