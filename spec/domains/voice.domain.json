@@ -1,6 +1,6 @@
 {
   "name": "Voice",
-  "description": "VOICEVOX による読み上げ（待ち列・再生・エンジンの起動と終了）を所有する。",
+  "description": "VOICEVOX による読み上げ（待ち列・再生・エンジンの起動と終了）と、会話モードの音声入力を所有する。",
   "presetRules": [],
   "templateRules": [],
   "membership": [
@@ -9,6 +9,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_voice\\.py|spec/test/voicevox-44\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/static/listen\\.js|tests/test_listen\\.js)$"
     }
   ],
   "source": "manual",
@@ -16,7 +19,8 @@
     "*"
   ],
   "specRefs": [
-    "spec/feature/app-spec.md#as-19-読み上げvoicevox"
+    "spec/feature/app-spec.md#as-19-読み上げvoicevox",
+    "spec/feature/app-spec.md#as-20-会話モード音声で話しかける"
   ],
-  "rationale": "再生をサーバーの 1 か所に置き、画面や猫が何個あっても同じ文を 1 回だけ読む。起動したエンジンの後始末もここが持つ。"
+  "rationale": "再生をサーバーの 1 か所に置き、画面や猫が何個あっても同じ文を 1 回だけ読む。起動したエンジンの後始末もここが持つ。会話モードは読み上げの声を拾わないよう、Es が読んだ文と比べる。"
 }

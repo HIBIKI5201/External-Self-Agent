@@ -21,9 +21,11 @@ jobs:
       - name: Python syntax
         run: python -m compileall -q esagent tests
       - name: JavaScript syntax
-        run: node --check esagent/static/companion.js
+        run: node --check esagent/static/companion.js && node --check esagent/static/listen.js
       - name: Chat queue retry tests
         run: node tests/test_chat_queue.js
+      - name: Voice chat echo tests
+        run: node tests/test_listen.js
       - name: JSON files
         shell: bash
         run: for f in config.example.json spec/domains/*.json .claude/settings.json; do python -m json.tool "$f" > /dev/null || exit 1; done

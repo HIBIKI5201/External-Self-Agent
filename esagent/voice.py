@@ -47,6 +47,8 @@ THREADED = True  # tests turn this off and call process_pending()
 _cond = threading.Condition()
 _queue = collections.deque()
 _seen = collections.OrderedDict()  # key or text -> when it was queued
+_recent = collections.deque(maxlen=6)  # [text, finished at] of lines played (inf while playing)
+ECHO_SECS = 8                      # a line this recent can come back through the mic (#89)
 _gen = 0                           # stop() bumps this; older lines are dropped
 _worker = None
 _proc = None                       # the engine we started
@@ -92,6 +94,7 @@ def status(cfg):
     return {**s, "engine": _state["engine"],
             "error": _state["error"], "speaking": bool(_state["speaking"]), "queued": queued,
             "credit": credit(cfg), "started_by_es": _proc is not None and _proc.poll() is None,
+            "recent": recent_lines(),
             "device": _state.get("device", "") if _proc is not None else ""}
 
 
@@ -149,6 +152,12 @@ def say(cfg, text, key=None, force=False):
         _cond.notify_all()
     _ensure_worker(cfg)
     return True
+
+
+def recent_lines():
+    """What Es is saying or said a moment ago: 会話モード drops these when the mic hears them (#89)."""
+    now = time.time()
+    return [text for text, end in list(_recent) if end > now - ECHO_SECS]
 
 
 def reply(cfg, result, key=None):
@@ -235,7 +244,12 @@ def _process(cfg, item):
         if item["gen"] != _gen:
             return  # stopped while synthesising
         _state.update(error="", speaking=item["text"])
-        _play(wav, item["gen"])
+        line = [item["text"], float("inf")]
+        _recent.append(line)
+        try:
+            _play(wav, item["gen"])
+        finally:
+            line[1] = time.time()
         _state["last_spoken"] = time.time()
     except Exception as e:
         _state["error"] = _explain(e)

@@ -28,6 +28,7 @@ class FakeEngine:
         voice._style.clear()
         voice._seen.clear()
         voice._queue.clear()
+        voice._recent.clear()
         voice._state.update(engine="off", error="", speaking="", last_spoken=0.0)
         return self
 
@@ -224,3 +225,15 @@ def test_engine_starts_on_the_gpu_and_falls_back_to_the_cpu():
         finally:
             voice.subprocess.Popen, voice._bind_to_us = saved
             voice._proc = None
+
+
+def test_recent_lines_are_kept_for_the_echo_check():
+    """会話モード (#89) drops what the mic hears of Es's own voice; it needs her recent lines."""
+    with Sandbox(copy_real=False) as sb, FakeEngine() as fe:
+        cfg = _cfg(sb)
+        voice.update(cfg, enabled=True)
+        voice.say(cfg, "休憩おわり。次、いく？")
+        voice.process_pending(cfg)
+        assert voice.status(cfg)["recent"] == ["休憩おわり。次、いく？"]
+        voice._recent[0][1] -= voice.ECHO_SECS + 1
+        assert voice.status(cfg)["recent"] == []
