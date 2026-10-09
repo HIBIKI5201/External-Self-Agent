@@ -46,6 +46,15 @@
               <label class="pet-toggle" title="デスクトップの黒猫を出す / 消す">
                 <input type="checkbox" id="pet-enabled"> デスクトップに表示
               </label>
+              <div class="voice-row">
+                <label class="pet-toggle" title="Es の返事とひとことを VOICEVOX で読み上げる">
+                  <input type="checkbox" id="voice-enabled"> 読み上げ
+                </label>
+                <input id="voice-volume" type="range" min="0" max="1" step="0.05" title="読み上げの音量">
+                <button class="ghost" id="voice-test" title="試しに読み上げる">試聴</button>
+                <button class="ghost" id="voice-stop" title="読み上げと待ち列を止める">停止</button>
+              </div>
+              <div id="voice-status" title="読み上げの音声：VOICEVOX（冥鳴ひまり）">VOICEVOX:冥鳴ひまり</div>
             </div>
           </div>
         </div>
@@ -80,6 +89,7 @@
   // ---- Es's lines in this window ---------------------------------------------------------
   let lineTimer = null;
   function say(text, opts = {}) {
+    speak(text, opts);
     $("#minicat-text").textContent = text;
     $("#esline-text").textContent = text;
     $("#esline-btns").innerHTML = (opts.buttons || []).map((x, i) =>
@@ -90,6 +100,30 @@
     $("#esline").hidden = false;
     clearTimeout(lineTimer);
     if (!opts.buttons) lineTimer = setTimeout(() => ($("#esline").hidden = true), opts.ms || Math.max(4000, text.length * 160));
+  }
+
+  // ---- reading aloud (#44): the server plays every line once; this window only hands lines over ----
+  let voice = { enabled: false };
+  function speak(text, opts) {
+    // Timer notices are read by the server itself; a hidden window leaves lines to the desktop cat.
+    if (opts.voice === false || !voice.enabled || document.visibilityState !== "visible") return;
+    post("/api/voice/say", { text, ...(opts.key ? { key: opts.key } : {}) }).catch(() => {});
+  }
+  const ENGINE = { off: "待機中", starting: "VOICEVOX を起動中…", ready: "準備OK", missing: "VOICEVOX が見つかりません", error: "VOICEVOX を使えません" };
+  function renderVoice(v) {
+    if (!v) return;
+    voice = v;
+    const box = $("#voice-enabled"), vol = $("#voice-volume");
+    if (document.activeElement !== box) box.checked = !!v.enabled;
+    if (document.activeElement !== vol) vol.value = v.volume ?? 0.8;
+    const state = v.speaking ? "読み上げ中" : v.enabled ? (ENGINE[v.engine] || "") : "オフ";
+    const el = $("#voice-status");
+    el.textContent = `${v.credit || "VOICEVOX:冥鳴ひまり"} · ${state}${v.queued ? `（あと${v.queued}件）` : ""}`;
+    el.title = v.error ? `直近のエラー: ${v.error}` : "読み上げの音声：VOICEVOX（冥鳴ひまり）";
+    el.classList.toggle("error", !!v.error && v.enabled);
+  }
+  async function setVoice(body) {
+    try { renderVoice(await post("/api/voice", body)); } catch { say("読み上げを切り替えられなかった…"); }
   }
 
   // ---- focus timer (state on the server) ---------------------------------------------------
@@ -128,6 +162,7 @@
       setMini(pet.mood);
       const box = $("#pet-enabled");
       if (document.activeElement !== box) box.checked = !!pet.enabled;
+      renderVoice(pet.voice);
       const r = await (await fetch(`/api/events?after=${lastEvent ?? 0}`)).json();
       if (lastEvent === null) lastEvent = r.last;  // don't replay older events
       else for (const ev of r.events) { lastEvent = ev.id; onEvent(ev); }
@@ -138,25 +173,25 @@
     const embed = bgm.mode === "embed" && bgm.focusOnly;
     if (ev.kind === "focus_start") {
       if (embed && bgm.url) playEmbed();
-      say(ev.task ? `「${ev.task}」、いこう。` : "集中タイム。がんばろ。", { ms: 3000 });
+      say(ev.task ? `「${ev.task}」、いこう。` : "集中タイム。がんばろ。", { ms: 3000, voice: false });
     } else if (ev.kind === "focus_end") {
       chime();
       flashMini("stretch", 1700);
       if (embed) pauseEmbed();
-      if (ev.leveled_up) say(`なかよし度が上がった！ Lv${ev.level}「${ev.level_name}」`, { ms: 7000 });
-      else if (ev.task_id) say(`おつかれさま！「${ev.task}」、終わった？`, { buttons: [
+      if (ev.leveled_up) say(`なかよし度が上がった！ Lv${ev.level}「${ev.level_name}」`, { ms: 7000, voice: false });
+      else if (ev.task_id) say(`おつかれさま！「${ev.task}」、終わった？`, { voice: false, buttons: [
         { label: "終わった", onClick: async () => { await post(`/api/tasks/${ev.task_id}`, { status: "done" }); say("やったね！"); window.EsHooks?.refresh?.(); } },
         { label: "まだ", onClick: () => say("了解。次の25分で進めよ。") }] });
-      else say(ev.long ? "おつかれさま！4回目だから長めに休んでね。" : "おつかれさま！ちょっと休憩しよ。");
+      else say(ev.long ? "おつかれさま！4回目だから長めに休んでね。" : "おつかれさま！ちょっと休憩しよ。", { voice: false });
       window.EsHooks?.refresh?.();
     } else if (ev.kind === "break_end") {
       chime();
-      say("休憩おわり。次、いく？", { buttons: [{ label: "集中する", onClick: startFocus }, { label: "あとで" }] });
+      say("休憩おわり。次、いく？", { voice: false, buttons: [{ label: "集中する", onClick: startFocus }, { label: "あとで" }] });
     } else if (ev.kind === "pause" || ev.kind === "reset") {
       if (embed) pauseEmbed();
     } else if (ev.kind === "answered") {
       window.EsHooks?.refresh?.();
-      say("待たせてごめんね、返事したよ。", { ms: 3500 });
+      say("待たせてごめんね、返事したよ。", { ms: 3500, key: `event:${ev.id}` });
     } else if (ev.kind === "resume") {
       if (embed && P.mode === "focus" && bgm.url) playEmbed();
     }
@@ -607,6 +642,10 @@
           say(e.target.checked ? "デスクトップに出るね。" : "デスクトップからは消えるね。ここにはいるよ。", { ms: 3000 });
         } catch { e.target.checked = !e.target.checked; say("切り替えられなかった…"); }
       };
+      $("#voice-enabled").onchange = (e) => setVoice({ enabled: e.target.checked });
+      $("#voice-volume").onchange = (e) => setVoice({ volume: +e.target.value });
+      $("#voice-test").onclick = () => post("/api/voice/test", {}).catch(() => say("試聴できなかった…", { voice: false }));
+      $("#voice-stop").onclick = () => post("/api/voice/stop", {}).then(renderVoice).catch(() => {});
       $("#minicat").onclick = () => { flashMini("talk", 1500); say(pick(["にゃ？", "なになに？", "にゃー"]), { ms: 2000 }); };
       setMini("idle");
       $("#bgm-focus").addEventListener("change", syncBgm);

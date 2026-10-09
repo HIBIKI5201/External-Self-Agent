@@ -79,6 +79,7 @@ class Pet:
         self.mood, self.override, self.override_until = "idle", None, 0
         self.pomo, self.last_event, self.online, self.warned_day = {}, None, True, ""
         self.bubble = None
+        self.voice = {}
         self.drag = None
         self._hidden = winfocus.chat_window_visible()
         self._place()
@@ -169,9 +170,11 @@ class Pet:
         self.root.after(random.randint(9000, 18000), self._fidget)
 
     # ---- speech bubble ------------------------------------------------------------------
-    def say(self, text, buttons=None, secs=None):
+    def say(self, text, buttons=None, secs=None, voice=True, key=None):
         if self._hidden:
             return  # the chat window owns companion speech while the desktop cat is hidden
+        if voice and self.voice.get("enabled"):
+            self._speak(text, key)
         self._close_bubble()
         b = tk.Toplevel(self.root)
         b.overrideredirect(True)
@@ -198,6 +201,18 @@ class Pet:
         if not buttons:
             self.root.after(int((secs or max(4, len(text) * 0.16)) * 1000), lambda bb=b: self._close_bubble(bb))
 
+    def _speak(self, text, key=None):
+        """Hand the line to the server's single voice player (#44); the cat never plays audio itself."""
+        body = {"text": text, **({"key": key} if key else {})}
+        threading.Thread(target=lambda: self._quiet(lambda: api("/api/voice/say", body)), daemon=True).start()
+
+    @staticmethod
+    def _quiet(fn):
+        try:
+            fn()
+        except Exception:
+            pass
+
     def _close_bubble(self, only=None):
         if self.bubble and (only is None or only is self.bubble):
             self.bubble.destroy()
@@ -214,6 +229,7 @@ class Pet:
                 self._restyle(st.get("cat", CAT), st.get("scale", SCALE))
             self.online = True
             self.pomo = st["pomo"]
+            self.voice = st.get("voice") or {}
             self.mood = st["mood"]
             if self.last_event is None:
                 self.last_event = st["last_event"]  # don't replay what happened before we started
@@ -233,34 +249,36 @@ class Pet:
         kind = ev["kind"]
         if kind == "focus_start":
             task = ev.get("task")
-            self.say(f"「{task}」、いこう。となりで丸くなってるね。" if task else "集中タイム。となりで丸くなってるね。", secs=3.5)
+            self.say(f"「{task}」、いこう。となりで丸くなってるね。" if task else "集中タイム。となりで丸くなってるね。", secs=3.5,
+                     voice=False)  # timer notices are read aloud by the server
         elif kind == "focus_end":
             self.flash("stretch", 1.7)
             if ev.get("leveled_up"):
-                self.say(f"なかよし度が上がった！ Lv{ev['level']}「{ev['level_name']}」", secs=7)
+                self.say(f"なかよし度が上がった！ Lv{ev['level']}「{ev['level_name']}」", secs=7, voice=False)
             elif ev.get("task_id"):
                 tid = ev["task_id"]
                 self.say(f"おつかれさま！{'長めに休もう。' if ev.get('long') else 'ひと休みしよ。'}\n「{ev['task']}」、終わった？",
-                         buttons=[("終わった", lambda: self._done(tid)), ("まだ", lambda: self.say("了解。次の25分で進めよ。"))])
+                         buttons=[("終わった", lambda: self._done(tid)), ("まだ", lambda: self.say("了解。次の25分で進めよ。"))],
+                         voice=False)
             else:
-                self.say("おつかれさま！ちょっと休憩しよ。")
+                self.say("おつかれさま！ちょっと休憩しよ。", voice=False)
         elif kind == "break_end":
-            self.say("休憩おわり。次、いく？", buttons=[("集中する", self._start), ("あとで", None)])
+            self.say("休憩おわり。次、いく？", buttons=[("集中する", self._start), ("あとで", None)], voice=False)
         elif kind == "chat_events":
-            lines = ev.get("lines") or []
+            lines, key = ev.get("lines") or [], f"event:{ev['id']}"
             if any(l.startswith("✔") for l in lines):
-                self.flash("happy"); self.say(random.choice(["やったね！", "えらい！", "ひとつ片づいたね。"]), secs=3)
+                self.flash("happy"); self.say(random.choice(["やったね！", "えらい！", "ひとつ片づいたね。"]), secs=3, key=key)
             elif any(l.startswith("→") for l in lines):
-                self.flash("happy"); self.say("Claude に頼んだよ。", secs=3)
+                self.flash("happy"); self.say("Claude に頼んだよ。", secs=3, key=key)
             elif any(l.startswith("＋") for l in lines):
-                self.flash("talk", 2); self.say("メモしたよ。", secs=2.5)
+                self.flash("talk", 2); self.say("メモしたよ。", secs=2.5, key=key)
 
     # ---- actions -------------------------------------------------------------------------
     def _safe(self, fn):
         try:
             return fn()
         except Exception:
-            self.say("E.S. Agent のサーバーに届かなかった…", secs=3)
+            self.say("E.S. Agent のサーバーに届かなかった…", secs=3, voice=False)
 
     def _done(self, task_id):
         self._safe(lambda: api(f"/api/tasks/{task_id}", {"status": "done"}))
@@ -316,6 +334,8 @@ class Pet:
         m.add_separator()
         m.add_command(label="チャットを開く（ダブルクリックでも）", command=self._open_chat)
         m.add_command(label="BGM 再生 / 一時停止（YouTube ウィンドウ）", command=self._bgm_toggle)
+        if self.voice.get("enabled"):
+            m.add_command(label="読み上げを止める", command=lambda: self._safe(lambda: api("/api/voice/stop", {})))
         m.add_separator()
         m.add_command(label="30分かくれる", command=self._hide)
         m.add_command(label="デスクトップから消す（チャット画面の切り替えで戻せます）", command=self._disable)
@@ -364,7 +384,7 @@ class Pet:
         mins = int(self.pomo.get("remaining", 0) // 60) + 1
         what = "集中" if self.pomo["mode"] == "focus" else "休憩"
         task = f"（{self.pomo['task']}）" if self.pomo.get("task") else ""
-        self.say(f"{what} あと{mins}分{task}", secs=2.5)
+        self.say(f"{what} あと{mins}分{task}", secs=2.5, voice=False)
 
     @staticmethod
     def _greeting():

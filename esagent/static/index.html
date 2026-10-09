@@ -435,7 +435,7 @@ $("#send").addEventListener("submit", (e) => {
   $("#input").value = ""; hidePop();
   if (busy && bypassRe && bypassRe.test(text) && !text.startsWith("/")) {
     api("/api/chat", { text, queuedAt: localIso(), requestId: requestId() })
-      .then((r) => { window.Es?.say(r.reply, { ms: 9000 }); return refresh(); })
+      .then((r) => { window.Es?.say(r.reply, { ms: 9000, voice: false }); return refresh(); })  // the server reads replies aloud
       .catch((err) => window.Es?.say(`送れなかった… ${err.message}`, { ms: 6000 }));
     $("#input").focus();
     return;
