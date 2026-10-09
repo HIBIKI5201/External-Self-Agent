@@ -91,7 +91,8 @@ def status(cfg):
     s = settings()
     return {**s, "engine": _state["engine"],
             "error": _state["error"], "speaking": bool(_state["speaking"]), "queued": queued,
-            "credit": credit(cfg), "started_by_es": _proc is not None and _proc.poll() is None}
+            "credit": credit(cfg), "started_by_es": _proc is not None and _proc.poll() is None,
+            "device": _state.get("device", "") if _proc is not None else ""}
 
 
 # ---- what is read aloud -------------------------------------------------------------------
@@ -184,7 +185,7 @@ def _ensure_worker(cfg):
 
 def _kick(cfg):
     if THREADED:
-        threading.Thread(target=lambda: _safe(lambda: _engine(cfg)), name="voice-start", daemon=True).start()
+        threading.Thread(target=lambda: _safe(lambda: _warm(cfg)), name="voice-start", daemon=True).start()
     _ensure_worker(cfg)
 
 
@@ -285,20 +286,22 @@ def _engine(cfg):
     if not os.path.isfile(path):
         _state["engine"] = "missing"
         raise VoiceError(f"VOICEVOX のエンジンが見つかりません（{path}）。config.json の voicevox_engine_path を確認してください。")
+    # The GPU is ~30x faster here (0.1-0.3 s instead of 6-11 s a line on the CPU, #44); without a
+    # usable GPU the engine exits at once and is started again on the CPU.
+    gpu = bool(cfg.get("voicevox_use_gpu", True))
     with _cond:
         if _proc is None or _proc.poll() is not None:
-            u = urllib.parse.urlparse(url)
-            log.info("voice: starting VOICEVOX engine %s", path)
-            _proc = subprocess.Popen([path, "--host", u.hostname or "127.0.0.1", "--port", str(u.port or 50021),
-                                      "--disable_mutable_api"],
-                                     cwd=os.path.dirname(path), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
-            _bind_to_us(_proc)
-            _state["last_spoken"] = time.time()  # the idle clock starts now
+            _launch(path, url, gpu)
     _state["engine"] = "starting"
     deadline = time.time() + START_WAIT
     while time.time() < deadline:
         if _proc.poll() is not None:
+            if _state.get("device") == "gpu":
+                with _cond:  # the start thread and the worker may both get here
+                    if _proc.poll() is not None and _state.get("device") == "gpu":
+                        log.warning("voice: the engine did not start on the GPU; starting it on the CPU")
+                        _launch(path, url, False)
+                continue
             _state["engine"] = "error"
             raise VoiceError("VOICEVOX のエンジンが起動直後に終了しました。")
         if _alive(url):
@@ -307,6 +310,25 @@ def _engine(cfg):
         time.sleep(0.5)
     _state["engine"] = "error"
     raise VoiceError("VOICEVOX のエンジンが起動しませんでした。")
+
+
+def _launch(path, url, gpu):
+    global _proc
+    u = urllib.parse.urlparse(url)
+    log.info("voice: starting VOICEVOX engine %s (%s)", path, "GPU" if gpu else "CPU")
+    _proc = subprocess.Popen([path, "--host", u.hostname or "127.0.0.1", "--port", str(u.port or 50021),
+                              "--disable_mutable_api", *(["--use_gpu"] if gpu else [])],
+                             cwd=os.path.dirname(path), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    _bind_to_us(_proc)
+    _state.update(device="gpu" if gpu else "cpu", last_spoken=time.time())  # the idle clock starts now
+
+
+def _warm(cfg):
+    """Load the voice's model before the first line, so that line is not seconds late."""
+    url = _engine(cfg)
+    sid = _style_id(cfg, url)
+    _http(url, f"/initialize_speaker?speaker={sid}&skip_reinit=true", data=b"", timeout=120)
 
 
 def _style_id(cfg, url):

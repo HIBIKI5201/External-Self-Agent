@@ -116,7 +116,8 @@
     const box = $("#voice-enabled"), vol = $("#voice-volume");
     if (document.activeElement !== box) box.checked = !!v.enabled;
     if (document.activeElement !== vol) vol.value = v.volume ?? 0.8;
-    const state = v.speaking ? "読み上げ中" : v.enabled ? (ENGINE[v.engine] || "") : "オフ";
+    const ready = v.engine === "ready" && v.device ? `準備OK（${v.device.toUpperCase()}）` : ENGINE[v.engine] || "";
+    const state = v.speaking ? "読み上げ中" : v.enabled ? ready : "オフ";
     const el = $("#voice-status");
     el.textContent = `${v.credit || "VOICEVOX:冥鳴ひまり"} · ${state}${v.queued ? `（あと${v.queued}件）` : ""}`;
     el.title = v.error ? `直近のエラー: ${v.error}` : "読み上げの音声：VOICEVOX（冥鳴ひまり）";

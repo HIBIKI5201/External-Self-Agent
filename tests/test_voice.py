@@ -184,3 +184,43 @@ def test_engine_started_by_es_is_stopped():
         voice._proc = proc
         voice.stop_engine()
         assert proc.poll() is not None and voice._proc is None
+
+
+class FakeProc:
+    def __init__(self, args, exits):
+        self.args, self.exits = args, exits
+
+    def poll(self):
+        return 1 if self.exits else None
+
+
+def test_engine_starts_on_the_gpu_and_falls_back_to_the_cpu():
+    """GPU synthesis is ~30x faster here; a PC without a usable GPU still gets the CPU engine."""
+    with Sandbox(copy_real=False) as sb, FakeEngine(alive=False) as fe:
+        engine = os.path.join(sb.dir, "run.exe")
+        open(engine, "w").close()
+        cfg = _cfg(sb, voicevox_engine_path=engine)
+        launched = []
+
+        def popen(args, **kw):
+            gpu = "--use_gpu" in args
+            launched.append("gpu" if gpu else "cpu")
+            if not gpu:
+                fe.alive = True  # the CPU engine comes up
+            return FakeProc(args, exits=gpu)
+        saved = (voice.subprocess.Popen, voice._bind_to_us)
+        voice.subprocess.Popen, voice._bind_to_us = popen, lambda proc: None
+        try:
+            voice._alive = lambda url: fe.alive
+            assert voice._engine(cfg) == voice.DEFAULT_URL
+            assert launched == ["gpu", "cpu"] and voice._state["device"] == "cpu", launched
+            voice._proc = None
+            launched.clear()
+            fe.alive = False
+            voice.subprocess.Popen = lambda args, **kw: (launched.append(args), setattr(fe, "alive", True),
+                                                         FakeProc(args, exits=False))[2]
+            voice._engine(_cfg(sb, voicevox_engine_path=engine, voicevox_use_gpu=False))
+            assert "--use_gpu" not in launched[0]
+        finally:
+            voice.subprocess.Popen, voice._bind_to_us = saved
+            voice._proc = None
