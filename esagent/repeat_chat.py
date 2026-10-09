@@ -9,10 +9,18 @@ _TOPIC = re.compile(r'繰り?返し|リピート|定期|リセット|毎週|毎�
 _REQUEST = re.compile(r'(?:リセットして|設定して|設定にして|にする|にして|追加して|登録して|解除して|やめて|停止して)(?:おいて|ほしい|ください|くれる)?[。！!？?\s]*$')
 _ADD = re.compile(r'タスク(?:に|を|として)?(?:追加|登録|して)|(?:追加|登録)して')
 _STOP = re.compile(r'繰り?返し(?:を|は)?(?:解除|やめ|止め|なし)|(?:解除|やめて|停止して)')
+# Quotes around a task name: 「」『』 and double quotes, half-width or not (#87).
+_PAIRS = (('「', '」'), ('『', '』'), ('"', '"'), ('“', '”'), ('＂', '＂'))
+_QUOTED = '|'.join(re.escape(a) + '[^' + re.escape(b) + r'\n]+' + re.escape(b) for a, b in _PAIRS)
+_QUOTE_CHARS = ''.join(a + b for a, b in _PAIRS)
+# What is left of the request before an unquoted name: 「9時から繰り返しタスクで〇〇を追加して」.
+# One particle at most, so 「にんじんを買う」「からあげを作る」 keep their first letters.
+_LEAD = re.compile(r'^\s*(?:で|に)?(?:(?:から|は)?(?:繰り?返し|くりかえし|定期)の?(?:タスク)?(?:で|として|に)?)?\s*')
 
 
 def _clean_ref(ref):
-    return re.sub(r'(?:のタスク|というタスク)$', '', ref.strip(' 「」『』。\n')).strip(' 「」『』')
+    ref = re.sub(r'(?:のタスク|というタスク)$', '', ref.strip(' 。\n' + _QUOTE_CHARS))
+    return ref.strip(' ' + _QUOTE_CHARS)
 
 
 def _find(ref):
@@ -48,7 +56,7 @@ def _source(text):
     if not same:
         return None, None, None
     head, tail = text[:same.start()], text[same.end():]
-    quoted = re.search(r'(「[^」]+」|『[^』]+』)\s*$', head)
+    quoted = re.search('(' + _QUOTED + r')\s*$', head)
     if quoted:
         before, sep, source_ref = head[:quoted.start()].rstrip(' を'), True, quoted[1]
     else:
@@ -58,12 +66,12 @@ def _source(text):
 
 
 def _new_title(fragment):
-    quotes = re.findall(r'「([^」]+)」|『([^』]+)』', fragment)
+    quotes = re.findall(_QUOTED, fragment)
     if len(quotes) == 1:
-        return next(s for s in quotes[0] if s).strip()
+        return quotes[0][1:-1].strip() or None
     if quotes:
-        return None
-    fragment = re.sub(r'^[でに\s]+', '', fragment)
+        return None  # two names: ask which one
+    fragment = _LEAD.sub('', fragment)
     fragment = re.sub(r'(?:を)?(?:タスク(?:に|を|として)?(?:追加|登録|して)|(?:追加|登録)して).*$','', fragment)
     fragment = fragment.strip(' を、。\n')
     return fragment if fragment and len(fragment) <= 100 else None

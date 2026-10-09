@@ -102,3 +102,22 @@ def test_new_task_with_explicit_period_and_unrelated_requests_are_left_to_router
         assert repeat_chat.handle('日次記録の締切を明日にして', []) is None
         assert repeat_chat.handle('毎日5時に設定したよ', []) is None
         assert repeat_chat.handle('繰り返し設定のバグを直して', []) is None
+
+
+def test_double_quoted_names_are_names_only():
+    """#87: 「毎週月曜日9時から繰り返しタスクで"週課の交換"を追加して」 saved the instruction too."""
+    q = chr(34)
+    for i, (open_, close) in enumerate(((q, q), ("“", "”"), ("＂", "＂"), ("「", "」"), ("", ""))):
+        with Sandbox(copy_real=False) as sb, patch.object(brain.llm, 'chat', side_effect=AssertionError('No model needed')):
+            r = sb.chat(f"毎週月曜日9時から繰り返しタスクで{open_}週課の交換{close}を追加して")
+            titles = [t["title"] for t in db.list_tasks()]
+            assert titles == ["週課の交換"], (open_, titles, r["reply"])
+            task = db.list_tasks()[0]
+            assert task["repeat"] == recurring.parse("毎週月曜9時") and task["due"], task
+
+
+def test_two_quoted_names_are_asked_about():
+    q = chr(34)
+    with Sandbox(copy_real=False) as sb, patch.object(brain.llm, 'chat', side_effect=AssertionError('No model needed')):
+        r = sb.chat(f"毎週月曜9時から繰り返しタスクで{q}A{q}と{q}B{q}を追加して")
+        assert db.list_tasks() == [] and "タスク名" in r["reply"], r["reply"]
