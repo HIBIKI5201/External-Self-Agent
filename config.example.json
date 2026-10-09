@@ -35,6 +35,7 @@
   ],
   "voicevox_url": "http://127.0.0.1:50021",
   "voicevox_engine_path": "",
+  "voicevox_use_gpu": true,
   "voicevox_speaker": "冥鳴ひまり",
   "voicevox_style": "ノーマル",
   "voicevox_idle_minutes": 30,
