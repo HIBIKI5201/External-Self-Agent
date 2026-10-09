@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS settings(
     key TEXT PRIMARY KEY,
     value TEXT
 );
+-- Items of TODO files in other repositories and the task each became (AS-18, linked_todos.py).
+-- done / notes are what the file said last time, to tell the file's changes from the user's.
+CREATE TABLE IF NOT EXISTS linked_items(
+    source TEXT NOT NULL,
+    item TEXT NOT NULL,
+    task_id INTEGER,
+    done INTEGER NOT NULL DEFAULT 0,
+    notes TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(source, item)
+);
 CREATE TABLE IF NOT EXISTS memories(
     id INTEGER PRIMARY KEY,
     content TEXT NOT NULL,

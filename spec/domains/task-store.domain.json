@@ -15,6 +15,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|spec/test/conversation-repeat-53\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/linked_todos\\.py|tests/test_linked_todos\\.py)$"
     }
   ],
   "source": "manual",
@@ -23,7 +26,8 @@
   ],
   "specRefs": [
     "spec/feature/app-spec.md#as-04-タスク管理",
-    "spec/feature/app-spec.md#as-05-繰り返しタスク"
+    "spec/feature/app-spec.md#as-05-繰り返しタスク",
+    "spec/feature/app-spec.md#as-18-リポジトリの-todo-との連携"
   ],
   "rationale": "Google 同期・スキル・MCP はすべてこのストアを通して読み書きする。"
 }

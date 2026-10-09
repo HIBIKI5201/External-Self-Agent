@@ -9,6 +9,7 @@ import re
 import brain
 import db
 import gsync
+import linked_todos
 import recurring
 
 _DATE_TAG_RE = re.compile(r"\(=(\d{4}-\d{2}-\d{2})\)$")
@@ -220,10 +221,13 @@ def run_action(action, args, cfg):
         ok = args.lstrip("#").isdigit() and db.delete_memory(int(args.lstrip("#")))
         reply = f"#{args.lstrip('#')} を忘れました。" if ok else "使い方: /forget 番号（/memory で番号を確認）"
     elif name == "/sync":
+        linked = linked_todos.describe(linked_todos.run_once(cfg, force=True))  # before Google, so new tasks go too
         result = gsync.run_once()
         reply = {"online": "同期しました。", "offline": "オフラインなので、つながったら同期します。",
                  "disconnected": "Google に接続されていません。", "busy": "ちょうど同期中です。"}.get(
             result, f"同期でエラーが出ました: {db.get_setting('google_last_error', '')}")
+        if linked:
+            reply += "\n" + linked
     elif name == "/clear":
         db.clear_messages()
         return None, []

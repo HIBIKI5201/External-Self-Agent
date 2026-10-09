@@ -38,6 +38,10 @@ header h1 span { color: var(--accent); }
 #gstatus { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 #gstatus i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
 #gstatus.ok i { background: var(--ok); } #gstatus.bad i { background: var(--warn); } #gstatus.wait i { background: var(--due); }
+#lstatus { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+#lstatus[hidden] { display: none; }
+#lstatus i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+#lstatus.ok i { background: var(--ok); } #lstatus.bad i { background: var(--warn); }
 .spacer { flex: 1; }
 #modesw { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; gap: 2px; }
 #modesw button { background: transparent; color: var(--muted); border-radius: 999px; padding: 3px 12px; font-size: 12.5px; }
@@ -140,6 +144,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margi
   <h1 title="External Self Agent"><span>E.S.</span> Agent</h1>
   <div id="status"><i></i><span>確認中…</span></div>
   <div id="gstatus" class="pill"><i></i><span>Google ToDo</span></div>
+  <div id="lstatus" class="pill" hidden><i></i><span></span></div>
   <div id="modesw" role="group" aria-label="モード">
     <button data-mode="work" title="タスク管理と相談。「何からやる？」で次の一歩を提案します">作業モード</button>
     <button data-mode="talk" title="ただの会話。Es からタスクの話は振りません">雑談モード</button>
@@ -221,6 +226,7 @@ function render() {
   else setStatus(true, `${l.name} 準備OK`);
 
   renderGoogle(S.google || {});
+  renderLinked(S.linked || []);
   window.Es?.update(S);
 
   const log = $("#log");
@@ -272,6 +278,22 @@ function render() {
   const cur = sel.value;
   sel.innerHTML = `<option value="">プロジェクトなし</option>` + S.projects.map((p) => `<option>${esc(p.name)}</option>`).join("");
   sel.value = cur;
+}
+
+// TODO files read from other repositories (AS-18): where from, when, and what went wrong.
+const LINKED_STATES = { missing: "ファイルなし", unreadable: "読み取れない", broken: "壊れている", format: "知らない形式",
+                        error: "エラー", waiting: "読み込み待ち" };
+function renderLinked(list) {
+  const el = $("#lstatus");
+  el.hidden = !list.length;
+  if (!list.length) return;
+  const bad = list.filter((s) => s.state !== "ok");
+  el.className = "pill " + (bad.length ? (bad.some((s) => s.state !== "waiting") ? "bad" : "") : "ok");
+  $("#lstatus span").textContent = list.map((s) => s.state === "ok"
+    ? `${s.label}: 未完了 ${s.open} 件 ${(s.checked_at || "").slice(11, 16)}`
+    : `${s.label}: ${LINKED_STATES[s.state] || s.state}`).join(" ・ ");
+  el.title = list.map((s) => `${s.label} → ${s.project}\n${s.file}\n確認: ${s.checked_at || "まだ"}` +
+    (s.error ? `\n${s.error}` : "") + "\n読み取りのみ。完了はリポジトリ側で付けます").join("\n\n");
 }
 
 function renderGoogle(g) {
