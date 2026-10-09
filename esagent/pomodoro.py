@@ -8,6 +8,7 @@ import companion
 import db
 import events
 import media
+import voice
 
 DEFAULT = {"mode": "idle", "ends_at": 0, "paused": 0, "round": 0, "task_id": None}
 _lock = threading.Lock()
@@ -62,6 +63,14 @@ def _safe_media(action):
         pass
 
 
+def _say(cfg, ev, text):
+    """Timer notices are read aloud here, once, even with no window or cat to show them (#44)."""
+    try:
+        voice.say(cfg, text, key=f"event:{ev['id']}")
+    except Exception:
+        pass
+
+
 # ---- actions ----------------------------------------------------------------------
 
 def start(cfg, task_id=None):
@@ -72,7 +81,8 @@ def start(cfg, task_id=None):
             p["task_id"] = int(task_id) if task_id else None
         p.update(mode="focus", ends_at=time.time() + focus * 60, paused=0, round=p["round"] + 1)
         _save(p)
-    events.push("focus_start", task=_task_title(p["task_id"]), task_id=p["task_id"])
+    ev = events.push("focus_start", task=_task_title(p["task_id"]), task_id=p["task_id"])
+    _say(cfg, ev, f"「{ev['task']}」、いこう。" if ev["task"] else "集中タイム。となりで丸くなってるね。")
     _bgm("play")
     return state(cfg)
 
@@ -130,8 +140,11 @@ def tick(cfg):
             finished = ("break", False)
     if finished[0] == "focus":
         stats = companion.focus_done(p["task_id"], focus)
-        events.push("focus_end", task=_task_title(p["task_id"]), task_id=p["task_id"], long=finished[1],
-                    leveled_up=stats.get("leveled_up"), level=stats["level"], level_name=stats["level_name"])
+        ev = events.push("focus_end", task=_task_title(p["task_id"]), task_id=p["task_id"], long=finished[1],
+                         leveled_up=stats.get("leveled_up"), level=stats["level"], level_name=stats["level_name"])
+        rest = "長めに休もう。" if finished[1] else "ひと休みしよ。"
+        _say(cfg, ev, f"なかよし度が上がった！レベル{stats['level']}、{stats['level_name']}。" if stats.get("leveled_up")
+             else f"おつかれさま！{rest}「{ev['task']}」、終わった？" if ev["task"] else f"おつかれさま！{rest}")
         _bgm("pause")
     else:
-        events.push("break_end")
+        _say(cfg, events.push("break_end"), "休憩おわり。次、いく？")

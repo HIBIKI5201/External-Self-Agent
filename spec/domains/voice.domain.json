@@ -1,0 +1,22 @@
+{
+  "name": "Voice",
+  "description": "VOICEVOX による読み上げ（待ち列・再生・エンジンの起動と終了）を所有する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)esagent/voice\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_voice\\.py|spec/test/voicevox-44\\.md)$"
+    }
+  ],
+  "source": "manual",
+  "lockedFields": [
+    "*"
+  ],
+  "specRefs": [
+    "spec/feature/app-spec.md#as-19-読み上げvoicevox"
+  ],
+  "rationale": "再生をサーバーの 1 か所に置き、画面や猫が何個あっても同じ文を 1 回だけ読む。起動したエンジンの後始末もここが持つ。"
+}

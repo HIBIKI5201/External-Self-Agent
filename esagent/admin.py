@@ -27,6 +27,8 @@ FIELDS = {
     "history_tokens":  ("モデル", "会話履歴に使うトークン", "int", 2000, (300, 8000)),
     "think_router":    ("モデル", "判定で思考を使う（遅くなる）", "bool", False, None),
     "llm_log":         ("モデル", "送信内容のログを残す（data/llm-requests.jsonl）", "bool", True, None),
+    "voicevox_idle_minutes": ("読み上げ", "Es が起動した VOICEVOX を止めるまでの無音時間（分）", "int", 30, (1, 1440)),
+    "voice_max_chars": ("読み上げ", "1 回に読み上げる最大文字数", "int", 200, (20, 2000)),
 }
 
 

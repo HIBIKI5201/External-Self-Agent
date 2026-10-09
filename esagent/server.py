@@ -33,6 +33,7 @@ import skills  # noqa: E402
 import youtube  # noqa: E402
 import choices  # noqa: E402
 import task_context  # noqa: E402
+import voice  # noqa: E402
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
@@ -55,6 +56,7 @@ def state():
         "choices": choices.public(),
         "mode": db.get_setting("chat_mode", "work"),
         "companion": companion.stats(),
+        "voice": voice.status(CFG),
     }
 
 
@@ -77,7 +79,8 @@ def pet_state():
         mood = "idle"
     return {"mood": mood, "pomo": pomo, "stage": prog["stage"], "overdue": overdue,
             "last_event": events.last_id(), "port": CFG["port"],
-            "enabled": pet_enabled(), "cat": CFG.get("pet_cat", 2), "scale": CFG.get("pet_scale", 3)}
+            "enabled": pet_enabled(), "cat": CFG.get("pet_cat", 2), "scale": CFG.get("pet_scale", 3),
+            "voice": voice.status(CFG)}
 
 
 def pet_enabled():
@@ -144,6 +147,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, state())
         if path == "/api/pomo":
             return self._send(200, pomodoro.state(CFG))
+        if path == "/api/voice":
+            return self._send(200, voice.status(CFG))
         if path == "/api/events":
             after = int((parse_qs(urlparse(self.path).query).get("after") or ["0"])[0] or 0)
             return self._send(200, {"events": events.since(after), "last": events.last_id()})
@@ -214,8 +219,8 @@ class Handler(BaseHTTPRequestHandler):
     def _post_result(self, path, body):
         try:
             result = self._route(path, body)
-            if not path.startswith("/api/youtube/"):
-                gsync.request()  # mutations should reach Google; YouTube reads do not trigger sync
+            if not path.startswith(("/api/youtube/", "/api/voice")):
+                gsync.request()  # mutations should reach Google; YouTube and voice calls do not trigger sync
             return 200, result
         except youtube.YouTubeError as e:
             return e.code, {"error": str(e)}
@@ -250,6 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             queued = db.normalize_datetime(queued)
             result = brain.chat(text, CFG, queued_at=queued, selection=body['choice']) if body.get('choice') is not None else \
                 skills.run(text, CFG, queued_at=queued) if text.startswith('/') else brain.chat(text, CFG, queued_at=queued)
+            voice.reply(CFG, result)  # read aloud once, here; the windows never replay history
             if result.get("events"):
                 events.push("chat_events", lines=result["events"])
             if result.get("ui", {}).get("focus"):
@@ -277,6 +283,16 @@ class Handler(BaseHTTPRequestHandler):
             if not h:
                 raise LookupError("handoff not found")
             return h
+        if path == "/api/voice":  # reading aloud on/off and volume (#44)
+            return voice.update(CFG, enabled=body.get("enabled"), volume=body.get("volume"))
+        if path == "/api/voice/say":  # a line the cat or the chat window shows
+            text = str(body.get("text") or "")[:500]
+            return {"queued": voice.say(CFG, text, key=body.get("key"))}
+        if path == "/api/voice/test":  # 試聴: a fixed line, even while reading aloud is off
+            return {"queued": voice.say(CFG, voice.SAMPLE, force=True)}
+        if path == "/api/voice/stop":
+            voice.stop()
+            return voice.status(CFG)
         if path == "/api/focus/done":
             return companion.focus_done(body.get("task_id"), int(body.get("minutes") or 25))
         if path == "/api/pomo":
@@ -326,7 +342,9 @@ class Handler(BaseHTTPRequestHandler):
             with choices.lock:
                 choices.invalidate()
                 task_context.clear()
-                return {"mode": mode, "reply": brain.set_mode(mode)}
+                reply = brain.set_mode(mode)
+            voice.say(CFG, reply)
+            return {"mode": mode, "reply": reply}
         if path == "/api/pet/enabled":
             on = bool(body.get("enabled"))
             db.set_setting("pet_enabled", "1" if on else "0")
@@ -372,6 +390,7 @@ def _pending_loop():
                 result = run(m["content"], CFG, message_id=m["id"])
                 if result.get("pending"):
                     break  # still not ready; keep the order and try again later
+                voice.reply(CFG, result, key=f"answered:{m['id']}")
                 events.push("answered", message_id=m["id"], lines=result.get("events") or [])
         except Exception:
             log.exception("answering waiting messages failed")

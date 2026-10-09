@@ -5,7 +5,7 @@ E.S. Agent（External Self Agent）は、この Windows PC に常駐するロー
 
 ## まず読むもの
 
-- 仕様の正本: `spec/feature/app-spec.md`（AS-01〜AS-18）。挙動を変えたら同じ変更で更新する。
+- 仕様の正本: `spec/feature/app-spec.md`（AS-01〜AS-19）。挙動を変えたら同じ変更で更新する。
 - どのファイルがどの仕様か: `spec/domains/*.domain.json`
 - 既知のずれ・未確認事項: `spec/plan/spec-gaps.md`
 - Git の運用: `docs/git-workflow.md`（Issue 起点、`main` に直接コミットしない）

@@ -32,5 +32,11 @@
       "title": "Lofi Girl ライブ（YouTube ウィンドウ向け）",
       "url": "https://www.youtube.com/channel/UCSJ4gkVC6NrvII8umztf0Ow/live"
     }
-  ]
+  ],
+  "voicevox_url": "http://127.0.0.1:50021",
+  "voicevox_engine_path": "",
+  "voicevox_speaker": "冥鳴ひまり",
+  "voicevox_style": "ノーマル",
+  "voicevox_idle_minutes": 30,
+  "voice_max_chars": 200
 }
