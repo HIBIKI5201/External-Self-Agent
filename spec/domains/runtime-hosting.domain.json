@@ -5,6 +5,9 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)spec/plan/issue-implementation-plan-2026-10-10[.]md$"
+    },
+    {
       "pathPattern": "(^|/)(tests/test_message_timing\\.py|spec/test/message-timing-39\\.md)$"
     },
     {
