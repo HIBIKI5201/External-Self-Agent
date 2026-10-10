@@ -63,6 +63,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_colloquial_requests\\.py|spec/test/colloquial-requests-104\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_literal_task_corrections\\.py|spec/test/literal-task-corrections-105\\.md)$"
     }
   ],
   "source": "manual",

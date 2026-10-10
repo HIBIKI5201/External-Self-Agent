@@ -830,6 +830,27 @@ def _budget(cfg):
     return cfg.get("history_tokens", 2000)
 
 
+def _literal_add_title(text):
+    match = re.fullmatch(r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?をタスクに(?:追加して|登録して|して)(?:おいて|ください|ね)?[。！!\s]*', text)
+    if not match:
+        deadline = re.fullmatch(r"\s*(?P<date>[^。、\n]{1,60}?)までに(?P<title>[^。、\n]{1,100}?)[。！!\s]*", text)
+        if not deadline or not (annotate_dates(deadline["date"], dt.date.today()) != deadline["date"] or re.search(r"\d{4}-\d{2}-\d{2}", deadline["date"])):
+            return None
+        match = deadline
+    title = match["title"].strip()
+    if _PRONOUN_RE.search(title) or re.search(r"と|、|,|および|締め?切|期限|期日|メモ|詳細", title) or annotate_dates(title, dt.date.today()) != title:
+        return None
+    return title
+
+
+def _add_title_grounded(title, text, context=""):
+    # Permit spacing/particles, never add a verb or a new concept from the model.
+    flat = lambda value: re.sub(r'[\s「」『』"、。]|(?<=[一-龥ぁ-んァ-ヶ])(?:を|の)(?=[一-龥ぁ-んァ-ヶ])', "", value or "").lower()
+    name = flat(title)
+    source = text + (context if _PRONOUN_RE.search(text) or _REFERENCE_RE.search(text) else "")
+    return bool(name) and name in flat(source)
+
+
 def _action_errors(actions, text, context=''):
     """Check a proposal without writes: a rejected batch must never partly execute.
 
@@ -857,6 +878,9 @@ def _action_errors(actions, text, context=''):
             errors.append('title/due/project/notes は文字列にしてください')
             continue
         title, due = _clean(a.get('title')), _clean(a.get('due'))
+        literal = _literal_add_title(text) if kind == 'add_task' and not tid else None
+        if literal:
+            a['title'] = title = literal
         if tid and tid not in known:
             errors.append(f'#{tid} は一覧にありません。一覧から選んでください')
         elif kind in ('update_task', 'complete_task') and missing:
@@ -875,6 +899,8 @@ def _action_errors(actions, text, context=''):
         if kind in ('add_task', 'delegate') and not tid:
             if not title:
                 errors.append('追加するタイトルがありません')
+            elif kind == 'add_task' and not _add_title_grounded(title, text, context):
+                errors.append(f'「{title}」には発言にない言葉があります。名前は利用者の発言から取ってください')
             elif _META_TITLE_RE.search(title) or (not _EXPLICIT_ADD_RE.search(text)
                                                   and _similarity(f'{text} {context}', title) < .35):
                 errors.append(f'「{title}」は発言から読み取れません。利用者の内容だけを使ってください')
@@ -1499,6 +1525,30 @@ def _explicit_rename(text, guard):
             [f"✎ #{t['id']} {t['title']} を更新しました（タイトル: {old} → {t['title']}）"])
 
 
+def _reference_rename(text, history):
+    match = re.fullmatch(r'\s*(?:あ[、,\s]*|いや[、,\s]*)?(?:さっき|直前)の(?:は|の)?(?:タスクの)?(?:名前|タスク名|タイトル)(?:を|は)\s*[「『"]?(?P<name>[^「」『』"\n]{1,100}?)[」』"]?(?:に|へ)(?:変えて|変更して|して|変えといて)(?:おいて|ください|ね)?[。！!\s]*', text)
+    if not match:
+        return None
+    guard = write_guard.analyze(text, db.list_tasks(include_done=True))
+    if guard.hold:
+        return "名前は変更していないよ。", []
+    last_user = max((i for i,m in enumerate(history) if m["role"] == "user"), default=-1)
+    ids = set()
+    for message in history[last_user+1:]:
+        if message["role"] not in ("notice", "es"):
+            continue
+        for line in message["content"].splitlines():
+            record = re.match(r"\s*[＋✎✔→↺]\s+#(\d+)\s", line)
+            if record:
+                ids.add(int(record[1]))
+    tasks = [db.get_task(i) for i in ids]
+    if len(ids) != 1 or not all(tasks):
+        return "直前のどのタスクの名前を変えるか特定できなかったよ。タスク名か番号で教えてね。変更はしていないよ。", []
+    target = tasks[0]
+    result = _explicit_rename(f"#{target['id']}の名前を{match['name'].strip()}に変えて", guard)
+    return result or ("タスクの名前は変更していないよ。新しい名前を具体的に教えてね。", [])
+
+
 def _focus_selection(text, cfg):
     """Explicit focus-task selection; never starts or resets the timer."""
     request = re.search(r"(?:集中)?タイマーのタスク(?:を|に)", text)
@@ -1823,6 +1873,14 @@ def _chat(text, cfg, message_id=None):
         if answer:  # read-only questions about the records and stored values (#70, #76)
             db.add_message("assistant", answer)
             return {"reply": answer, "events": [], "handoffs": [], "intent": "lookup"}
+        rename_history = db.recent_messages(80, roles=("user", "assistant", "notice", "es"), before=message_id) if re.search(r"さっき|直前", text) else history
+        renamed = _reference_rename(text, rename_history)
+        if renamed:
+            reply, records = renamed
+            db.add_message("assistant", reply)
+            if records:
+                db.add_message("notice", "\n".join(records))
+            return {"reply": reply, "events": records, "handoffs": [], "intent": "guarded"}
         unknown = _recall_flow(text, message_id)
         if unknown:
             db.add_message("assistant", unknown)
