@@ -1,0 +1,262 @@
+"""Local asynchronous reception, revisions and cancellation boundaries (#110).
+
+Only explicit correction/append/topic/cancel controls alter an existing request.
+A DB transaction and cancellation share a lock: committed operations are never undone.
+"""
+import contextvars
+from contextlib import contextmanager
+import json
+import re
+import threading
+
+import db
+
+CURRENT = contextvars.ContextVar("conversation_job", default=None)
+_LOCK = threading.RLock()
+_LIVE = {}  # (database path, id) -> revision; scoped to this server process
+_WRITING = re.compile(r"^(?:INSERT(?: OR \w+)? INTO|UPDATE|DELETE FROM)\s+(tasks|memories|projects|handoffs)\b", re.I)
+ID = re.compile(r"[A-Za-z0-9_-]{16,80}")
+MODES = {"independent", "correction", "append", "cancel", "topic", "auto"}
+
+
+class Stopped(Exception):
+    pass
+
+
+def _key(request_id):
+    return db.DB_PATH, request_id
+
+
+def valid(token=None):
+    token = token or CURRENT.get()
+    if token is None:
+        return True
+    return _LIVE.get(token["key"]) == token["revision"]
+
+
+def check():
+    if not valid():
+        raise Stopped()
+
+
+@contextmanager
+def boundary():
+    token = CURRENT.get()
+    if token is None:
+        yield
+    else:
+        with _LOCK:
+            check()
+            yield
+
+
+@contextmanager
+def detached():
+    marker = CURRENT.set(None)
+    try:
+        yield
+    finally:
+        CURRENT.reset(marker)
+
+
+@contextmanager
+def scope(request_id, revision):
+    token = {"key": _key(request_id), "request_id": request_id, "revision": revision, "committed": False}
+    marker = CURRENT.set(token)
+    try:
+        check()
+        yield token
+    finally:
+        CURRENT.reset(marker)
+
+
+def note_commit(statements):
+    token = CURRENT.get()
+    written = any(_WRITING.search(sql.strip()) or re.match(r"DELETE FROM messages", sql.strip(), re.I) or
+                  (re.search(r"\bsettings\b", sql, re.I) and
+                   re.search(r"(?:VALUES\s*\(\s*|key\s*=\s*)'(?:pomodoro|chat_mode|voice)'", sql, re.I))
+                  for sql in statements)
+    if token and written:
+        token["committed"] = True
+        # This is part of the same transaction boundary; retain it even after cancellation.
+        with detached(), db.connect() as con:
+            con.execute("UPDATE conversation_jobs SET committed=1 WHERE id=?", (token["request_id"],))
+
+
+@contextmanager
+def use_token(token):
+    marker = CURRENT.set(token)
+    try:
+        yield
+    finally:
+        CURRENT.reset(marker)
+
+
+def message_metadata():
+    token = CURRENT.get()
+    return (token["request_id"], token["revision"]) if token else (None, None)
+
+
+def _row(request_id):
+    with db.connect() as con:
+        row = con.execute("SELECT * FROM conversation_jobs WHERE id=?", (request_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def status(request_id, revision=None):
+    if not isinstance(request_id, str) or not ID.fullmatch(request_id):
+        raise ValueError("依頼の識別子が不正です。")
+    with _LOCK:
+        row = _row(request_id)
+        if not row:
+            raise LookupError("依頼が見つかりません。")
+        if revision is not None and revision != row["revision"]:
+            return {"jobId": request_id, "revision": revision, "state": "superseded", "result": None}
+        state = row["state"]
+        if state in ("queued", "running") and _key(request_id) not in _LIVE:
+            state = "interrupted"
+            result = {"reply": "サーバーが停止したため結果を確認できません。自動で再実行はしません。履歴とタスクを確認してください。",
+                      "events": [], "handoffs": [], "interrupted": True}
+        else:
+            result = json.loads(row["result"]) if row["result"] else None
+        return {"jobId": request_id, "revision": row["revision"], "state": state, "result": result,
+                "committed": bool(row["committed"])}
+
+
+def classify(text):
+    if re.fullmatch(r"(?:取り消して|取消して|キャンセル|やめて|中止して)[。！!\s]*", text):
+        return "cancel"
+    if re.match(r"^(?:いや[、, ]|訂正[、:： ]|言い直す[、:： ])", text):
+        return "correction"
+    if re.match(r"^(?:追加条件[、:： ]|条件を追加[、:： ])", text):
+        return "append"
+    if re.match(r"^(?:別の話[だけど、:： ]|話題を変え)", text):
+        return "topic"
+    return "independent"
+
+
+def accept(body, cfg, operation):
+    request_id = body.get("requestId")
+    text = str(body.get("text") or "").strip()
+    mode = body.get("relation", "independent")
+    target = body.get("targetId")
+    expected = body.get("targetRevision")
+    if not isinstance(request_id, str) or not ID.fullmatch(request_id) or not text or len(text) > 12000:
+        raise ValueError("発言または送信情報が不正です。長い文章は分けて送ってください。")
+    if mode not in MODES:
+        raise ValueError("発言の扱いが不正です。")
+    if mode == "auto":
+        mode = classify(text) if target else "independent"
+    if mode != "independent" and (not isinstance(target, str) or not ID.fullmatch(target) or not isinstance(expected, int)):
+        raise ValueError("訂正・取消の対象を選んでください。")
+    with _LOCK:
+        if _row(request_id):
+            return status(request_id)
+        previous = _row(target) if mode != "independent" else None
+        if mode != "independent":
+            if not previous or previous["revision"] != expected:
+                raise ValueError("対象の依頼は更新されています。履歴を確認して、現在の依頼を選び直してください。")
+            _LIVE.pop(_key(target), None)
+            if previous["state"] in ("queued", "running"):
+                with db.connect() as con:
+                    con.execute("UPDATE messages SET status='cancelled' WHERE request_id=? AND role IN ('assistant','es')", (target,))
+            import voice
+            voice.stop_request(target)
+            if mode in ("correction", "append") and previous["committed"]:
+                # Never rerun an original operation after it has already happened.
+                note = "元の依頼は実行済みです。取消は済んだ操作を元に戻しません。履歴とタスクを確認し、追加で変えたい内容を新しい依頼として指定してください。"
+                with db.connect() as con:
+                    con.execute("UPDATE conversation_jobs SET state='cancelled', result=? WHERE id=?",
+                                (json.dumps({"reply": note, "events": [], "handoffs": []}, ensure_ascii=False), target))
+                db.add_message("user", text)
+                db.add_message("assistant", note)
+                return {"jobId": target, "revision": expected, "state": "cancelled", "result": {"reply": note, "events": [], "handoffs": []}}
+            if mode == "cancel":
+                note = "依頼の残りの処理と読み上げを取り消したよ。"
+                if previous["committed"]:
+                    note += "既に反映した操作は元に戻していないので、履歴とタスクを確認してね。"
+                result = {"reply": note, "events": [], "handoffs": [], "cancelled": True}
+                with db.connect() as con:
+                    con.execute("UPDATE conversation_jobs SET state='cancelled', result=? WHERE id=?",
+                                (json.dumps(result, ensure_ascii=False), target))
+                db.add_message("user", text)
+                db.add_message("assistant", note)
+                return {"jobId": target, "revision": expected, "state": "cancelled", "result": result}
+            if mode in ("correction", "append"):
+                request_id = target
+                revision = expected + 1
+                original = previous["text"]
+                text = original + "\n" + ("訂正（こちらを優先）: " if mode == "correction" else "追加条件: ") + text
+            else:
+                revision = 1
+                with db.connect() as con:
+                    con.execute("UPDATE conversation_jobs SET state='cancelled' WHERE id=?", (target,))
+        else:
+            revision = 1
+        payload = {**body, "requestId": request_id, "text": text}
+        _LIVE[_key(request_id)] = revision
+        with db.connect() as con:
+            con.execute("INSERT INTO conversation_jobs(id,revision,state,text,updated_at) VALUES(?,?,'queued',?,?) "
+                        "ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,state='queued',text=excluded.text,result=NULL,updated_at=excluded.updated_at",
+                        (request_id, revision, text, db.now()))
+        thread = threading.Thread(target=_work, args=(request_id, revision, payload, cfg, operation),
+                                  name="chat-" + request_id[:8], daemon=True)
+        thread.start()
+        return {"jobId": request_id, "revision": revision, "state": "queued", "result": None}
+
+
+def _work(request_id, revision, body, cfg, operation):
+    result, stopped, token = None, False, None
+    try:
+        with scope(request_id, revision) as token:
+            with boundary(), db.connect() as con:
+                con.execute("UPDATE conversation_jobs SET state='running' WHERE id=? AND revision=?", (request_id, revision))
+            result = operation(body)
+            check()
+            if result.get("pending"):
+                # Async requests must not leak into the legacy automatic pending rerun loop.
+                raise Stopped()
+            with boundary():
+                with db.connect() as con:
+                    con.execute("UPDATE conversation_jobs SET state='done',result=?,updated_at=? WHERE id=? AND revision=?",
+                                (json.dumps(result, ensure_ascii=False), db.now(), request_id, revision))
+                import voice
+                voice.reply(cfg, result, key=f"job:{request_id}:{revision}")
+    except Stopped:
+        stopped = True
+    except Exception:
+        result = {"reply": "処理結果を確認できません。履歴とタスクを確認してください。", "events": [], "handoffs": [], "failed": True}
+        with detached(), _LOCK:
+            if _LIVE.get(_key(request_id)) == revision:
+                with db.connect() as con:
+                    con.execute("UPDATE conversation_jobs SET state='failed',result=? WHERE id=? AND revision=?",
+                                (json.dumps(result, ensure_ascii=False), request_id, revision))
+    finally:
+        with detached(), _LOCK:
+            if stopped and _LIVE.get(_key(request_id)) == revision:
+                result = {"reply": "処理を完了できませんでした。自動再実行はせず、履歴とタスクを確認してください。",
+                          "events": [], "handoffs": [], "failed": True}
+                with db.connect() as con:
+                    con.execute("UPDATE conversation_jobs SET state='failed',result=? WHERE id=? AND revision=?",
+                                (json.dumps(result, ensure_ascii=False), request_id, revision))
+            if stopped:
+                with db.connect() as con:
+                    con.execute("UPDATE messages SET status='cancelled' WHERE request_id=? AND request_revision=? AND (role IN ('assistant','es') OR status='pending')",
+                                (request_id, revision))
+
+
+def clear_pending():
+    """Explicit chat clear invalidates old work; it never undoes committed task changes."""
+    with _LOCK:
+        current = CURRENT.get()
+        own_id = current["request_id"] if current else ""
+        for key in list(_LIVE):
+            if key[0] == db.DB_PATH and key[1] != own_id:
+                _LIVE.pop(key, None)
+        with detached(), db.connect() as con:
+            result = {"reply": "会話をクリアしたため、以前の依頼の残りの処理は取り消しました。完了済みの操作は元に戻していません。",
+                      "events": [], "handoffs": [], "cancelled": True}
+            con.execute("UPDATE conversation_jobs SET state='cancelled',result=? WHERE id!=?",
+                        (json.dumps(result, ensure_ascii=False), own_id))
+        import voice
+        voice.stop()

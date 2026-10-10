@@ -20,6 +20,7 @@ import task_context
 import write_guard
 import conversation_context
 import conversation_game
+import conversation_jobs as jobs
 
 WEEKDAYS = "月火水木金土日"
 
@@ -430,6 +431,11 @@ def _narrow_bulk_updates(actions, user_text):
 
 
 def _apply(actions, cfg, user_text="", context_text=""):
+    with jobs.boundary():
+        return _apply_current(actions, cfg, user_text, context_text)
+
+
+def _apply_current(actions, cfg, user_text="", context_text=""):
     """Execute validated actions. Returns (event lines, handoffs created, last task touched)."""
     events, handoffs, touched = [], [], {}
     known_ids = {t["id"] for t in db.list_tasks(include_done=True)}
@@ -1227,6 +1233,9 @@ _INTENT_LABELS = {"chat": "雑談・質問として受け取りました", "advi
 
 
 def _stage(name):
+    token = jobs.CURRENT.get()
+    _progress["requestId"] = token["request_id"] if token and name else None
+    _progress["revision"] = token["revision"] if token and name else None
     _progress["stage"] = name
     if name is None:
         _progress.update(since=None, detail="", partial="")
@@ -1235,6 +1244,7 @@ def _stage(name):
 
 
 def _partial(text):
+    jobs.check()
     _progress["partial"] = text
 
 
@@ -1242,7 +1252,8 @@ def progress():
     """What Es is doing right now, for the UI's live thinking display."""
     since = _progress["since"]
     return {"busy": since is not None, "stage": _progress["stage"], "detail": _progress["detail"],
-            "partial": _progress["partial"], "elapsed": round(time.time() - since, 1) if since else 0}
+            "partial": _progress["partial"] if jobs.valid({"key": (db.DB_PATH, _progress.get("requestId")), "revision": _progress.get("revision")}) or not _progress.get("requestId") else "",
+            "requestId": _progress.get("requestId"), "revision": _progress.get("revision"), "elapsed": round(time.time() - since, 1) if since else 0}
 
 
 def _describe(intent, focus, actions):
@@ -1611,8 +1622,9 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
             mid = _progress.get("message_id")
             if mid:
                 done = None if result is None or result.get("pending") else db.now()
-                db.set_message_timing(mid, queued_at=queued_at, received_at=received, started_at=started,
-                                      finished_at=done)
+                with jobs.detached():
+                    db.set_message_timing(mid, queued_at=queued_at, received_at=received, started_at=started,
+                                          finished_at=done)
             _progress.update(text="", message_id=None)
             _stage(None)
 

@@ -36,3 +36,48 @@ vm.runInContext(apiCode, ctx);
   await assert.rejects(vm.runInContext('api("/api/chat", {})', ctx), e => !e.offline && e.message === 'check history');
   console.log('queue migration, reload, truncated response, terminal conflict: passed');
 })().catch(e => { console.error(e); process.exitCode = 1; });
+
+// Validate and exercise the actual async submission code without the app.
+const liveSource = source.slice(source.indexOf('function activeTarget()'), source.indexOf('// ---- slash command autocomplete'));
+const inline = source.slice(source.indexOf('<script>') + 8, source.lastIndexOf('</script>'));
+new vm.Script(inline);
+const submitted = [];
+let resolveFirst;
+const firstReceipt = new Promise(resolve => { resolveFirst = resolve; });
+const live = vm.createContext({
+  crypto, S: {messages: []}, queue: [], busy: true, bypassRe: null,
+  localIso: () => '2026-10-11T00:00:00.000Z',
+  requestId: () => crypto.randomUUID().replaceAll('-', ''),
+  saveQueue() {}, renderLive() {}, pump() {},
+  window: {Es: {say() {}}},
+  $: () => ({value: 'auto', addEventListener() {}}),
+  setTimeout: fn => { fn(); },
+  api: async (path, body) => {
+    if (path === '/api/chat/submit') {
+      submitted.push(body);
+      if (submitted.length === 1) return firstReceipt;
+      return {jobId: body.targetId || body.requestId, revision: body.targetId ? body.targetRevision + 1 : 1, state: 'queued'};
+    }
+    return {state: 'superseded', result: null};
+  }
+});
+vm.runInContext(liveSource, live);
+(async () => {
+  await vm.runInContext('sendText("明日の予定を考えて")', live);
+  const correction = vm.runInContext('sendText("いや、午前は空けたい")', live);
+  assert.equal(submitted.length, 1, 'wait for receipt, not for generation');
+  resolveFirst({jobId: submitted[0].requestId, revision: 1, state: 'queued'});
+  await correction;
+  assert.equal(submitted.length, 2);
+  assert.equal(submitted[1].relation, 'correction');
+  assert.equal(submitted[1].targetId, submitted[0].requestId);
+  assert.equal(submitted[1].targetRevision, 1);
+  assert.equal(vm.runInContext('queue[0].invalidated', live), true);
+  await vm.runInContext('sendText("独立したお願い", "independent")', live);
+  assert.equal(submitted[2].relation, 'independent');
+  assert.equal(submitted[2].targetId, undefined);
+  assert.equal(vm.runInContext('relationOf("クイズ", "auto")', live), 'independent');
+  assert.equal(vm.runInContext('relationOf("取り消して", "auto")', live), 'cancel');
+  assert.equal((await vm.runInContext('waitJob(queue[0])', live)).state, 'superseded');
+  console.log('immediate receipt, correction target, independent request, stale revision: passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

@@ -29,6 +29,7 @@ import re
 import actions
 import brain
 import db
+import conversation_jobs as jobs
 import llm
 import projects
 import choices
@@ -209,7 +210,8 @@ class _Run:
         if key in self.seen:
             return "さっきと同じ呼び出しです。結果は上にあります。次の手順へ進むか、返事を書いてください。"
         try:
-            result = getattr(self, "t_" + name)(**args)
+            with jobs.boundary():
+                result = getattr(self, "t_" + name)(**args)
         except AttributeError:
             return self._reject(f"unknown tool {name}")
         except (TypeError, ValueError) as e:
@@ -397,11 +399,11 @@ def run(text, cfg, message_id=None, queued_at=None):
             choices.expose(result)
         return result
     finally:
-        if timing.get("id"):
-            db.set_message_timing(timing["id"], queued_at=db.normalize_datetime(queued_at),
-                                  received_at=received, started_at=timing["started_at"],
-                                  finished_at=db.now() if result is not None and not result.get("pending") else None)
-
+        with jobs.detached():
+            if timing.get("id"):
+                db.set_message_timing(timing["id"], queued_at=db.normalize_datetime(queued_at),
+                                      received_at=received, started_at=timing["started_at"],
+                                      finished_at=db.now() if result is not None and not result.get("pending") else None)
 
 def _run(text, cfg, message_id=None, timing=None):
     """Handle a "/name args" message. Returns the same shape as brain.chat().

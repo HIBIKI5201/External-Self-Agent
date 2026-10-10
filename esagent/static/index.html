@@ -166,6 +166,12 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margi
       <div id="cmdpop" hidden></div>
       <textarea id="input" placeholder="例: 金曜までにA社のES出す / SymphonyKillChordのジャンプのバグ直したい" autofocus></textarea>
       <button id="listen" type="button" class="ghost" title="オンの間は話しかけるだけで送ります（Edge の音声認識）">会話モード</button>
+      <select id="request-relation" title="前の依頼との関係">
+        <option value="auto">自動</option><option value="independent">別の依頼</option>
+        <option value="correction">言い直し</option><option value="append">条件を追加</option>
+        <option value="topic">話題を変える</option>
+      </select>
+      <button id="request-cancel" type="button" class="ghost">依頼を取消</button>
       <button id="sendBtn" type="submit">送信</button>
     </form>
   </section>
@@ -366,7 +372,7 @@ const localIso = (d = new Date()) => {
 // Questions about the wait itself ("まだ？") skip the queue; the server answers them at once.
 let bypassRe = null;
 api("/api/chat/bypass").then((r) => { bypassRe = new RegExp(r.pattern); }).catch(() => {});
-const saveQueue = () => { try { localStorage.setItem("es.queue", JSON.stringify(queue)); } catch {} };
+const saveQueue = () => { try { localStorage.setItem("es.queue", JSON.stringify(queue.map(({delivery, deliveryError, ...item}) => item))); } catch {} };
 saveQueue(); // persist migrated IDs before the first request, including after a reload
 let offline = false;
 let thinkStart = 0, thinkStage = "", thinkDetail = "", thinkPartial = "", thinkTimer = null, stagePoll = null;
@@ -405,19 +411,28 @@ async function pump() {
     stagePoll = setInterval(async () => {
       try {
         const p = await api("/api/progress");
-        if (p.busy) { thinkStage = p.stage || thinkStage; thinkDetail = p.detail || ""; thinkPartial = p.partial || ""; }
+        if (p.busy && (!queue[0]?.jobId || (p.requestId === queue[0].jobId && p.revision === queue[0].revision))) { thinkStage = p.stage || thinkStage; thinkDetail = p.detail || ""; thinkPartial = p.partial || ""; }
       } catch {}
     }, 500);
     renderLive();
     let delivered = true;
     try {
-      const r = await api("/api/chat", { text: queue[0].text, queuedAt: queue[0].at, requestId: queue[0].id, choice: queue[0].choice });
+      const item = queue[0];
+      await submitItem(item);
+      const job = await waitJob(item);
+      const r = job.result || {};
+      if (r.reply && !item.invalidated && (r.failed || r.cancelled || r.interrupted)) {
+        window.Es?.say(r.reply, { ms: 9000, voice: false });
+      }
       offline = false;
       if (r.pending) window.Es?.say(r.note, { ms: 6000 });
-      else window.Es?.react(r);  // a "うん" to a focus offer is started by the server
+      else if (!queue[0].invalidated && job.state !== "superseded") window.Es?.react(r);  // a "うん" to a focus offer is started by the server
     } catch (err) {
       if (err.offline) { offline = true; delivered = false; }   // keep it and try again
-      else window.Es?.say(`送れなかった… ${err.message}`, { ms: 6000 });
+      else {
+        window.Es?.say("送れなかった… " + err.message, { ms: 6000 });
+        if (!$("#input").value && queue[0]?.text) $("#input").value = queue[0].text;
+      }
     }
     clearInterval(thinkTimer); clearInterval(stagePoll);
     window.Es?.thinking(false);
@@ -444,18 +459,68 @@ $("#send").addEventListener("submit", (e) => {
 });
 
 // Typed messages and what 会話モード heard (listen.js) take the same path.
-function sendText(text) {
+function activeTarget() {
+  if (queue.length) {
+    const item = queue[0];
+    if (item.jobId && item.revision) return {id: item.jobId, revision: item.revision};
+  }
+  const message = [...S.messages].reverse().find(m => m.request_id && m.request_revision);
+  return message ? {id: message.request_id, revision: message.request_revision} : null;
+}
+function relationOf(text, selected) {
+  if (selected !== "auto") return selected;
+  if (/^(取り消して|取消して|キャンセル|やめて|中止して)[。！!\s]*$/.test(text)) return "cancel";
+  if (/^(いや[、, ]|訂正[、:： ]|言い直す[、:： ])/.test(text)) return "correction";
+  if (/^(追加条件[、:： ]|条件を追加[、:： ])/.test(text)) return "append";
+  if (/^(別の話[だけど、:： ]|話題を変え)/.test(text)) return "topic";
+  return "independent";
+}
+async function submitItem(item) {
+  if (!item.delivery) {
+    item.deliveryError = null;
+    item.delivery = api("/api/chat/submit", {
+      text: item.text, queuedAt: item.at, requestId: item.id, choice: item.choice,
+      relation: item.relation || "independent", targetId: item.targetId, targetRevision: item.targetRevision
+    }).then(job => {
+      item.jobId = job.jobId; item.revision = job.revision; saveQueue(); return job;
+    }, error => { item.deliveryError = error; return null; });
+  }
+  const job = await item.delivery;
+  if (item.deliveryError) { item.delivery = null; throw item.deliveryError; }
+  return job;
+}
+async function waitJob(item) {
+  while (true) {
+    const job = await api("/api/chat/job?id=" + encodeURIComponent(item.jobId) + "&revision=" + item.revision);
+    if (!["queued", "running"].includes(job.state)) return job;
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+}
+// Every message is received immediately, even while an earlier model request is running.
+async function sendText(text, forcedRelation = null) {
   if (busy && bypassRe && bypassRe.test(text) && !text.startsWith("/")) {
     api("/api/chat", { text, queuedAt: localIso(), requestId: requestId() })
-      .then((r) => { window.Es?.say(r.reply, { ms: 9000, voice: false }); return refresh(); })  // the server reads replies aloud
-      .catch((err) => window.Es?.say(`送れなかった… ${err.message}`, { ms: 6000 }));
+      .then(r => { window.Es?.say(r.reply, { ms: 9000, voice: false }); return refresh(); })
+      .catch(err => window.Es?.say("送れなかった… " + err.message, { ms: 6000 }));
     return;
   }
-  queue.push({ text, at: localIso(), id: requestId() });
-  saveQueue();
-  renderLive();
+  const selected = forcedRelation || $("#request-relation").value;
+  const relation = relationOf(text, selected);
+  if (relation !== "independent" && queue.length && !queue[0].jobId) {
+    try { await submitItem(queue[0]); }
+    catch (error) { window.Es?.say("受付を確認できません。前の依頼が届いてから言い直してください。", {voice: false}); return; }
+  }
+  const target = activeTarget();
+  const item = {text, at: localIso(), id: requestId(), relation,
+    targetId: relation !== "independent" ? target?.id : undefined,
+    targetRevision: relation !== "independent" ? target?.revision : undefined};
+  if (relation !== "independent" && queue[0]) queue[0].invalidated = true;
+  queue.push(item); saveQueue(); renderLive();
+  // Submission errors are held on the item until pump displays them.
+  submitItem(item).catch(() => {});
   pump();
 }
+$("#request-cancel").addEventListener("click", () => sendText("取り消して", "cancel"));
 
 // ---- slash command autocomplete --------------------------------------------
 let CMDS = [], popItems = [], popSel = 0;

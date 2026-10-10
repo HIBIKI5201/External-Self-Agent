@@ -1,5 +1,6 @@
 """Thin client for the local Ollama server."""
 import json
+import conversation_jobs as jobs
 import contextvars
 from contextlib import contextmanager
 import os
@@ -37,6 +38,13 @@ def chat(cfg, messages, schema=None, options=None, think=False, on_text=None, ti
     """One chat completion. `think` turns on a reasoning model's thinking phase (e.g. Qwen3);
     models without one ignore it unless they reject the field, in which case we retry without.
     With `on_text`, the reply is streamed and on_text(text_so_far) is called as it grows."""
+    jobs.check()
+    if jobs.CURRENT.get():
+        stage = "router" if schema else "reply"
+        pipeline = cfg.get("local_pipeline", {})
+        setting = pipeline.get(stage, {}) if isinstance(pipeline, dict) else {}
+        cfg = {**cfg, "model": setting.get("model") or cfg["model"]}
+        timeout = max(1, min(180, int(setting.get("timeout_seconds", 30))))
     body = {
         "model": cfg["model"],
         "messages": messages,
@@ -103,6 +111,7 @@ def _post(cfg, body, timeout, on_text=None):
         _log(cfg, body, None, started, error=str(e))
         raise
     _log(cfg, body, data, started)
+    jobs.check()
     # Newer Ollama returns thinking separately; older versions leave <think> blocks in the content.
     return _THINK_RE.sub("", data["message"]["content"]).strip()
 
@@ -143,6 +152,11 @@ def _request(cfg, body, timeout, on_text=None):
 def chat_tools(cfg, messages, tools, options=None, timeout=180):
     """One step of a tool-using conversation. Returns the assistant message dict
     ({"content": str, "tool_calls": [...]})."""
+    jobs.check()
+    if jobs.CURRENT.get():
+        setting = cfg.get("local_pipeline", {}).get("tools", {})
+        cfg = {**cfg, "model": setting.get("model") or cfg["model"]}
+        timeout = max(1, min(180, int(setting.get("timeout_seconds", 30))))
     body = {
         "model": cfg["model"],
         "messages": messages,
@@ -168,6 +182,7 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
         _log(cfg, body, None, started, error=str(e))
         raise LLMError("Ollama に接続できません。Ollama が起動しているか確認してください。")
     _log(cfg, body, data, started)
+    jobs.check()
     msg["content"] = _THINK_RE.sub("", msg.get("content") or "").strip()
     return msg
 
