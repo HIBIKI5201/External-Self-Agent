@@ -9,7 +9,7 @@
       "forbid": ["complete:A", "only:A", "add"]
     },
     {
-      "id": "negation-keep-status-holdout", "split": "holdout", "tags": ["否定"],
+      "id": "negation-keep-status-holdout", "split": "dev", "tags": ["否定", "くだけた依頼"],
       "tasks": [{"key": "A", "title": "資料の修正", "due": "+3"}, {"key": "B", "title": "買い物"}],
       "turns": [{"say": "資料の修正、終わったことにはしないでね。期限はあしたに変えといて"}],
       "expect": {"tasks": {"A": {"status": "todo", "due": "+1"}}, "unchanged": ["B"]},
@@ -192,6 +192,7 @@
     {"id": "shiritori-feature-word-dev", "split": "dev", "tags": ["しりとり"], "tasks": [{"key": "A", "title": "合成の資料"}], "turns": [{"say": "しりとりしよう"}, {"say": "ムード"}, {"say": "アイス"}, {"say": "カラス"}, {"say": "メダカ"}, {"say": "メガネ"}, {"say": "ミルク"}, {"say": "ズボラ"}, {"say": "パンダ"}, {"say": "ツバメ"}, {"say": "モモ"}], "expect": {"no_change": true, "game": "shiritori", "game_turn": "user", "min_game_words": 21}, "forbid": ["any"]},
     {"id": "shiritori-correction-holdout", "split": "holdout", "tags": ["しりとり", "訂正"], "tasks": [], "turns": [{"say": "しりとり始めて"}, {"say": "ムード"}, {"say": "あなたの番だよ、交互に答えて"}, {"say": "アイス"}, {"say": "しりとりをやめて"}], "expect": {"no_change": true, "game": ""}, "forbid": ["any"]},
     {"id": "focus-selection-dev", "split": "dev", "tags": ["操作報告"], "tasks": [{"key": "A", "title": "合成の資料"}], "turns": [{"say": "集中タイマーのタスクを合成の資料にして"}], "expect": {"no_change": true, "focus_task": "A"}, "forbid": ["any"]},
-    {"id": "no-start-claim-holdout", "split": "holdout", "tags": ["操作報告"], "mode": "talk", "tasks": [], "turns": [{"say": "今から本を読む"}], "expect": {"no_change": true, "focus_task": "", "reply_lacks": ["記録:", "始めますね", "選択しておきました", "設定しておいたよ"]}, "forbid": ["any"]}
+    {"id": "no-start-claim-holdout", "split": "holdout", "tags": ["操作報告"], "mode": "talk", "tasks": [], "turns": [{"say": "今から本を読む"}], "expect": {"no_change": true, "focus_task": "", "reply_lacks": ["記録:", "始めますね", "選択しておきました", "設定しておいたよ"]}, "forbid": ["any"]},
+    {"id": "colloquial-due-correction-holdout", "split": "holdout", "tags": ["くだけた依頼"], "tasks": [{"key": "A", "title": "画像の修正", "due": "+4"}, {"key": "B", "title": "買い物"}], "turns": [{"say": "画像の修正、完了にはしないでね。期日だけ明後日に直しといて"}], "expect": {"tasks": {"A": {"status": "todo", "due": "+2"}}, "unchanged": ["B"]}, "forbid": ["complete:A", "only:A", "add"]}
   ]
 }

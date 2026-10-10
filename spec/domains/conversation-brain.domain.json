@@ -60,6 +60,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_truthful_reports\\.py|spec/test/truthful-reports-111\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_colloquial_requests\\.py|spec/test/colloquial-requests-104\\.md)$"
     }
   ],
   "source": "manual",
