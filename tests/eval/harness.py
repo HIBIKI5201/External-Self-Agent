@@ -311,6 +311,14 @@ def score(sc, keys, start, end, turns, today, mode):
         checks.append(_check(f"mode = {exp['mode']}", mode == exp["mode"], mode))
     if exp.get("not_pending"):
         checks.append(_check("nothing left waiting", not db.pending_messages(), len(db.pending_messages())))
+    if "game" in exp:
+        import conversation_game
+        activity = conversation_game.state()
+        checks.append(_check("activity state", activity.get("activity", "") == exp["game"]))
+        if "game_turn" in exp:
+            checks.append(_check("activity turn", activity.get("turn") == exp["game_turn"]))
+        if "min_game_words" in exp:
+            checks.append(_check("activity words", len(activity.get("used", [])) >= exp["min_game_words"]))
     for i, turn in enumerate(sc["turns"]):
         if turn.get("confirm"):  # Es should ask instead of changing anything in this turn
             t = turns[i]

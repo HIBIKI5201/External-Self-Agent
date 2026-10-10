@@ -19,6 +19,7 @@ import choices
 import task_context
 import write_guard
 import conversation_context
+import conversation_game
 
 WEEKDAYS = "月火水木金土日"
 
@@ -1718,6 +1719,11 @@ def _chat(text, cfg, message_id=None):
     else:
         db.set_message_status(message_id, None)
     _progress["message_id"] = message_id
+    game_reply = conversation_game.handle(text)
+    if game_reply is not None:
+        task_context.clear()
+        db.add_message("assistant", game_reply)
+        return {"reply": game_reply, "events": [], "handoffs": [], "intent": "game"}
     proposed = choices.proposed_mode(text)
     if proposed:
         task_context.clear()

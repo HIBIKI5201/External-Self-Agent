@@ -55,7 +55,7 @@ class Sandbox:
             con.execute("DELETE FROM messages")
             con.execute("DELETE FROM memories")
             con.execute("DELETE FROM settings WHERE key LIKE 'pending%' OR key LIKE 'snooze:%' "
-                        "OR key IN ('last_advice', 'chat_mode')")
+                        "OR key IN ('last_advice', 'chat_mode', 'conversation_game')")
             con.execute("INSERT INTO settings(key, value) VALUES('chat_mode', ?)", (self.mode,))
         self.cfg = db.load_config()
         db.sync_projects(self.cfg)

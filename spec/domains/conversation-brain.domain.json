@@ -51,6 +51,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/conversation_context[.]py|tests/test_conversation_context[.]py|spec/test/conversation-context-106[.]md)$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/conversation_game[.]py|tests/test_conversation_game[.]py|spec/test/conversation-game-108[.]md)$"
     }
   ],
   "source": "manual",
