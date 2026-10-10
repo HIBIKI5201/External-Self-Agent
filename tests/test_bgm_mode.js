@@ -20,6 +20,7 @@ const ctx = vm.createContext({$, URL, encodeURIComponent, console, location: {or
   playBgm() {calls.push('play-embed');}, pauseEmbed() {calls.push('pause-embed');},
   isPlaying() {return false;}, media: async action => {calls.push('media:' + action);},
   post: async (path, body) => {calls.push(path + ':' + body.url);},
+  reportPlayback() {},
   say(text, options) {errorOptions = options;}, setTimeout() {},
   esc: value => value, embedVisible() {return true;},
   document: {querySelector() {throw Error('obsolete radio access');}},

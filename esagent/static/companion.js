@@ -460,6 +460,7 @@
   function setMode(mode) {
     if (mode !== bgm.mode && bgm.mode === "embed") pauseEmbed();
     bgm.mode = mode; store.set("bgm.mode", mode);
+    reportPlayback();
     $("#bgm").classList.toggle("winmode", mode !== "embed");
     $("#bgm-win-open").textContent = youtubeUrl(bgm.url)?.hostname === "music.youtube.com" ? "YouTube Musicで開く" : "YouTubeで開く";
     $("#bgm-win-return").disabled = !parseYouTube(bgm.url);
@@ -518,8 +519,39 @@
     sel.value = bgm.url || "";
   }
 
+  // The most recently opened/focused app owns an ephemeral report lease.
+  let playbackToken = "", playbackSequence = 0, playbackGeneration = 0, playbackError = false, playbackSelectionPending = false;
+  async function claimPlayback() {
+    const generation = ++playbackGeneration;
+    playbackToken = "";
+    try {
+      const report = await post("/api/playback/open", {});
+      if (generation !== playbackGeneration) return;
+      playbackToken = report.token; playbackSequence = 0;
+      reportPlayback();
+    } catch {}
+  }
+  function reportPlayback() {
+    if (!playbackToken) return;
+    let data = {}, code = -1;
+    try {
+      if (bgm.ready) { data = bgm.player.getVideoData?.() || {}; code = bgm.player.getPlayerState?.(); }
+    } catch {}
+    const chosen = parseYouTube(bgm.url);
+    if (playbackSelectionPending || (chosen?.id && data.video_id && chosen.id !== data.video_id)) { data = {}; code = -1; }
+    const state = bgm.mode !== "embed" ? "external" : !bgm.url ? "none" : playbackError ? "error"
+      : ({ 1: "playing", 2: "paused", 0: "ended", 3: "buffering" })[code] || "selected";
+    post("/api/playback/state", { token: playbackToken, sequence: ++playbackSequence, state,
+      title: bgm.mode === "embed" ? data.title || "" : "",
+      channel: bgm.mode === "embed" ? data.author || "" : "",
+      video_id: bgm.mode === "embed" ? data.video_id || parseYouTube(bgm.url)?.id || "" : ""
+    }).catch(() => {});
+  }
+
   function setUrl(url) {
+    playbackError = false; playbackSelectionPending = true;
     bgm.url = url; store.set("bgm.url", url); renderPresets();
+    reportPlayback();
     $("#bgm-win-open").textContent = youtubeUrl(url)?.hostname === "music.youtube.com" ? "YouTube Musicで開く" : "YouTubeで開く";
     $("#bgm-win-return").disabled = !parseYouTube(url);
     const v = parseYouTube(url);
@@ -555,6 +587,9 @@
             if (embedVisible()) pending?.(); else pauseEmbed();
           },
           onStateChange: () => {
+            playbackSelectionPending = false;
+            playbackError = false;
+            reportPlayback();
             if (bgm.player.getPlayerState?.() === 1 && !embedVisible()) { pauseEmbed(); return; }
             $("#bgm-play").textContent = isPlaying() ? "⏸" : "▶";
             // Remember a pasted URL once it really plays, with its title.
@@ -564,6 +599,7 @@
             }
           },
           onError: (e) => {
+            playbackError = true; reportPlayback();
             const url = bgm.url;
             say(e.data === 101 || e.data === 150
               ? "この動画はアプリ内での再生が許可されていません。"
@@ -637,6 +673,9 @@
       };
       buildBgm();
       syncBgm();
+      claimPlayback();
+      window.addEventListener("focus", claimPlayback);
+      setInterval(reportPlayback, 5000);
       $("#pet-enabled").onchange = async (e) => {
         try {
           await post("/api/pet/enabled", { enabled: e.target.checked });
