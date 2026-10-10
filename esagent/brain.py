@@ -510,7 +510,8 @@ def _apply(actions, cfg, user_text="", context_text=""):
                           f"（{t['project'] or '未分類'}{' / ' + t['due'] if t['due'] else ''}"
                           f"{' / 🔁' + recurring.describe(t['repeat']) if t.get('repeat') else ''}）")
         elif kind == "update_task":
-            change = _intended_update(db.get_task(task_id), title, due, project, notes, f"{user_text} {context_text}")
+            change = _intended_update(db.get_task(task_id), title, due, project, notes, f"{user_text} {context_text}",
+                                      own=user_text)
             kept = [k for k in change if not guard.allows(task_id, _FIELD_OF.get(k, k))]
             for k in kept:
                 change.pop(k)
@@ -556,15 +557,19 @@ def _apply(actions, cfg, user_text="", context_text=""):
     return events, handoffs, touched
 
 
-def _intended_update(task, title, due, project, notes, said):
+def _intended_update(task, title, due, project, notes, said, own=None):
     """The fields of an update_task the user actually asked to change (#20).
 
     The model fills update_task for anything that sounds related to a task, e.g. a wish about how
     Es should talk becomes the new title of a bug-fix task. Each change needs a sign in the words:
-    a rename needs 名前/タイトル/「…」に変えて, a due date a date word, notes a メモ-like word or the
-    task named in the message, a project move the project's name."""
+    a rename needs 名前/タスク名/「…」に変えて or the new name said before にして, and the name
+    itself in the conversation (#88); a due date a date word, notes a メモ-like word or the task
+    named in the message, a project move the project's name. `said` is the message with the earlier
+    messages it refers to; `own` the message alone."""
+    own = said if own is None else own
     change = {}
-    if title and title != task["title"] and _RENAME_RE.search(said):
+    if title and title != task["title"] and (_RENAME_RE.search(said) or _renamed_to(title, said)) \
+            and _name_grounded(title, own, said):
         change["title"] = title
     if due and due != task["due"] and _DUE_HINT_RE.search(said):
         change["due"] = due
@@ -578,6 +583,9 @@ def _intended_update(task, title, due, project, notes, said):
     # The model copies the instruction around the content: 「メモに図を一枚追加と書いて」 (#80).
     notes = re.sub(r"^(?:メモ|詳細|補足)(?:に|へ|として|[:：])\s*", "", notes or "").strip()
     notes = re.sub(r"\s*(?:と|って)(?:書いて|書く|追記して|残して|メモして)[。\s]*$", "", notes).strip()
+    # The task's own name as its memo is an echo too: 「#1のタスクを週課の交換にして」 became a memo
+    # 「週課交換」 instead of a rename (#88).
+    echo = echo or re.sub(r"\s+", "", notes) == re.sub(r"\s+", "", task["title"] or "")
     if notes and not echo and (_NOTE_HINT_RE.search(said) or (named and _similarity(said, notes) >= 0.5)) \
             and not (task["notes"] or "").rstrip().endswith(notes):
         change["notes_append"] = notes
@@ -746,7 +754,25 @@ _FORGET_RE = re.compile(r"忘れて|後回し|今はいい|いったん置|一�
 _ACK_RE = re.compile(r"もう(動いて|始めて|やって|始まって)|始めたよ|やってるよ|動いてるよ")
 _COMPANY_RE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9一-龥ァ-ヶー]{1,12}社")
 # What an update_task may change: each field needs its own sign in what the user said (#20).
-_RENAME_RE = re.compile(r"名前|タイトル|名称|改名|リネーム|呼び方|」(に|へ)(変え|変更|直|し)")
+_RENAME_RE = re.compile(r"名前|タイトル|名称|タスク名|件名|改名|リネーム|呼び方|」(に|へ)(変え|変更|直|し)")
+
+
+def _name_grounded(title, own, context=""):
+    """The new name comes from the conversation, never from the model alone (#88): from the user's
+    own words, or for 「そうして」 from earlier messages that offer that one name and no other."""
+    flat = lambda s: re.sub(r"\s+", "", s or "")
+    if flat(title) in flat(own):
+        return True
+    if flat(title) not in flat(context):
+        return False
+    titles = {t["title"] for t in db.list_tasks(include_done=True)}
+    offered = set(re.findall(r"[「『]([^」』\n]{1,60})[」』]", context)) - titles
+    return offered <= {title}
+
+
+def _renamed_to(title, said):
+    """「#1のタスクを週課の交換にして」: the new name itself, said right before に/へ + a change verb (#88)."""
+    return bool(title) and re.search(re.escape(title) + r"[」』\"”\s]*(?:に|へ)\s*(?:して|変え|変更|直し|直す|する)", said) is not None
 _DUE_HINT_RE = re.compile(r"\(=\d{4}-\d{2}-\d{2}\)|\d{4}-\d{2}-\d{2}|\d{1,2}[/月]\d|締め?切|期限|期日|〆|延期|前倒し|"
                           r"ずら|延ば|早め|遅ら|それぞれ|ずつ|週|日")
 _NOTE_HINT_RE = re.compile(r"メモ|詳細|補足|追記|書き足|書いて|残して|付け加え|足して|加えて|内容")
@@ -850,11 +876,11 @@ def _action_errors(actions, text, context=''):
                                                   and _similarity(f'{text} {context}', title) < .35):
                 errors.append(f'「{title}」は発言から読み取れません。利用者の内容だけを使ってください')
         if kind == 'update_task' and tid in known and not _intended_update(
-                db.get_task(tid), title, due, _clean(a.get('project')), _clean(a.get('notes')), f'{text} {context}'):
+                db.get_task(tid), title, due, _clean(a.get('project')), _clean(a.get('notes')), f'{text} {context}', own=text):
             errors.append('何を変更する依頼か読み取れません。依頼のある項目だけを指定してください')
         elif kind == 'update_task' and tid in known:
             change = _intended_update(db.get_task(tid), title, due, _clean(a.get('project')),
-                                      _clean(a.get('notes')), f'{text} {context}')
+                                      _clean(a.get('notes')), f'{text} {context}', own=text)
             kept = [_FIELD_LABELS[_FIELD_OF.get(k, k)] for k in change if not guard.allows(tid, _FIELD_OF.get(k, k))]
             if kept:
                 errors.append(f'#{tid} の{"・".join(kept)}は変更しないよう言われています。その項目は空にしてください')
@@ -885,7 +911,7 @@ def _route(cfg, text, today, history):
     return 'update', '', []  # the operation template honestly reports that nothing was applied
 
 
-_PRONOUN_RE = re.compile(r"それ|これ|あれ|その|この|そっち|こっち")
+_PRONOUN_RE = re.compile(r"それ|これ|あれ|その|この|そっち|こっち|そう(?:して|する|しよう|で|にして)")
 
 
 def _reference_context(text, history):
@@ -1417,6 +1443,36 @@ def _action_log_flow(text, history):
             + "\n".join(done[-8:]) + ("\n今の状態:\n" + "\n".join(state) if state else ""))
 
 
+# 「#1のタスクを週課の交換にして」「#1のタスク名を『週課の交換』に変更して」 (#88).
+_EXPLICIT_RENAME_RE = re.compile(
+    r"^\s*#(\d+)\s*(?:番)?\s*(?:の)?\s*(?:タスク(?:名|の名前|のタイトル|の名称)?|名前|タイトル|名称)\s*(?:を|は)\s*"
+    r"[「『\"“]?(?P<name>[^「」『』\"“”\n]{1,100}?)[」』\"”]?\s*(?:に|へ)\s*(?:して|変えて|変更して|直して)"
+    r"(?:ください|ほしい|おいて|ね)?[。！!\s]*$")
+# What 「#1を〇〇にして」 means when 〇〇 is not a name: a state or another field (dates are
+# checked with annotate_dates, so 「週課の交換」 stays a name).
+_STATE_WORD_RE = re.compile(r"(?:未)?完了(?:済み)?|済み?|進行中|着手(?:中)?|保留(?:中)?|やりかけ|todo|done|doing", re.I)
+_FIELD_WORD_RE = re.compile(r"締め?切|期限|期日|メモ|詳細|プロジェクト|未分類|優先")
+
+
+def _explicit_rename(text, guard):
+    """A rename that names the task by number and says the new name: done in code, since the model
+    often turned it into a memo (#88). Anything less clear is left to the model."""
+    m = _EXPLICIT_RENAME_RE.match(text)
+    if not m:
+        return None
+    new = m["name"].strip()
+    task = db.get_task(int(m[1]))
+    if not task or not new or new == task["title"] or _STATE_WORD_RE.fullmatch(new) or _FIELD_WORD_RE.search(new) \
+            or annotate_dates(new, dt.date.today()) != new or re.fullmatch(r"[\d\s/年月日時分:-]+", new) \
+            or any(new.lower() == p["name"].lower() for p in db.list_projects()):
+        return None
+    if not guard.allows(task["id"], "title"):
+        return f"「{task['title']}」の名前は変えないでおくね。", []
+    old, t = task["title"], db.update_task(task["id"], title=new)
+    return (f"「{old}」の名前を「{t['title']}」に変えたよ。",
+            [f"✎ #{t['id']} {t['title']} を更新しました（タイトル: {old} → {t['title']}）"])
+
+
 def _guarded_write_flow(text, annotated, history):
     """Requests the router cannot express or should never guess, decided in code.
 
@@ -1451,6 +1507,9 @@ def _guarded_write_flow(text, annotated, history):
             return f"「{task['title']}」はもう未完了だよ。" + NO_TARGET_NOTE + other, []
         t = db.update_task(task["id"], status="todo")
         return f"「{t['title']}」を未完了に戻したよ。{other}", [f"↺ #{t['id']} {t['title']} を未完了に戻しました"]
+    renamed = _explicit_rename(text, guard)
+    if renamed:
+        return renamed
     if not _OPERATION_RE.search(text):
         return None
     missing = _missing_target(text)

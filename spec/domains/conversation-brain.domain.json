@@ -44,7 +44,7 @@
       "pathPattern": "(^|/)(esagent/task_context\\.py|tests/test_task_context\\.py|spec/test/task-context-50\\.md)$"
     },
     {
-      "pathPattern": "(^|/)tests/test_partial_rerun\\.py$"
+      "pathPattern": "(^|/)tests/test_(partial_rerun|rename)\\.py$"
     }
   ],
   "source": "manual",
