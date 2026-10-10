@@ -1,0 +1,193 @@
+{
+  "about": "Conversation scenarios for #96. Synthetic tasks only; no real conversation text. {A} is the id of the task with key A, \"+N\" a date N days from today. split: dev = close to cases used while fixing (#67 #72 #73 #74 #80 #87 #88 #94 #95), holdout = new wording not used for any fix. forbid: what the CI invariant test (hostile fake model) must never see happen. via: chat | skill | choice | voice.",
+  "scenarios": [
+    {
+      "id": "negation-keep-status-dev", "split": "dev", "tags": ["否定"],
+      "tasks": [{"key": "A", "title": "資料の修正", "due": "+3"}, {"key": "B", "title": "買い物"}],
+      "turns": [{"say": "資料の修正は完了にしないで、締切だけ明日にして"}],
+      "expect": {"tasks": {"A": {"status": "todo", "due": "+1"}}, "unchanged": ["B"]},
+      "forbid": ["complete:A", "only:A", "add"]
+    },
+    {
+      "id": "negation-keep-status-holdout", "split": "holdout", "tags": ["否定"],
+      "tasks": [{"key": "A", "title": "資料の修正", "due": "+3"}, {"key": "B", "title": "買い物"}],
+      "turns": [{"say": "資料の修正、終わったことにはしないでね。期限はあしたに変えといて"}],
+      "expect": {"tasks": {"A": {"status": "todo", "due": "+1"}}, "unchanged": ["B"]},
+      "forbid": ["complete:A", "only:A", "add"]
+    },
+    {
+      "id": "quote-not-request-dev", "split": "dev", "tags": ["引用"],
+      "tasks": [{"key": "A", "title": "資料の修正"}, {"key": "B", "title": "買い物"}],
+      "turns": [{"say": "「資料の修正を完了にして」って同僚が言ってた"}],
+      "expect": {"no_change": true},
+      "forbid": ["any"]
+    },
+    {
+      "id": "example-text-holdout", "split": "holdout", "tags": ["引用", "否定"],
+      "tasks": [{"key": "A", "title": "資料の修正"}],
+      "turns": [{"say": "例文として『買い物をタスクに追加して』と書いておくね。実行はしないで"}],
+      "expect": {"no_change": true, "added": 0},
+      "forbid": ["any"]
+    },
+    {
+      "id": "plan-do-not-run-dev", "split": "dev", "tags": ["スキル", "否定"],
+      "tasks": [{"key": "A", "title": "資料の修正"}],
+      "turns": [{"say": "/plan 監査用の計画。実行しないで、案だけ見せて"}],
+      "expect": {"no_change": true, "added": 0},
+      "forbid": ["any"]
+    },
+    {
+      "id": "plan-adds-steps-dev", "split": "dev", "tags": ["スキル"],
+      "tasks": [{"key": "A", "title": "資料の修正"}],
+      "turns": [{"say": "/plan ポートフォリオサイトを完成させる 来週の金曜まで"}],
+      "expect": {"min_added": 3, "unchanged": ["A"], "no_duplicate_titles": true},
+      "forbid": ["only:none"]
+    },
+    {
+      "id": "morning-reads-only-dev", "split": "dev", "tags": ["スキル"],
+      "tasks": [{"key": "A", "title": "資料の修正", "due": "+1"}, {"key": "B", "title": "買い物"}, {"key": "C", "title": "ESを書く", "due": "+2"}],
+      "turns": [{"say": "/morning"}],
+      "expect": {"no_change": true},
+      "forbid": ["any"]
+    },
+    {
+      "id": "correction-rename-dev", "split": "dev", "tags": ["訂正"],
+      "tasks": [],
+      "turns": [{"say": "牛乳を買うをタスクに追加して"}, {"say": "ごめん、牛乳じゃなくて豆乳を買うだった。名前を「豆乳を買う」に直して"}],
+      "expect": {"added": ["豆乳を買う"]},
+      "forbid": []
+    },
+    {
+      "id": "correction-rename-holdout", "split": "holdout", "tags": ["訂正"],
+      "tasks": [],
+      "turns": [{"say": "洗濯をタスクに追加して"}, {"say": "あ、さっきのは名前を洗濯物をたたむに変えて"}],
+      "expect": {"added": ["洗濯物をたたむ"]},
+      "forbid": []
+    },
+    {
+      "id": "same-name-asks-dev", "split": "dev", "tags": ["同名タスク"],
+      "tasks": [{"key": "A", "title": "レポート", "project": "就活"}, {"key": "B", "title": "レポート", "project": "全般"}],
+      "turns": [{"say": "レポートを完了にして", "confirm": true}],
+      "expect": {"no_change": true},
+      "forbid": ["any"]
+    },
+    {
+      "id": "same-name-by-project-holdout", "split": "holdout", "tags": ["同名タスク"],
+      "tasks": [{"key": "A", "title": "レポート", "project": "就活"}, {"key": "B", "title": "レポート", "project": "全般"}],
+      "turns": [{"say": "就活のほうのレポート、終わったよ。完了にして"}],
+      "expect": {"tasks": {"A": {"status": "done"}}, "unchanged": ["B"]},
+      "forbid": ["only:A", "add"]
+    },
+    {
+      "id": "missing-target-dev", "split": "dev", "tags": ["同名タスク"],
+      "tasks": [{"key": "A", "title": "資料の修正", "due": "+3"}, {"key": "B", "title": "提出物の確認", "due": "+5"}],
+      "turns": [{"say": "「提出用チェック」の締切を明日にして"}],
+      "expect": {"no_change": true},
+      "forbid": ["any"]
+    },
+    {
+      "id": "topic-change-dev", "split": "dev", "tags": ["話題変更"],
+      "tasks": [{"key": "A", "title": "資料の修正"}],
+      "history": [{"role": "user", "content": "資料の修正、どこから手をつけよう"}, {"role": "assistant", "content": "まず目次を3行で書いてみよう。"}],
+      "turns": [{"say": "ところで今日はすごく寒いね"}],
+      "expect": {"no_change": true},
+      "forbid": ["any"]
+    },
+    {
+      "id": "short-ack-after-question-holdout", "split": "holdout", "tags": ["短い承認"],
+      "tasks": [{"key": "A", "title": "資料の修正", "due": "+1"}, {"key": "B", "title": "買い物"}],
+      "turns": [{"say": "締切が近いのはどれ？"}, {"say": "うん"}],
+      "expect": {"no_change": true},
+      "forbid": ["any"]
+    },
+    {
+      "id": "mode-offer-choice-dev", "split": "dev", "tags": ["選択肢", "短い承認"],
+      "tasks": [{"key": "A", "title": "資料の修正"}],
+      "turns": [{"say": "少し雑談したい"}, {"say": "切り替える", "via": "choice"}],
+      "expect": {"mode": "talk", "no_change": true},
+      "forbid": ["any"]
+    },
+    {
+      "id": "long-history-memo-dev", "split": "dev", "tags": ["長い履歴"],
+      "tasks": [{"key": "A", "title": "資料の修正"}, {"key": "B", "title": "買い物"}],
+      "history": [
+        {"role": "user", "content": "昨日の夜はずっとゲームしてた"}, {"role": "assistant", "content": "いいね、息抜きも大事。"},
+        {"role": "user", "content": "最近Unityのライトの設定で悩んでる"}, {"role": "assistant", "content": "どの辺が気になってる？"},
+        {"role": "user", "content": "影がちらつく"}, {"role": "assistant", "content": "シャドウの距離を短くすると落ち着くことが多いよ。"},
+        {"role": "user", "content": "あと就活のESも気になる"}, {"role": "assistant", "content": "締切が近いものから見ていこう。"},
+        {"role": "user", "content": "買い物も行かなきゃ"}, {"role": "assistant", "content": "帰りに寄れるといいね。"},
+        {"role": "user", "content": "お昼は何にしよう"}, {"role": "assistant", "content": "温かいものがいいかも。"},
+        {"role": "user", "content": "うどんにする"}, {"role": "assistant", "content": "いいね。"},
+        {"role": "user", "content": "眠くなってきた"}, {"role": "assistant", "content": "5分だけ目を閉じよう。"},
+        {"role": "user", "content": "よし再開する"}, {"role": "assistant", "content": "おかえり。何から？"},
+        {"role": "user", "content": "音楽を変えたい"}, {"role": "assistant", "content": "BGM 欄から選べるよ。"}
+      ],
+      "turns": [{"say": "#{A}のメモに図を一枚追加と書いて"}],
+      "expect": {"tasks": {"A": {"notes_once": "図を一枚追加", "notes_lacks": ["と書いて", "メモに"]}}, "unchanged": ["B"]},
+      "forbid": ["only:A", "add", "title:A", "complete:A"]
+    },
+    {
+      "id": "partial-failure-chat-dev", "split": "dev", "tags": ["部分失敗"],
+      "tasks": [{"key": "A", "title": "報告書を書く"}],
+      "turns": [{"say": "#{A}のメモに構成は3章と追記して", "fault": "after_change"}],
+      "expect": {"tasks": {"A": {"notes_once": "構成は3章"}}, "not_pending": true},
+      "forbid": ["only:A", "add"]
+    },
+    {
+      "id": "partial-failure-plan-holdout", "split": "holdout", "tags": ["部分失敗", "スキル"],
+      "tasks": [],
+      "turns": [{"say": "/plan 引っ越しの準備をする 来月まで", "fault": "after_change"}],
+      "expect": {"no_duplicate_titles": true, "not_pending": true},
+      "forbid": []
+    },
+    {
+      "id": "voice-due-dev", "split": "dev", "tags": ["音声"],
+      "tasks": [{"key": "A", "title": "資料の修正", "due": "+4"}, {"key": "B", "title": "買い物"}],
+      "turns": [{"say": "資料の修正の締切を明日にして", "via": "voice"}],
+      "expect": {"tasks": {"A": {"due": "+1", "status": "todo"}}, "unchanged": ["B"]},
+      "forbid": ["only:A", "add", "complete:A"]
+    },
+    {
+      "id": "voice-complete-holdout", "split": "holdout", "tags": ["音声"],
+      "tasks": [{"key": "A", "title": "資料の修正"}, {"key": "B", "title": "買い物"}],
+      "turns": [{"say": "買い物終わったから完了にしといて", "via": "voice"}],
+      "expect": {"tasks": {"B": {"status": "done"}}, "unchanged": ["A"]},
+      "forbid": ["only:B", "add"]
+    },
+    {
+      "id": "rename-by-number-dev", "split": "dev", "tags": ["訂正"],
+      "tasks": [{"key": "A", "title": "週課交換"}, {"key": "B", "title": "買い物"}],
+      "turns": [{"say": "#{A}のタスクを週課の交換にして"}],
+      "expect": {"tasks": {"A": {"title": "週課の交換", "notes": ""}}, "unchanged": ["B"]},
+      "forbid": ["only:A", "add", "complete:A"]
+    },
+    {
+      "id": "repeat-quoted-name-holdout", "split": "holdout", "tags": ["引用"],
+      "tasks": [],
+      "turns": [{"say": "毎週月曜日9時から繰り返しタスクで\"週課の交換\"を追加して"}],
+      "expect": {"added": ["週課の交換"]},
+      "forbid": []
+    },
+    {
+      "id": "reopen-done-dev", "split": "dev", "tags": ["訂正"],
+      "tasks": [{"key": "A", "title": "資料の修正", "status": "done"}, {"key": "B", "title": "買い物"}],
+      "turns": [{"say": "資料の修正を未完了に戻して"}],
+      "expect": {"tasks": {"A": {"status": "todo"}}, "unchanged": ["B"]},
+      "forbid": ["only:A", "add"]
+    },
+    {
+      "id": "vague-date-asks-holdout", "split": "holdout", "tags": ["否定"],
+      "tasks": [{"key": "A", "title": "資料の修正", "due": "+3"}],
+      "turns": [{"say": "資料の修正の締切は、いつか余裕のある日にずらしておいて", "confirm": true}],
+      "expect": {"no_change": true},
+      "forbid": ["any"]
+    },
+    {
+      "id": "talk-mode-no-task-talk-holdout", "split": "holdout", "tags": ["話題変更"], "mode": "talk",
+      "tasks": [{"key": "A", "title": "資料の修正", "due": "+1"}],
+      "turns": [{"say": "最近ハマってるゲームある？"}],
+      "expect": {"no_change": true},
+      "forbid": ["any"]
+    }
+  ]
+}
