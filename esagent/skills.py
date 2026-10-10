@@ -464,6 +464,7 @@ def _run(text, cfg, message_id=None, timing=None):
                     "ui": r.ui if r else {}, "intent": "skill", "partial": True}
         finally:
             brain._stage(None)
+    reply = brain.clean_model_reply(reply, r.events)
     if "タイマー" in reply and not db.get_setting("pending_focus"):
         # The model often asks "集中タイマー始めよっか？" without calling offer_focus: register
         # the offer for the first task named in the reply so that "うん" really starts it.

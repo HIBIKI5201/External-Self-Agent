@@ -74,7 +74,7 @@ def note_commit(statements):
     token = CURRENT.get()
     written = any(_WRITING.search(sql.strip()) or re.match(r"DELETE FROM messages", sql.strip(), re.I) or
                   (re.search(r"\bsettings\b", sql, re.I) and
-                   re.search(r"(?:VALUES\s*\(\s*|key\s*=\s*)'(?:pomodoro|chat_mode|voice)'", sql, re.I))
+                   re.search(r"(?:VALUES\s*\(\s*|key\s*=\s*)'(?:pomo|chat_mode|voice)'", sql, re.I))
                   for sql in statements)
     if token and written:
         token["committed"] = True
