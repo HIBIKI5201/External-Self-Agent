@@ -18,6 +18,7 @@ import repeat_chat
 import choices
 import task_context
 import write_guard
+import conversation_context
 
 WEEKDAYS = "月火水木金土日"
 
@@ -812,25 +813,7 @@ def conversation(history, budget):
     exchanges (Issue #12). Action records (role "notice", e.g. "＋ #12 A社のES提出") are attached
     to the reply they belong to, so the model knows what was actually done.
     """
-    turns = []
-    for m in history:
-        if m["role"] == "notice":
-            if turns and turns[-1]["role"] == "assistant":
-                turns[-1]["content"] += f"\n（記録: {m['content']}）"
-            continue
-        if m["role"] in ("user", "assistant"):
-            turns.append({"role": m["role"], "content": m["content"]})
-    picked, used = [], 0
-    for t in reversed(turns):
-        cost = estimate_tokens(t["content"])
-        if used + cost > budget:
-            break
-        picked.append(t)
-        used += cost
-    picked.reverse()
-    while picked and picked[0]["role"] != "user":
-        picked.pop(0)
-    return picked
+    return conversation_context.select(history, budget)
 
 
 def _budget(cfg):
@@ -948,7 +931,7 @@ def _without_titles(text):
 def _route_once(cfg, text, today, history, feedback):
     """Stage 1: decide intent and task changes (JSON, no prose)."""
     messages = [{"role": "system", "content": _router_prompt(today)}]
-    messages += conversation(history, int(_budget(cfg) * 0.75))
+    messages += conversation_context.augment(messages + feedback, text, cfg, history, int(_budget(cfg) * 0.75))
     messages.append({"role": "user", "content": text})
     messages += feedback
     raw = llm.chat(cfg, messages, schema=ROUTER_SCHEMA, options={"temperature": 0.1},
@@ -1204,7 +1187,7 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     messages = [{"role": "system", "content": _responder_prompt(today, intent, text, focus, events)}]
     for q, a in _STYLE_EXAMPLES[intent]:
         messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
-    messages += conversation(history, _budget(cfg))
+    messages += conversation_context.augment(messages, text, cfg, history, _budget(cfg))
     evidence = _recall_evidence(text)
     if evidence:
         messages = [{"role": "system", "content": "Quote the following user statement verbatim as your answer. Output only this statement; do not substitute other attributes:\n" + evidence[0]}]
@@ -1331,7 +1314,8 @@ def _recall_evidence(text, before_id=None):
     with db.connect() as con:
         rows = con.execute("SELECT content FROM messages WHERE role = 'user' AND id < ? AND instr(content, ?) > 0 ORDER BY id DESC",
                            (before_id if before_id is not None else 2**63 - 1, topic)).fetchall()
-    sources = [row['content'] for row in rows] + [mem['content'] for mem in db.list_memories()]
+    deleted = conversation_context.deleted_sources()
+    sources = [row['content'] for row in rows if conversation_context.digest(row['content']) not in deleted] + [mem['content'] for mem in db.list_memories()]
     # A previous question is not evidence of an attribute's value.
     return [s for s in sources if re.search(re.escape(topic) + r'(?:は|って|[:：])', s)
             and not re.search(r'[？?]|教えて|答えて|何だっけ|なんだっけ|分からなければ|(?:は|って)(?:何|なん)|覚えてる', s)
@@ -1612,6 +1596,7 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
     if selection is None and message_id is None and is_status_question(text):
         return _status_answer(text, queued_at, received)
     with choices.lock, _lock:
+        conversation_context.STATS.set({})
         started = db.now()
         _stage("判断中")
         _progress.update(text=text, message_id=message_id)

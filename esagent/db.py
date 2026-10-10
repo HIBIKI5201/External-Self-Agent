@@ -419,6 +419,17 @@ def list_memories():
 
 def delete_memory(memory_id):
     with connect() as con:
+        row = con.execute("SELECT content FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        if not row:
+            return False
+        import hashlib
+        prior = con.execute("SELECT value FROM settings WHERE key = 'deleted_memory_sources'").fetchone()
+        hashes = set(json.loads(prior[0] or "[]")) if prior else set()
+        for source in con.execute("SELECT content FROM messages WHERE role = 'user' AND instr(content, ?) > 0",
+                                  (row["content"],)):
+            hashes.add(hashlib.sha256(source[0].encode("utf-8")).hexdigest())
+        con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('deleted_memory_sources', ?)",
+                    (json.dumps(sorted(hashes)),))
         return con.execute("DELETE FROM memories WHERE id = ?", (memory_id,)).rowcount > 0
 
 

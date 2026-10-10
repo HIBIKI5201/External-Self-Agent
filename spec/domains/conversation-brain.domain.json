@@ -48,6 +48,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/eval/[^/]+|tests/test_eval_invariants\\.py|docs/conversation-eval\\.md|spec/test/conversation-eval-96\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/conversation_context[.]py|tests/test_conversation_context[.]py|spec/test/conversation-context-106[.]md)$"
     }
   ],
   "source": "manual",

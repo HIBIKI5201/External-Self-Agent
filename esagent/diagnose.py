@@ -136,6 +136,8 @@ def metric(value):
 
 
 def read_models(paths, since, until):
+    context_keys = ("history_messages", "history_tokens", "excluded_messages", "shortened_groups", "retrieved_sources", "summary_sources", "budget_tokens", "input_tokens", "excluded_for_budget")
+    context_values = {k: [] for k in context_keys}
     scopes, groups, all_rows = [], {}, []
     for path in paths:
         scope = file_scope(path.name)
@@ -155,6 +157,12 @@ def read_models(paths, since, until):
                         scope["outside_period"] += 1
                         continue
                     scope["selected"] += 1
+                    context = row.get("context")
+                    if isinstance(context, dict):
+                        for k in context_keys:
+                            value = metric(context.get(k))
+                            if value is not None:
+                                context_values[k].append(value)
                     safe = {k: metric(row.get(k)) for k in METRICS}
                     safe["failed"] = bool(row.get("error"))
                     key = (model_label(row.get("model")), row.get("kind") if row.get("kind") in
@@ -168,7 +176,7 @@ def read_models(paths, since, until):
         return {"count": len(rows), "failed": sum(r["failed"] for r in rows),
                 **{k: stats([r[k] for r in rows if r[k] is not None]) for k in METRICS}}
 
-    return {"scope": scopes, **summary(all_rows),
+    return {"scope": scopes, **summary(all_rows), "context": {k: stats(v) for k, v in context_values.items()},
             "by_model_kind": [{"model": model, "kind": kind, **summary(rows)}
                               for (model, kind), rows in sorted(groups.items())],
             "availability": "available" if all_rows else "no_records_in_period",
@@ -243,6 +251,7 @@ def readable(report):
                   f"処理待ち={show(row['processing_queue_ms'])} 返答作成={show(row['response_generation_ms'])} ms "
                   f"待ち理由={row['wait_reason']}"]
     lines.append(f"モデル要求: {models['count']} / 失敗: {models['failed']}")
+    lines.append("文脈（件数/推定トークン。本文なし）: " + json.dumps(models.get("context", {}), ensure_ascii=False))
     lines += [k + ": " + distribution(models[k]) for k in METRICS]
     for row in models["by_model_kind"]:
         lines.append(f"  モデル={row['model']} 種別={row['kind']} 件数={row['count']} 失敗={row['failed']}")
