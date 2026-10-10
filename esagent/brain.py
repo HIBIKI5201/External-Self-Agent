@@ -475,6 +475,9 @@ def _apply(actions, cfg, user_text="", context_text=""):
         if kind == "complete_task" and not guard.allows(task_id, "complete"):
             events.append(f"・ #{task_id} {db.get_task(task_id)['title']} は完了にしないよう言われたので変えていません")
             continue
+        if kind == "complete_task" and not _COMPLETE_HINT_RE.search(f"{user_text} {context_text}"):
+            events.append(f"・ #{task_id} {db.get_task(task_id)['title']} を完了にする依頼が見当たらないので、変えていません")
+            continue
 
         if kind == "add_task":
             if not title:
@@ -731,6 +734,11 @@ def set_mode(mode):
 _WISH_RE = re.compile(r"欲しい|ほしい|あればいい|あったらいい|いいな$|いいなあ|できたらいい|"
                       r"あった方が|あったほうが|方がいい|ほうがいい|方が良い|ほうが良い|と思う")
 _YES_RE = re.compile(r"^(はい|うん|そうだね|そうして|お願い|おねがい|OK|ok|いいよ|それで|よろしく)")
+# Completing a task needs words that say it is done, like any other change (#20). A task named
+# for its memo or due date is not a request to complete it (#96: found with the evaluation's
+# stand-in model, which completed tasks named for other reasons).
+_COMPLETE_HINT_RE = re.compile(r"完了|終わ|おわ|済|すんだ|片付|かたづ|できた|出来た|やった|やり終|出した|提出し|"
+                               r"送った|送信した|チェック|done|Done|DONE")
 _LIST_LINE_RE = re.compile(r"^\s*(\d+[.．)]|[・\-*])\s*\S", re.M)
 _ASK_NEXT_RE = re.compile(r"何(を|から)|どれ(を|から)|おすすめ|オススメ|次は|やること|手伝って")
 _STATUS_RE = re.compile(r"どこまで|進捗|状況|できてる|出来て|進んで|終わってる")
@@ -865,6 +873,8 @@ def _action_errors(actions, text, context=''):
                           '特定できなければ actions を [] にしてください')
         elif kind == 'complete_task' and not guard.allows(tid, 'complete'):
             errors.append(f'#{tid} は完了にしないよう言われています。この操作は出さないでください')
+        elif kind == 'complete_task' and not _COMPLETE_HINT_RE.search(f'{text} {context}'):
+            errors.append(f'#{tid} を完了にする依頼は発言にありません。依頼された項目だけを変更してください')
         if due and (not db.valid_date(due) or due < dt.date.today().isoformat()):
             errors.append(f'締切 {due} は不正または過去の日付です。今日以降にしてください')
         elif due and not write_guard.due_grounded(due, f'{text} {context}'):

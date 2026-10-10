@@ -45,6 +45,9 @@
     },
     {
       "pathPattern": "(^|/)tests/test_(partial_rerun|rename)\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/eval/[^/]+|tests/test_eval_invariants\\.py|docs/conversation-eval\\.md|spec/test/conversation-eval-96\\.md)$"
     }
   ],
   "source": "manual",
