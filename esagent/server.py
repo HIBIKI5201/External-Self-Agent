@@ -2,7 +2,6 @@
 import html
 import json
 import logging
-import logging.handlers
 import os
 import re
 import sys
@@ -35,11 +34,13 @@ import youtube  # noqa: E402
 import choices  # noqa: E402
 import task_context  # noqa: E402
 import voice  # noqa: E402
+import runtime_log
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
 brain._status_cfg = CFG
 log = logging.getLogger("esagent")
+traffic = runtime_log.Traffic(log)
 
 
 def state():
@@ -101,10 +102,12 @@ CALLBACK_PAGE = """<!doctype html><meta charset="utf-8"><title>E.S. Agent</title
 class Handler(BaseHTTPRequestHandler):
     server_version = "EsAgent/0.1"
 
+    def log_request(self, code="-", size="-"):
+        traffic.request(self.command, self.path, code)
+
     def log_message(self, fmt, *args):
-        # OAuth callbacks carry a one-time code and state; keep them out of the log.
-        line = re.sub(r"(code|state)=[^&\s\"]+", r"\1=***", fmt % args)
-        log.info("%s %s", self.address_string(), line)
+        # HTTP protocol errors can contain arbitrary request text; never record it.
+        log.warning("HTTP protocol error")
 
     def _send(self, code, obj=None, body=None, ctype="application/json; charset=utf-8"):
         data = body if body is not None else json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -458,10 +461,15 @@ def _recurring_loop():
         time.sleep(60)
 
 
+def _log_loop():
+    while True:
+        time.sleep(60)
+        traffic.checkpoint()
+
+
 def main():
     os.makedirs(db.DATA_DIR, exist_ok=True)
-    handler = logging.handlers.RotatingFileHandler(
-        os.path.join(db.DATA_DIR, "esagent.log"), maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+    handler = runtime_log.handler(db.DATA_DIR, CFG)
     logging.basicConfig(level=logging.INFO, handlers=[handler],
                         format="%(asctime)s %(levelname)s %(message)s")
     db.init()
@@ -472,6 +480,8 @@ def main():
     except OSError:
         log.warning("port %s is in use; another EsAgent is probably running", CFG["port"])
         return
+    traffic.since = time.monotonic()
+    threading.Thread(target=_log_loop, name="log-checkpoint", daemon=True).start()
     gsync.start(CFG)
     linked_todos.start(CFG)
     threading.Thread(target=_recurring_loop, name="recurring", daemon=True).start()
