@@ -49,7 +49,14 @@ def in_period(at, since, until):
 
 def file_scope(name):
     return {"file": name, "status": "ok", "records": 0, "selected": 0,
-            "skipped": 0, "outside_period": 0}
+            "skipped": 0, "outside_period": 0, "oldest": None, "latest": None}
+
+
+def observe(scope, at):
+    if at is not None:
+        value = at.isoformat()
+        scope["oldest"] = min(scope["oldest"], value) if scope["oldest"] else value
+        scope["latest"] = max(scope["latest"], value) if scope["latest"] else value
 
 
 def unavailable(path):
@@ -91,6 +98,7 @@ def read_messages(path, since, until, top):
         if sent is None or not isinstance(row["id"], int):
             scope["skipped"] += 1
             continue
+        observe(scope, sent)
         if not in_period(sent, since, until):
             scope["outside_period"] += 1
             continue
@@ -153,6 +161,7 @@ def read_models(paths, since, until):
                     except (ValueError, TypeError, RecursionError):
                         scope["skipped"] += 1
                         continue
+                    observe(scope, timestamp(row["at"]))
                     if not in_period(timestamp(row["at"]), since, until):
                         scope["outside_period"] += 1
                         continue
@@ -184,7 +193,8 @@ def read_models(paths, since, until):
 
 
 def read_server(paths, since, until):
-    scopes, warnings, errors = [], [], []
+    scopes, warnings, errors, intervals = [], [], [], []
+    statuses, poll_count, partial_bins = {}, 0, 0
     for path in paths:
         scope = file_scope(path.name)
         scope["continuation_lines"] = 0
@@ -195,9 +205,13 @@ def read_server(paths, since, until):
                     match = HEADER.match(line)
                     if not match:
                         scope["continuation_lines"] += 1
-                        continue  # tracebacks and message bodies never leave this reader
+                        continue
                     scope["records"] += 1
                     at = timestamp(match[1])
+                    observe(scope, at)
+                    heartbeat = re.search(r" log heartbeat window_seconds=(\d+(?:\.\d+)?)$", line.strip())
+                    if at and heartbeat and 0 < float(heartbeat[1]) <= 600:
+                        intervals.append((at - dt.timedelta(seconds=float(heartbeat[1])), at))
                     if at is None:
                         scope["skipped"] += 1
                     elif not in_period(at, since, until):
@@ -208,10 +222,42 @@ def read_server(paths, since, until):
                             warnings.append(at.isoformat())
                         elif match[2] in ("ERROR", "CRITICAL"):
                             errors.append(at.isoformat())
+                        http = re.search(r" HTTP (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|OTHER) \S+ ([1-5]\d\d)$", line.strip())
+                        # Also read the older BaseHTTPRequestHandler format without exporting its text.
+                        http = http or re.search(r'" [1-5]\d\d ', line)
+                        if http:
+                            code = http[1] if http.lastindex else re.search(r'" ([1-5]\d\d) ', line)[1]
+                            statuses[code] = statuses.get(code, 0) + 1
+                        summary = re.search(r" poll summary GET /api/[\w/]+ 200 count=(\d+) window_seconds=(\d+(?:\.\d+)?)$", line.strip())
+                        if summary:
+                            start = at - dt.timedelta(seconds=float(summary[2]))
+                            if float(summary[2]) > 0 and (since is None or start >= since):
+                                poll_count += int(summary[1])
+                            else:
+                                partial_bins += 1
         except OSError:
             scope["status"] = unavailable(path)
+    oldest = min((r["oldest"] for r in scopes if r["oldest"]), default=None)
+    latest = max((r["latest"] for r in scopes if r["latest"]), default=None)
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1] + dt.timedelta(seconds=1):
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    requested_end = until or dt.datetime.now().astimezone()
+    covered = since is not None and any(a <= since and b >= requested_end for a, b in merged)
+    readable_inputs = all(r["status"] == "ok" and not r["skipped"] for r in scopes)
+    coverage = "covered" if covered and readable_inputs else "unverified" if since or until else "unbounded"
     return {"scope": scopes, "warning_count": len(warnings), "error_count": len(errors),
-            "warning_timestamps": sorted(warnings), "error_timestamps": sorted(errors)}
+            "warning_timestamps": sorted(warnings), "error_timestamps": sorted(errors),
+            "http_status_counts": statuses, "poll_successes_in_complete_windows": poll_count,
+            "partial_poll_windows": partial_bins, "coverage": {
+                "oldest": oldest, "latest": latest, "status": coverage,
+                "missing_start_seconds": span(since, timestamp(oldest)) / 1000 if since and oldest and timestamp(oldest) > since else (None if not oldest else 0),
+                "missing_end_seconds": span(timestamp(latest), requested_end) / 1000 if latest and timestamp(latest) < requested_end else (None if not latest else 0),
+                "note": "要求期間の全体は未検証。欠損・旧ログ・起動停止や内部の空白を異常なしとは扱えません。" if coverage == "unverified" else
+                        "保持されたチェックポイントの期間を確認。実行中ログはファイル間の同時点スナップショットではありません。"}}
 
 
 def diagnose(data_dir, since=None, until=None, top=10):
@@ -259,9 +305,15 @@ def readable(report):
     lines += [f"サーバー WARNING: {server['warning_count']} / ERROR・CRITICAL: {server['error_count']}",
               "WARNING 時刻: " + ", ".join(server["warning_timestamps"]),
               "ERROR 時刻: " + ", ".join(server["error_timestamps"]), "分析範囲:"]
+    coverage = server["coverage"]
+    lines += [f"サーバーログ保持: 最古={coverage['oldest'] or '不明'} / 最新={coverage['latest'] or '不明'} / {coverage['status']}",
+              f"要求期間の不足: 前方={coverage['missing_start_seconds']}秒 / 後方={coverage['missing_end_seconds']}秒",
+              coverage["note"], "HTTP状態件数: " + json.dumps(server["http_status_counts"]),
+              f"集約した成功ポーリング: {server['poll_successes_in_complete_windows']}（期間の一部だけ重なる集約={server['partial_poll_windows']}）"]
     for scope in [messages["scope"], *models["scope"], *server["scope"]]:
         lines.append(f"  {scope['file']}: {scope['status']} 読込={scope['records']} "
                      f"対象={scope['selected']} 期間外={scope['outside_period']} スキップ={scope['skipped']}")
+        lines.append(f"    最古={scope['oldest'] or '不明'} / 最新={scope['latest'] or '不明'}")
         if "missing_columns" in scope:
             lines.append("    不足列=" + (", ".join(scope["missing_columns"]) or "なし") +
                          f" 不正時刻={scope['invalid_timestamps']}")

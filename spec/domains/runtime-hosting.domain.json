@@ -48,6 +48,9 @@
     },
     {
       "pathPattern": "(^|/)(VERSION|CHANGELOG\\.md|spec/test/release-0\\.2\\.0\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/runtime_log\\.py|tests/test_log_retention\\.py|spec/test/log-retention-82\\.md)$"
     }
   ],
   "source": "manual",

@@ -11,6 +11,8 @@
     "tools": {"model": null, "timeout_seconds": 30}
   },
   "llm_log": true,
+  "server_log_max_bytes": 1000000,
+  "server_log_backups": 7,
   "google_sync_minutes": 3,
   "calendar_name": "EsAgent 締切",
   "calendar_reminder_minutes": 900,
