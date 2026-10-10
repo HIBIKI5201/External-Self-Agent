@@ -331,6 +331,15 @@ Arguments the user typed after /{skill['name']}: {args or "(none)"}
                                 cfg.get("history_tokens", 2000) // 2)
     messages = [{"role": "system", "content": system}, *recent,
                 {"role": "user", "content": brain.annotate_dates(f"/{skill['name']} {args}".strip(), today)}]
+    try:
+        return _steps(cfg, messages, tools, run), run
+    except llm.LLMError as e:
+        e.run = run  # what already changed, so the caller does not run it all again (#95)
+        raise
+
+
+def _steps(cfg, messages, tools, run):
+    """Let the model follow the steps through the tools; returns the reply."""
     reply = ""
     failures = 0
     for _ in range(MAX_STEPS):
@@ -372,7 +381,7 @@ Arguments the user typed after /{skill['name']}: {args or "(none)"}
         messages.append({"role": "user", "content": "ここまでの結果をもとに、ユーザーへの返事を書いてください。"})
         reply = llm.chat(cfg, [m for m in messages if m["role"] != "tool" or m.get("content")],
                          options={"temperature": 0.3, "num_predict": 400})
-    return reply or "（終わりました）", run
+    return reply or "（終わりました）"
 
 
 # ---- entry point ---------------------------------------------------------------
@@ -440,9 +449,17 @@ def _run(text, cfg, message_id=None, timing=None):
         try:
             reply, r = _procedure(skill, args.strip(), cfg, message_id)
             r.events[:0] = saved
-        except llm.LLMError:
-            db.set_message_status(message_id, "pending")
-            return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": brain.PENDING_NOTE}
+        except llm.LLMError as e:
+            r = getattr(e, "run", None)
+            done = saved + (r.events if r else [])
+            if not brain.changed(done, r.handoffs if r else ()) and not (r and r.ui):
+                db.set_message_status(message_id, "pending")  # nothing changed yet: safe to run later
+                return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": brain.PENDING_NOTE}
+            # Part of the steps already changed tasks; running the skill again would repeat them (#95).
+            db.add_message("assistant", brain.PARTIAL_NOTE)
+            db.add_message("notice", "\n".join(done))
+            return {"reply": brain.PARTIAL_NOTE, "events": done, "handoffs": r.handoffs if r else [],
+                    "ui": r.ui if r else {}, "intent": "skill", "partial": True}
         finally:
             brain._stage(None)
     if "タイマー" in reply and not db.get_setting("pending_focus"):

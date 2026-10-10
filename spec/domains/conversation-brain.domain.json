@@ -42,6 +42,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/task_context\\.py|tests/test_task_context\\.py|spec/test/task-context-50\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_partial_rerun\\.py$"
     }
   ],
   "source": "manual",

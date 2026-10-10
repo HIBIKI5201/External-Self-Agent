@@ -1643,6 +1643,15 @@ def _status_answer(text, queued_at, received):
 
 
 PENDING_NOTE = "モデルの準備ができたら、このメッセージに返事するね（自動）。"
+# A message is kept for a later answer only while nothing has changed yet; once something has,
+# running it again would repeat the change, so Es says what she did and stops (#95).
+PARTIAL_NOTE = ("変更は下の記録のとおり済ませたよ。ただ、途中でモデルにつながらなくなって、その先はできていないの。"
+                "続きがあれば、もう一度頼んでね。")
+
+
+def changed(events, handoffs=()):
+    """Whether a run already changed something (record lines other than ⚠ warnings)."""
+    return bool(handoffs) or any(not e.startswith("⚠") for e in events)
 
 
 def _chat(text, cfg, message_id=None):
@@ -1783,7 +1792,14 @@ def _chat(text, cfg, message_id=None):
                 if which:  # 「それを終わったことにして」 after two tasks were discussed (#67, #72)
                     events = ["⚠ " + "".join(f"「{w}」" for w in which) + "のどれのことか分からなかったため実行しませんでした"]
                 _stage("返事を考え中")
-                reply = _respond(cfg, annotated, today, history, intent, focus, events, touched)
+                try:
+                    reply = _respond(cfg, annotated, today, history, intent, focus, events, touched)
+                except llm.LLMError:
+                    if not changed(events, handoffs):
+                        raise
+                    # The tasks already changed: answering later would run the message again
+                    # and repeat the change (#95). Say what was done instead.
+                    reply = PARTIAL_NOTE
     except llm.LLMError:
         # Keep the message; the server answers it once the model is ready.
         db.set_message_status(message_id, "pending")
