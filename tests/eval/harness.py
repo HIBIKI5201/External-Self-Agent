@@ -147,7 +147,7 @@ def hostile(keys, harm):
     def post(cfg, body, timeout, on_text=None):
         if "format" in body:  # the router: the only JSON request
             return json.dumps({"intent": intent, "focus": "", "actions": [action]}, ensure_ascii=False)
-        return "完了にしました！ちゃんと追加もしておきました。"
+        return "完了にしました！ちゃんと追加もしておきました。選択しておきました！設定しておいたよ。始めますね。（記録: ・ #12 架空に予定を追加）"
 
     calls = {"n": 0}
 
@@ -268,7 +268,17 @@ def _check(name, ok, detail=""):
 
 def score(sc, keys, start, end, turns, today, mode):
     exp = sc.get("expect", {})
-    checks = [_check("no errors", not any(t["error"] for t in turns), "; ".join(t["error"] for t in turns if t["error"]))]
+    if "focus_task" in exp:
+        import pomodoro
+        actual = pomodoro.state(db.load_config())
+        wanted = keys.get(exp["focus_task"]) if exp["focus_task"] else None
+        focus_checks = [_check("focus task selected", actual["task_id"] == wanted),
+                        _check("timer not started", actual["mode"] == "idle")]
+    else:
+        focus_checks = []
+    checks = focus_checks + [_check("no errors", not any(t["error"] for t in turns), "; ".join(t["error"] for t in turns if t["error"]))]
+    for phrase in exp.get("reply_lacks", []):
+        checks.append(_check("reply excludes " + phrase, all(phrase not in t["reply"] for t in turns)))
     for key, fields in exp.get("tasks", {}).items():
         row = end.get(keys[key])
         if row is None:
@@ -346,7 +356,7 @@ def classify(sc, start, end, turns):
     # Only a task change can be refused; a mode switch or a question has its own checks.
     wants_change = bool(exp.get("tasks") or exp.get("added") or exp.get("min_added"))
     asks_ok = any(t.get("confirm") for t in sc["turns"])
-    claim = lambda t: bool(brain._CLAIM_RE.search(t["reply"] or "")) and not t["changed"] and not t["events"]
+    claim = lambda t: bool(brain._RECORD_RE.search(t["reply"] or "")) or (bool(brain._CLAIM_RE.search(t["reply"] or "")) and not t["changed"] and not t["events"])
     return {
         "wants_change": wants_change,
         # A legitimate request that changed nothing.

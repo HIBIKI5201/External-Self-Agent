@@ -764,8 +764,11 @@ _ADD_HINT_RE = re.compile(r"追加|登録|まで|締め?切|〆|しなきゃ|し
                           r"タスク(を|に)?(作|追加|登録|して|化)|作ろう|作って")
 _SUMMARY_RE = re.compile(r"理解|まとめ|整理|一覧|全体|把握|状況")
 _EXPLICIT_ADD_RE = re.compile(r"タスク(を|に)?(作|追加|登録|して|化)|(追加|登録)して")
-_CLAIM_RE = re.compile(r"(追加|登録|作成|更新|完了に|変更|分類|移動|設定|削除)(しました|しておきました|したよ|しといた|済み)|"
-                       r"タイマーを?[^。\n]{0,8}(スタート|開始)(します|しました|したよ|！|!)")
+_CLAIM_RE = re.compile(
+    r"(?:追加|登録|作成|更新|完了に|変更|分類|移動|設定|削除|選択|保存|開始|スタート)"
+    r"(?:しました|します(?:ね|よ)?|しておきました|しておいた(?:よ)?|した(?:よ)?(?!ら|場合|とき|時|方|ほう)|しといた|済み)"
+    r"|始め(?:ます(?:ね|よ)?|ました|ておきました|ておいた(?:よ)?)")
+_RECORD_RE = re.compile(r"(?:記録\s*[:：]|(?:^|\n)\s*[＋+✎✔→↺・]\s*#\d+)")
 _FORGET_RE = re.compile(r"忘れて|後回し|今はいい|いったん置|一旦置|触れないで|出さないで")
 _ACK_RE = re.compile(r"もう(動いて|始めて|やって|始まって)|始めたよ|やってるよ|動いてるよ")
 _COMPANY_RE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9一-龥ァ-ヶー]{1,12}社")
@@ -1088,6 +1091,8 @@ Memo: {memo or '(none)'}"""
 
 def _step_errors(step, source):
     errors = []
+    if _CLAIM_RE.search(step) or _RECORD_RE.search(step):
+        errors.append('操作の報告や記録を書かず、作業の提案だけにしてください')
     if not step.startswith('最初の20分で'):
         errors.append('「最初の20分で」から始めてください')
     if len([l for l in step.splitlines() if l.strip()]) > 4:
@@ -1206,23 +1211,36 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     reply = _MODE_CLAIM_RE.sub("", reply).strip()
     if _TALK_START_RE.search(text) and db.get_setting("chat_mode", "work") == "work":
         reply += "\n（雑談モードにする？上のボタンか「雑談モードにして」で切り替えられるよ）"
-    if not events and _CLAIM_RE.search(reply):
-        reply = drop_false_claims(reply)
+    reply = clean_model_reply(reply, events)
     return reply
 
 
 NO_CHANGE_NOTE = "まだ何も登録・変更していないよ。登録するなら「〇〇をタスクに追加して」と言ってね。"
 
 
-def drop_false_claims(reply):
-    """Remove whole sentences that claim a change which did not happen (#11).
+def strip_model_records(reply):
+    """Only code writes operation records, including parenthesized inline records."""
+    reply = re.sub(r"[（(]記録\s*[:：][^）)\n]*[）)]", "", reply)
+    return "\n".join(line for line in reply.splitlines()
+                     if not re.match(r"\s*(?:記録\s*[:：]|[＋+✎✔→↺]\s*|・\s*#\d+)", line)).strip()
 
-    Replacing just the phrase left broken text such as "（まだ登録していません）。#118は…".
-    Sentences are cut at 。！？ and line breaks; task numbers are dropped from what remains."""
+
+def clean_model_reply(reply, events=()):
+    """Replace model operation claims with independently generated operation records."""
+    original = reply
+    reply = strip_model_records(reply)
     sentences = re.split(r"(?<=[。！!？?\n])", reply)
     kept = "".join(s for s in sentences if not _CLAIM_RE.search(s)).strip()
+    removed = kept != original.strip()
     kept = re.sub(r"#\d+\s*", "", kept).strip()
-    return f"{kept}\n{NO_CHANGE_NOTE}" if kept else NO_CHANGE_NOTE
+    if removed:
+        note = "実行した操作は下の記録を確認してね。" if events else NO_CHANGE_NOTE
+        return f"{kept}\n{note}" if kept else note
+    return kept
+
+
+def drop_false_claims(reply):
+    return clean_model_reply(reply)
 
 
 _progress = {"stage": None, "since": None, "detail": "", "partial": "", "text": "", "message_id": None}
@@ -1245,7 +1263,9 @@ def _stage(name):
 
 def _partial(text):
     jobs.check()
-    _progress["partial"] = text
+    safe = strip_model_records(text)
+    safe = re.sub(r"[（(]記録\s*[:：].*$", "", safe)
+    _progress["partial"] = "".join(part for part in re.split(r"(?<=[。！!？?\n])", safe) if not _CLAIM_RE.search(part))
 
 
 def progress():
@@ -1477,6 +1497,25 @@ def _explicit_rename(text, guard):
     old, t = task["title"], db.update_task(task["id"], title=new)
     return (f"「{old}」の名前を「{t['title']}」に変えたよ。",
             [f"✎ #{t['id']} {t['title']} を更新しました（タイトル: {old} → {t['title']}）"])
+
+
+def _focus_selection(text, cfg):
+    """Explicit focus-task selection; never starts or resets the timer."""
+    request = re.search(r"(?:集中)?タイマーのタスク(?:を|に)", text)
+    if not request or not re.search(r"にして(?:おいて)?|に設定して|選択して", text):
+        return None
+    tasks = db.list_tasks()
+    if write_guard.analyze(text, tasks).hold or re.search(r"しない|しなくて|変えない|設定しない|選択しない|[？?]|例えば|例として|と言って", text):
+        return "集中タイマーのタスクは変更していないよ。", []
+    named = _by_project(_named_tasks(text, tasks), text)
+    if len(named) != 1:
+        return "集中タイマーに選ぶタスクを特定できなかったよ。タスク名で教えてね。変更はしていないよ。", []
+    import pomodoro
+    task = named[0]
+    with jobs.boundary():
+        pomodoro.set_task(cfg, task["id"])
+    return (f"「{task['title']}」を集中タイマーのタスクに選んだよ。時間と動作状態はそのままだよ。",
+            [f"✎ #{task['id']} {task['title']} を集中タイマーのタスクに選択しました"])
 
 
 def _guarded_write_flow(text, annotated, history):
@@ -1736,6 +1775,14 @@ def _chat(text, cfg, message_id=None):
         task_context.clear()
         db.add_message("assistant", game_reply)
         return {"reply": game_reply, "events": [], "handoffs": [], "intent": "game"}
+    focus_reply = _focus_selection(text, cfg)
+    if focus_reply is not None:
+        reply, events = focus_reply
+        task_context.clear()
+        db.add_message("assistant", reply)
+        if events:
+            db.add_message("notice", "\n".join(events))
+        return {"reply": reply, "events": events, "handoffs": [], "intent": "focus"}
     proposed = choices.proposed_mode(text)
     if proposed:
         task_context.clear()

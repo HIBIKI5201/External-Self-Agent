@@ -79,5 +79,5 @@ def test_false_claims_are_removed_as_whole_sentences():
     assert out.startswith("了解！進捗はいかが？") and "分類しました" not in out and "#118" not in out, out
     out = brain.drop_false_claims("そのタスク、作成します！「調べ物ツールの開発」をGoogle ToDoに追加しました。\nいつから始めますか？")
     assert "追加しました" not in out and "まだ登録していません" not in out, out
-    assert out.startswith("そのタスク、作成します！") and brain.NO_CHANGE_NOTE in out, out
+    assert "作成します" not in out and brain.NO_CHANGE_NOTE in out, out
     assert brain.drop_false_claims("登録しました。") == brain.NO_CHANGE_NOTE
