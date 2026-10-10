@@ -87,6 +87,7 @@ def _log(cfg, body, data, started, error=None):
             "elapsed_ms": round((time.time() - started) * 1000),
             "error": error,
             "validation": _VALIDATION.get(),
+            "context": __import__("conversation_context").STATS.get(),
         }
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
