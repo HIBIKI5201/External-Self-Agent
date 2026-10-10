@@ -22,6 +22,9 @@ FIELDS = (("complete", r"完了|終わ|済み"), ("title", r"タイトル|名前
           ("add", r"登録|追加|タスクに"))
 _SPLIT_RE = re.compile(r"[。、，,！!？?\n]|(?<=ないで)|(?<=変えず)|(?<=せずに)|けど|ただし")
 
+REQUEST_RE = re.compile(r"して|にして|変えて|変更|追記|書いて|戻して|完了|終わ|出した|追加|登録|"
+                        r"(?:し|やっ|変え|書い|戻し|消し|足し|入れ|付け|直し|延ばし|ずらし|動かし)(?:といて|ておいて)")
+
 VAGUE_DATE_RE = re.compile(r"いつか|そのうち|余裕の?ある|余裕が(?:ある|できた)|適当な|適当に|いい感じ|"
                            r"都合の(?:いい|良い)|空いて(?:る|いる)日|どこか(?:の日)?|近いうち|なるはや|いつでも")
 _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -60,7 +63,7 @@ def analyze(text, tasks):
         if not NEG_RE.search(clause):
             if ids:
                 last_ids = ids
-            positive = positive or bool(re.search(r"して|にして|変えて|変更|追記|書いて|戻して|完了|終わ|出した|追加|登録", clause))
+            positive = positive or bool(REQUEST_RE.search(clause))
             continue
         ids = ids or last_ids  # 「資料の修正という名前は変えず、今のままにして」
         keep_all = re.search(r"のまま|そのまま|変更不要", clause)
