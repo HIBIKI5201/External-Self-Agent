@@ -35,6 +35,7 @@ import choices  # noqa: E402
 import task_context  # noqa: E402
 import voice  # noqa: E402
 import runtime_log
+import playback
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
@@ -55,6 +56,7 @@ def state():
         "google": gsync.status(),
         "linked": linked_todos.status(CFG),
         "youtube": youtube.status(),
+        "playback": playback.current.snapshot(),
         "choices": choices.public(),
         "mode": db.get_setting("chat_mode", "work"),
         "companion": companion.stats(),
@@ -334,6 +336,10 @@ class Handler(BaseHTTPRequestHandler):
             if action == "task":
                 return pomodoro.set_task(CFG, body.get("task_id"))
             raise ValueError("action must be start, toggle, reset or task")
+        if path == "/api/playback/open":
+            return playback.current.open()
+        if path == "/api/playback/state":
+            return playback.current.update(body)
         if path == "/api/bgm/sync":  # the chat window tells the timer how BGM is set up
             db.set_setting("bgm_sync", json.dumps({"mode": body.get("mode"), "focusOnly": bool(body.get("focusOnly"))}))
             return {"ok": True}

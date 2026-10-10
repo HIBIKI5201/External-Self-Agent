@@ -20,6 +20,7 @@ import task_context
 import write_guard
 import conversation_context
 import conversation_game
+import playback
 import conversation_jobs as jobs
 
 WEEKDAYS = "月火水木金土日"
@@ -1825,6 +1826,11 @@ def _chat(text, cfg, message_id=None):
         task_context.clear()
         db.add_message("assistant", game_reply)
         return {"reply": game_reply, "events": [], "handoffs": [], "intent": "game"}
+    media_reply = playback.answer(text)
+    if media_reply is not None:
+        task_context.clear()
+        db.add_message("assistant", media_reply)
+        return {"reply": media_reply, "events": [], "handoffs": [], "intent": "playback"}
     focus_reply = _focus_selection(text, cfg)
     if focus_reply is not None:
         reply, events = focus_reply

@@ -21,6 +21,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_bgm_mode\\.js|tests/test_bgm_ui\\.py|spec/test/(single-youtube-player-63|auto-youtube-source-65)\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/playback\\.py|tests/test_playback_context\\.py|tests/test_playback_ui\\.js|spec/test/playback-context-101\\.md)$"
     }
   ],
   "source": "manual",
