@@ -51,7 +51,8 @@
   const $ = (s) => document.querySelector(s);
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("es-listen") : null;
-  let rec = null, on = false, heard = "", done = 0, timer = null, fails = 0, barged = false, checking = false;
+  let rec = null, on = false, heard = "", timer = null, restart = null, epoch = 0;
+  let fails = 0, barged = false, checking = false;
 
   async function post(path, body) {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-EsAgent": "1" }, body: JSON.stringify(body || {}) });
@@ -76,11 +77,13 @@
     // The first non-echo words of what you are saying stop Es's reading (barge-in).
     if (barged || checking || !text.trim()) return;
     checking = true;  // results keep arriving while Es's lines are fetched
+    const turn = epoch;
     try {
       if (isEcho(text, await esLines())) return;
     } finally {
-      checking = false;
+      if (turn === epoch) checking = false;
     }
+    if (!on || turn !== epoch) return;
     barged = true;
     post("/api/voice/stop").catch(() => {});
   }
@@ -89,11 +92,24 @@
     timer = null;
     const text = heard.trim();
     heard = ""; barged = false;
-    if (!text || !on) return show("聞いています…");
-    if (isEcho(text, await esLines())) return show("聞いています…（Es の声は送りません）");
+    if (!on) return;
+    if (!text) return show("聞いています…");
+    const turn = epoch;
+    const echo = isEcho(text, await esLines());
+    if (!on || turn !== epoch) return;
+    if (echo) return show("聞いています…（Es の声は送りません）");
     show("送信：", text);
     window.EsHooks?.send?.(text);
-    setTimeout(() => on && show("聞いています…"), 1500);
+    setTimeout(() => on && turn === epoch && show("聞いています…"), 1500);
+  }
+
+  function retry() {
+    if (!on || restart !== null) return;
+    const turn = epoch;
+    restart = setTimeout(() => {
+      restart = null;
+      if (on && turn === epoch) start();
+    }, fails ? 1000 * fails : 250);
   }
 
   function start() {
@@ -101,12 +117,16 @@
       on = false;
       return show("この画面では音声認識を使えません（Edge で開いてください）");
     }
-    rec = new Rec();
-    rec.lang = "ja-JP";
-    rec.continuous = true;
-    rec.interimResults = true;
-    done = 0;
-    rec.onresult = (e) => {
+    const turn = epoch;
+    let r, done = 0; // results belong to this recognition session, starting at index zero
+    const current = () => on && turn === epoch && rec === r;
+    try { r = new Rec(); } catch { return startFailed(); }
+    rec = r;
+    r.lang = "ja-JP";
+    r.continuous = true;
+    r.interimResults = true;
+    r.onresult = (e) => {
+      if (!current()) return;
       fails = 0;
       const w = words(e.results, done);
       for (let i = done; i < e.results.length; i++) if (e.results[i].isFinal) done = i + 1;
@@ -118,7 +138,8 @@
       clearTimeout(timer);
       timer = setTimeout(finish, SILENCE_MS);
     };
-    rec.onerror = (e) => {
+    r.onerror = (e) => {
+      if (!current()) return;
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         stop(); return show("マイクが許可されていません。Edge の設定（Cookie とサイトのアクセス許可 → マイク）で 127.0.0.1 を許可してください");
       }
@@ -126,17 +147,28 @@
       if (e.error === "network" && ++fails >= MAX_FAILS) { stop(); return show("音声認識のサービスにつながりません"); }
       if (!["no-speech", "aborted", "network"].includes(e.error)) show(`音声認識のエラー（${e.error}）`);
     };
-    rec.onend = () => {  // Edge ends a session after a while; keep listening while the mode is on
-      if (on) setTimeout(() => on && rec && safeStart(), fails ? 1000 * fails : 250);
+    r.onend = () => {  // Every restart gets a fresh session and result cursor.
+      if (!current()) return;
+      rec = null;
+      retry();
     };
-    safeStart();
-    show("聞いています…");
+    try { r.start(); } catch { return startFailed(); }
+    if (current()) show("聞いています…");
   }
-  function safeStart() { try { rec.start(); } catch {} }
+
+  function startFailed() {
+    if (rec) { const r = rec; rec = null; try { r.abort(); } catch {} }
+    if (++fails >= MAX_FAILS) { stop(); return show("音声認識を開始できません。会話モードをもう一度オンにしてください"); }
+    show("音声認識を再開しています…");
+    retry();
+  }
 
   function stop() {
     on = false;
+    epoch++;
+    clearTimeout(restart); restart = null;
     clearTimeout(timer); timer = null; heard = "";
+    barged = false; checking = false;
     if (rec) { const r = rec; rec = null; r.onend = null; try { r.abort(); } catch {} }
     show("");
   }
@@ -159,10 +191,11 @@
   async function toggle() {
     if (on) return stop();
     on = true; fails = 0;
+    const turn = ++epoch;
     channel?.postMessage("on");  // only one window listens
     show("マイクの許可を確認しています…");
     const problem = await askMic();
-    if (!on) return;  // turned off while the prompt was open
+    if (!on || turn !== epoch) return;  // turned off or restarted while permission was pending
     if (problem) { stop(); return show(problem); }
     start();
   }
