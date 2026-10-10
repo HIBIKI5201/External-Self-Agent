@@ -188,6 +188,8 @@
       "turns": [{"say": "最近ハマってるゲームある？"}],
       "expect": {"no_change": true},
       "forbid": ["any"]
-    }
+    },
+    {"id": "shiritori-feature-word-dev", "split": "dev", "tags": ["しりとり"], "tasks": [{"key": "A", "title": "合成の資料"}], "turns": [{"say": "しりとりしよう"}, {"say": "ムード"}, {"say": "アイス"}, {"say": "カラス"}, {"say": "メダカ"}, {"say": "メガネ"}, {"say": "ミルク"}, {"say": "ズボラ"}, {"say": "パンダ"}, {"say": "ツバメ"}, {"say": "モモ"}], "expect": {"no_change": true, "game": "shiritori", "game_turn": "user", "min_game_words": 21}, "forbid": ["any"]},
+    {"id": "shiritori-correction-holdout", "split": "holdout", "tags": ["しりとり", "訂正"], "tasks": [], "turns": [{"say": "しりとり始めて"}, {"say": "ムード"}, {"say": "あなたの番だよ、交互に答えて"}, {"say": "アイス"}, {"say": "しりとりをやめて"}], "expect": {"no_change": true, "game": ""}, "forbid": ["any"]}
   ]
 }
