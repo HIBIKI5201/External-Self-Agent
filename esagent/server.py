@@ -16,6 +16,7 @@ sys.path.insert(0, HERE)
 
 import admin  # noqa: E402
 import brain  # noqa: E402
+import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
 import db  # noqa: E402
@@ -141,6 +142,14 @@ class Handler(BaseHTTPRequestHandler):
                      "svg": "image/svg+xml", "png": "image/png"}[m[2]]
             with open(fpath, "rb") as f:
                 return self._send(200, body=f.read(), ctype=ctype)
+        if path == "/api/chat/job":
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                request_id = (query.get("id") or [""])[0]
+                revision = int((query.get("revision") or ["0"])[0]) or None
+                return self._send(200, jobs.status(request_id, revision))
+            except (ValueError, LookupError) as e:
+                return self._send(404, {"error": str(e)})
         if path == "/api/health":
             return self._send(200, {"ok": True, "app": "E.S. Agent"})
         if path == "/api/state":
@@ -201,7 +210,11 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise ValueError("body must be an object")
             path = urlparse(self.path).path
-            if path == "/api/chat" and "requestId" in body:
+            if path == "/api/chat/submit":
+                fingerprint = json.dumps({k: body.get(k) for k in ("text", "choice", "relation", "targetId", "targetRevision")}, sort_keys=True, ensure_ascii=False)
+                code, result = chat_requests.execute(body.get("requestId"), fingerprint,
+                    lambda: self._submit_result(body))
+            elif path == "/api/chat" and "requestId" in body:
                 fingerprint = str(body.get('text') or '').strip()
                 if body.get('choice') is not None:
                     fingerprint = json.dumps({'text': fingerprint, 'choice': body['choice']}, sort_keys=True, ensure_ascii=False)
@@ -215,6 +228,14 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("POST %s failed", self.path)
             code, result = 500, {"error": "処理結果を確認できません。履歴やタスクを確認してください。"}
         self._send(code, result)
+
+    def _submit_result(self, body):
+        try:
+            return 200, jobs.accept(body, CFG, lambda request: self._route("/api/chat", request))
+        except ValueError as e:
+            return 400, {"error": str(e)}
+        except LookupError as e:
+            return 404, {"error": str(e)}
 
     def _post_result(self, path, body):
         try:
@@ -255,11 +276,15 @@ class Handler(BaseHTTPRequestHandler):
             queued = db.normalize_datetime(queued)
             result = brain.chat(text, CFG, queued_at=queued, selection=body['choice']) if body.get('choice') is not None else \
                 skills.run(text, CFG, queued_at=queued) if text.startswith('/') else brain.chat(text, CFG, queued_at=queued)
-            voice.reply(CFG, result)  # read aloud once, here; the windows never replay history
-            if result.get("events"):
-                events.push("chat_events", lines=result["events"])
-            if result.get("ui", {}).get("focus"):
-                pomodoro.start(CFG, result["ui"]["focus"])
+            with jobs.boundary():
+                if not jobs.CURRENT.get():
+                    voice.reply(CFG, result)  # async jobs deliver once after final revision validation
+                if result.get("events"):
+                    events.push("chat_events", lines=result["events"])
+                if result.get("ui", {}).get("focus"):
+                    pomodoro.start(CFG, result["ui"]["focus"])
+            if jobs.CURRENT.get():
+                gsync.request()
             return result
         if path == "/api/tasks":
             return db.add_task(body["title"], project=body.get("project"), due=body.get("due"),

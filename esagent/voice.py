@@ -29,6 +29,7 @@ import urllib.parse
 import urllib.request
 
 import db
+import conversation_jobs as jobs
 
 log = logging.getLogger("esagent")
 
@@ -51,6 +52,7 @@ _recent = collections.deque(maxlen=6)  # [text, finished at] of lines played (in
 ECHO_SECS = 8                      # a line this recent can come back through the mic (#89)
 _gen = 0                           # stop() bumps this; older lines are dropped
 _worker = None
+_active_voice_token = None
 _proc = None                       # the engine we started
 _job = None                        # kills that engine with this process
 _style = {}                        # (url, speaker, style) -> style id
@@ -146,7 +148,8 @@ def say(cfg, text, key=None, force=False):
             return False
         for m in marks:
             _seen[m] = now
-        _queue.append({"text": words, "gen": _gen, "at": now})
+        jobs.check()
+        _queue.append({"text": words, "gen": _gen, "at": now, "job": jobs.CURRENT.get()})
         while len(_queue) > QUEUE_MAX:
             _queue.popleft()
         _cond.notify_all()
@@ -165,6 +168,24 @@ def reply(cfg, result, key=None):
     if isinstance(result, dict) and not result.get("pending") and result.get("reply"):
         return say(cfg, result["reply"], key=key)
     return False
+
+
+def stop_request(request_id):
+    """Invalidate only this request's queued/current speech; retain independent speech."""
+    global _gen
+    with _cond:
+        retained = [item for item in _queue if (item.get("job") or {}).get("request_id") != request_id]
+        active = _active_voice_token and _active_voice_token["request_id"] == request_id
+        if active:
+            _gen += 1
+            for item in retained:
+                item["gen"] = _gen
+        _queue.clear()
+        _queue.extend(retained)
+        _cond.notify_all()
+    if active:
+        _stop_sound()
+    return bool(active)
 
 
 def stop():
@@ -231,17 +252,23 @@ def process_pending(cfg):
 
 
 def _process(cfg, item):
-    if item["gen"] != _gen:
+    global _active_voice_token
+    if item["gen"] != _gen or not jobs.valid(item.get("job")):
         return
+    _active_voice_token = item.get("job")
     try:
         url = _engine(cfg)
         sid = _style_id(cfg, url)
+        if not jobs.valid(item.get("job")):
+            return
         query = _http(url, "/audio_query?" + urllib.parse.urlencode({"text": item["text"], "speaker": sid}),
                       data=b"", timeout=30)
         q = json.loads(query)
         q["volumeScale"] = settings()["volume"]
+        if not jobs.valid(item.get("job")):
+            return
         wav = _http(url, f"/synthesis?speaker={sid}", data=json.dumps(q).encode("utf-8"), timeout=60)
-        if item["gen"] != _gen:
+        if item["gen"] != _gen or not jobs.valid(item.get("job")):
             return  # stopped while synthesising
         _state.update(error="", speaking=item["text"])
         line = [item["text"], float("inf")]
@@ -251,10 +278,13 @@ def _process(cfg, item):
         finally:
             line[1] = time.time()
         _state["last_spoken"] = time.time()
+    except jobs.Stopped:
+        pass
     except Exception as e:
         _state["error"] = _explain(e)
         log.warning("voice: %s", _state["error"])
     finally:
+        _active_voice_token = None
         _state["speaking"] = ""
 
 
@@ -421,7 +451,10 @@ def _play(wav, gen):
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(wav)
-        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        with jobs.use_token(_active_voice_token), jobs.boundary(), _cond:
+            if gen != _gen:
+                return
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
         end = time.time() + _wav_seconds(wav) + 0.2
         with _cond:
             while gen == _gen and time.time() < end:

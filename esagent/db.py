@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS memories(
 );
 """
 
+SCHEMA += """
+CREATE TABLE IF NOT EXISTS conversation_jobs (
+    id TEXT PRIMARY KEY, revision INTEGER NOT NULL, state TEXT NOT NULL, text TEXT NOT NULL,
+    result TEXT, committed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+);
+"""
+
 # Columns added after the first release; init() adds any that are missing.
 MIGRATIONS = {
     "projects": [("glist_id", "TEXT"), ("description", "TEXT")],
@@ -80,7 +87,7 @@ MIGRATIONS = {
                  # Timing of a user message (#23): pressed send in the window, reached the server,
                  # Es started on it, reply done; wait_reason = "model" if it waited for the model.
                  ("queued_at", "TEXT"), ("received_at", "TEXT"), ("started_at", "TEXT"), ("finished_at", "TEXT"),
-                 ("wait_reason", "TEXT")],
+                 ("wait_reason", "TEXT"), ("request_id", "TEXT"), ("request_revision", "INTEGER")],
     "tasks": [("gtask_id", "TEXT"), ("glist_id", "TEXT"), ("g_updated", "TEXT"), ("synced_at", "TEXT"),
               ("rev", "INTEGER NOT NULL DEFAULT 1"), ("synced_rev", "INTEGER NOT NULL DEFAULT 0"),
               ("repeat", "TEXT"), ("last_reset", "TEXT")],
@@ -132,7 +139,7 @@ def now():
 
 
 @contextmanager
-def connect():
+def _connect():
     os.makedirs(DATA_DIR, exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=30)  # several background threads write; wait rather than fail
     con.row_factory = sqlite3.Row
@@ -143,6 +150,19 @@ def connect():
         con.commit()
     finally:
         con.close()
+
+
+@contextmanager
+def connect():
+    import conversation_jobs as jobs
+    with jobs.boundary():
+        statements = []
+        with _connect() as con:
+            con.set_trace_callback(statements.append)
+            yield con
+            changes = con.total_changes
+        if changes:
+            jobs.note_commit(statements)
 
 
 def init():
@@ -345,8 +365,10 @@ def update_task(task_id, title=None, status=None, due=None, project=None, notes_
 
 def add_message(role, content, status=None):
     with connect() as con:
-        cur = con.execute("INSERT INTO messages(role, content, created_at, status) VALUES(?, ?, ?, ?)",
-                          (role, content, now(), status))
+        import conversation_jobs as jobs
+        request_id, revision = jobs.message_metadata()
+        cur = con.execute("INSERT INTO messages(role, content, created_at, status, request_id, request_revision) VALUES(?, ?, ?, ?, ?, ?)",
+                          (role, content, now(), status, request_id, revision))
         return cur.lastrowid
 
 
@@ -386,7 +408,7 @@ def pending_messages():
 
 def recent_messages(limit, roles=None, before=None):
     with connect() as con:
-        sql = "SELECT * FROM messages WHERE 1 = 1"
+        sql = "SELECT * FROM messages WHERE NOT (role IN ('assistant','es') AND COALESCE(status,'') = 'cancelled')"
         args = []
         if roles:
             sql += f" AND role IN ({','.join('?' * len(roles))})"
@@ -400,8 +422,11 @@ def recent_messages(limit, roles=None, before=None):
 
 
 def clear_messages():
+    import conversation_jobs as jobs
+    jobs.clear_pending()
     with connect() as con:
         con.execute("DELETE FROM messages")
+        con.execute("DELETE FROM settings WHERE key = 'conversation_game'")
 
 
 # ---- memories ---------------------------------------------------------------
