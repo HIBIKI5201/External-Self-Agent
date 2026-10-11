@@ -8,6 +8,9 @@
       "pathPattern": "(^|/)(tests/test_voice_pieces\\.py|spec/test/voice-pieces-116\\.md)$"
     },
     {
+      "pathPattern": "(^|/)(tests/test_ability_answers\\.py|spec/test/ability-answers-120\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)esagent/voice\\.py$"
     },
     {
