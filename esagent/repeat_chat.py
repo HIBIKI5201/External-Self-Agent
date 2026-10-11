@@ -185,7 +185,9 @@ def periodic_add(text, history):
         m = _UNQUOTED.search(text)
         name = m['name'].strip() if m else None
     if not name:
-        return '追加するタスク名を「」で囲んで教えてね。' + unchanged, [], None
+        # 「週課のネットセルを追加して」: 週課 is part of the name, not 「ウィークリーに〇〇を」; the
+        # usual add handles it (#115).
+        return None
     if any(t['title'] == name for t in db.list_tasks()):
         return f'「{name}」はすでにあるよ。周期を変えるなら、その番号と周期を指定してね。' + unchanged, [], None
     kind = next((k for k, pattern in _KINDS if pattern.search(outside)), 'weekly')
