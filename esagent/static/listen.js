@@ -4,7 +4,9 @@
 // the browser cannot cancel it: a recognised line that matches what Es is saying is dropped as an
 // echo; anything else is you, and stops Es's reading (#44). Nothing is recorded or kept.
 (() => {
-  const SILENCE_MS = 1200;   // this long without new words ends what you are saying
+  // How long a pause ends what you are saying (#116, config listen_silence_ms / listen_incomplete_ms):
+  // longer when the words so far stop in the middle of a sentence (「〜を」「〜とかの」「〜けど」).
+  let timing = { silence: 1200, incomplete: 3000 };
   const ECHO_SECS = 8;       // Es's lines this recent can come back through the mic
   const MAX_FAILS = 3;       // give up after this many network errors in a row
 
@@ -45,7 +47,15 @@
     return { final, interim };
   }
 
-  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm }; return; }
+  // Particles and connectives a sentence does not end with. 「〜して」「〜なの」 can end a request or a
+  // question, so て and a lone の are not on the list.
+  const MIDWAY = /(?:[をがにはでとへもや]|って|から|けど|けれど|けども|とか|とかの|ので|のに|たら|ば|し|ながら|[、,])$/;
+  function silenceFor(text, t = timing) {
+    const s = String(text || "").trim().replace(/[。.．\s]+$/, "");
+    return s && MIDWAY.test(s) ? t.incomplete : t.silence;
+  }
+
+  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor }; return; }
 
   // ---- the page -----------------------------------------------------------------------
   const $ = (s) => document.querySelector(s);
@@ -99,7 +109,7 @@
     if (!on || turn !== epoch) return;
     if (echo) return show("聞いています…（Es の声は送りません）");
     show("送信：", text);
-    window.EsHooks?.send?.(text);
+    window.EsHooks?.send?.(text, null, { via: "voice" });
     setTimeout(() => on && turn === epoch && show("聞いています…"), 1500);
   }
 
@@ -136,7 +146,7 @@
       show("認識中：", now);
       heardSome(now);
       clearTimeout(timer);
-      timer = setTimeout(finish, SILENCE_MS);
+      timer = setTimeout(finish, silenceFor(now));
     };
     r.onerror = (e) => {
       if (!current()) return;
@@ -193,6 +203,7 @@
     on = true; fails = 0;
     const turn = ++epoch;
     channel?.postMessage("on");  // only one window listens
+    fetch("/api/voice").then(r => r.json()).then(v => { if (v.listen) timing = v.listen; }).catch(() => {});
     show("マイクの許可を確認しています…");
     const problem = await askMic();
     if (!on || turn !== epoch) return;  // turned off or restarted while permission was pending

@@ -1,6 +1,6 @@
 // 会話モード (#89): telling Es's own voice (heard through the mic) from the user's words.
 const assert = require('node:assert/strict');
-const { isEcho, words } = require('../esagent/static/listen.js');
+const { isEcho, words, silenceFor } = require('../esagent/static/listen.js');
 
 const es = ['今は手をつけるべきタスクがありません。新しくやりたいことがあれば教えてください。'];
 
@@ -21,6 +21,11 @@ assert.equal(isEcho('', es), true);                                 // nothing h
 const r = (t, f) => Object.assign([{ transcript: t }], { isFinal: f });
 assert.deepEqual(words([r('洗濯を', true), r('追加', false)], 0), { final: '洗濯を', interim: '追加' });
 assert.deepEqual(words([r('洗濯を', true), r('追加して', true)], 1), { final: '追加して', interim: '' });
+
+// A pause in the middle of a sentence waits longer before sending (#116).
+const t = { silence: 1200, incomplete: 3000 };
+for (const s of ['君が言ってくれた。', '明日の予定を教えて', 'ちょっと見て', 'それってなんなの？', '']) assert.equal(silenceFor(s, t), 1200, s);
+for (const s of ['をたとき、とかの。', 'チャット。と。', 'ゲームの話をするときに', '資料を', '思ったんだけど', '言ってくれたから、']) assert.equal(silenceFor(s, t), 3000, s);
 
 // Run the actual page code with browser events and a deterministic clock.
 const vm = require('node:vm');
@@ -100,6 +105,12 @@ async function lifecycle() {
   await asyncPage.toggle(); voices.forEach(resolve => resolve()); await asyncPage.flush();
   assert.deepEqual(asyncPage.sent, []);
   assert.deepEqual(asyncPage.posts, [], 'stopped mode must not interrupt Es after a delayed echo check');
-  console.log('test_listen.js ok (echo + lifecycle)');
+  // Thinking aloud: a sentence that stops midway is not sent after the usual pause (#116).
+  const slow = page(); await slow.toggle();
+  slow.sessions[0].result('君が言ってくれたことを'); await slow.tick(1500);
+  assert.deepEqual(slow.sent, [], 'a midway pause must not send yet');
+  slow.sessions[0].onresult({ results: [r('君が言ってくれたことを', true), r('覚えておきたい', true)] }); await slow.tick(1200);
+  assert.deepEqual(slow.sent, ['君が言ってくれたことを覚えておきたい']);
+  console.log('test_listen.js ok (echo + lifecycle + midway pause)');
 }
 lifecycle().catch(error => { console.error(error); process.exitCode = 1; });

@@ -245,7 +245,8 @@ function render() {
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   log.innerHTML = S.messages.length
     ? S.messages.map((m) => `<div class="msg ${esc(m.role)}${m.status === "pending" ? " pending" : ""}">${esc(m.content)}` +
-        (m.status === "pending" ? `<small>⏳ 返事待ち — モデルの準備ができたら自動で返事します</small>` : "") + renderChoices(m) + `</div>`).join("")
+        (m.status === "pending" ? `<small>⏳ 返事待ち — モデルの準備ができたら自動で返事します</small>` : "") +
+        (m.status === "joined" ? `<small>🎙 続けて話した音声をまとめて 1 つの発言にしました</small>` : "") + renderChoices(m) + `</div>`).join("")
     : `<div class="empty">Es です。予定やタスク、困っていることを話しかけてください。<br>「/」でコマンド、コードの作業は Claude Code に引き継げます。</div>`;
   log.insertAdjacentHTML("beforeend", `<div id="live"></div>`);
   renderLive();
@@ -385,9 +386,10 @@ function renderLive() {
   const live = $("#live");
   if (!live) return;
   let html = "";
-  queue.forEach(({ text }, i) => {
+  queue.forEach(({ text, parts }, i) => {
+    const joined = parts > 1 ? `<small>🎙 音声 ${parts} 回分をまとめて 1 つの発言にしました</small>` : "";
     if (i === 0 && busy) {
-      html += `<div class="msg user">${esc(text)}</div>`;
+      html += `<div class="msg user">${esc(text)}${joined}</div>`;
       const secs = ((performance.now() - thinkStart) / 1000).toFixed(1);
       const label = offline ? "E.S. Agent に再接続を待っています（届いたら返事します）"
         : text.startsWith("/") ? "実行中" : `考え中${thinkStage ? `（${esc(thinkStage)}）` : ""}`;
@@ -396,7 +398,7 @@ function renderLive() {
         (thinkPartial ? `<span class="partial">${esc(thinkPartial)}</span>` : "") + `</div>`;
     } else {
       const wait = i === 0 && offline ? "E.S. Agent に再接続を待っています（つながったら自動で送ります）" : "送信待ち";
-      html += `<div class="msg user queued">${esc(text)}<small>${wait}</small></div>`;
+      html += `<div class="msg user queued">${esc(text)}${joined}<small>${wait}</small></div>`;
     }
   });
   live.innerHTML = html;
@@ -500,8 +502,30 @@ async function waitJob(item) {
     await new Promise(resolve => setTimeout(resolve, 300));
   }
 }
+// 会話モード (#116): a piece heard while the previous spoken message still waits or is being answered
+// joins that message (relation "continue") instead of getting its own reply.
+let listenMergeMs = 15000;
+api("/api/voice").then(v => { listenMergeMs = v.listen?.merge ?? listenMergeMs; }).catch(() => {});
+async function joinSpoken(text) {
+  const prev = [...queue].reverse().find(q => q.via === "voice");
+  if (!prev || prev.invalidated || Date.now() - (prev.lastPart || 0) > listenMergeMs) return false;
+  try { await submitItem(prev); } catch { return false; }
+  if (!prev.jobId) return false;
+  const r = await api("/api/chat/submit", {text, queuedAt: localIso(), requestId: requestId(), relation: "continue",
+    targetId: prev.jobId, targetRevision: prev.revision});
+  if (r.jobId === prev.jobId) {
+    prev.text += " " + text; prev.parts = (prev.parts || 1) + 1; prev.revision = r.revision; prev.lastPart = Date.now();
+  } else {  // the previous one was already answered: this is a message of its own
+    queue.push({text, at: localIso(), id: r.jobId, jobId: r.jobId, revision: r.revision, relation: "independent",
+      via: "voice", lastPart: Date.now(), delivery: Promise.resolve(r)});
+  }
+  saveQueue(); renderLive(); pump();
+  return true;
+}
+
 // Every message is received immediately, even while an earlier model request is running.
-async function sendText(text, forcedRelation = null) {
+async function sendText(text, forcedRelation = null, opts = {}) {
+  if (opts.via === "voice" && await joinSpoken(text).catch(() => false)) return;
   if (busy && bypassRe && bypassRe.test(text) && !(bypassExclude && bypassExclude.test(text)) && !text.startsWith("/")) {
     api("/api/chat", { text, queuedAt: localIso(), requestId: requestId() })
       .then(r => { window.Es?.say(r.reply, { ms: 9000, voice: false, record: false }); return refresh(); })
@@ -515,7 +539,7 @@ async function sendText(text, forcedRelation = null) {
     catch (error) { window.Es?.say("受付を確認できません。前の依頼が届いてから言い直してください。", {voice: false}); return; }
   }
   const target = activeTarget();
-  const item = {text, at: localIso(), id: requestId(), relation,
+  const item = {text, at: localIso(), id: requestId(), relation, via: opts.via, lastPart: Date.now(),
     targetId: relation !== "independent" ? target?.id : undefined,
     targetRevision: relation !== "independent" ? target?.revision : undefined};
   if (relation !== "independent" && queue[0]) queue[0].invalidated = true;
