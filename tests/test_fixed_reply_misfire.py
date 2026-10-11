@@ -45,9 +45,11 @@ def test_talk_mode_leaves_non_operation_replies_to_the_conversation():
             with model() as chat:
                 r = sb.chat(text)
             assert fixed not in r["reply"] and chat.called, (text, r)
-        # An explicit wish for the future is still taken as one.
+        # An explicit wish for the future is still taken as one: answered honestly, without an offer
+        # in 雑談モード (#112, #114).
         with patch.object(llm, "chat", side_effect=AssertionError("no model")):
-            assert "改修のタスク" in sb.chat("これからは勝手に話題を変更しないでほしい")["reply"]
+            r = sb.chat("これからは勝手に話題を変更しないでほしい")
+        assert brain.NO_PROMISE_NOTE in r["reply"] and "改修のタスク" not in r["reply"] and not r["choices"], r
 
 
 def test_the_same_fixed_reply_is_not_given_twice_in_a_row():

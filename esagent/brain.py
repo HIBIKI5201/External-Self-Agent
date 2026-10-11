@@ -713,10 +713,12 @@ def _policy_flow(text):
     """A wish about how Es behaves is not a task change (#20): explain and offer to register it."""
     if not (_POLICY_WISH_RE.search(text) and _POLICY_RE.search(text)):
         return None
+    if db.get_setting("chat_mode", "work") == "talk":  # no offers of Es's own in 雑談モード (#112, #114)
+        return "希望はわかったよ。" + NO_PROMISE_NOTE
     db.set_setting("pending_feature", text)
     task_context.begin(text, _progress['message_id'])
-    return ("わかった、気をつけるね。ただ、私の受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
-            "私が自分で書き換えることはできないんだ。\n"
+    return ("希望はわかったよ。ただ、私の受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
+            "私が自分で書き換えることはできないから、約束はできないんだ。\n"
             "改修のタスクとして EsAgent に登録しておく？「うん」か「登録して」で入れるよ。タスクは何も変えていないよ。")
 
 
@@ -1269,8 +1271,15 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
         reply += "\n（雑談モードにする？上のボタンか「雑談モードにして」で切り替えられるよ）"
     reply = clean_model_reply(reply, events)
     reply, offered = strip_model_offers(reply)
+    reply, promised = strip_promises(reply)
+    if not reply and promised:
+        reply = "うん、そうなんだね。"
+    if promised == "behavior" or behavior_wish(text):
+        # 「今後は〜するね」 had nothing behind it (#114): say it honestly, offer the change as a task.
+        reply = (reply + "\n" + NO_PROMISE_NOTE).strip()
+        offered = True
     if offered and db.get_setting("chat_mode", "work") != "talk" and _WISH_ABOUT_ES_RE.search(text) \
-            and _WISH_RE.search(text):
+            and (_WISH_RE.search(text) or behavior_wish(text)):
         # The model offered to register the wish; make it a real, approvable offer (#112).
         db.set_setting("pending_feature", text)
         task_context.begin(text, _progress["message_id"])
@@ -1321,8 +1330,57 @@ _MODEL_OFFER_RE = re.compile(
     r"(?:タスク|EsAgent|改修|機能|要望|アイデア|ToDo)[^。！!\n]{0,25}(?:追加|登録|入れ)(?:する|しよう|しておく|しとく|しようか|して(?:おく|おこう|みる)?)?"
     r"(?:か|かな|ね)?[？?]|"
     r"[「『]?(?:うん|はい|追加する|追加して|登録する|登録して)[」』]?(?:か|と|で|って)[^。！!\n]{0,25}(?:追加|登録|入れ|OK|オッケー|ok)")
-_WISH_ABOUT_ES_RE = re.compile(r"(?:君|きみ|キミ|Es|エス|アシスタント|EsAgent|このアプリ|このツール)|" + _FEATURE_RE.pattern)
+_WISH_ABOUT_ES_RE = re.compile(r"(?:君|きみ|キミ|Es|エス|アシスタント|EsAgent|このアプリ|このツール|仕組み|返事|返し方|"
+                               r"話し方|口調|文脈|分類)|" + _FEATURE_RE.pattern)
 FEATURE_OFFER = "改修のタスクとして EsAgent に登録しておく？下のボタンか「うん」で入れるよ。まだ登録していないよ。"
+
+
+# 「分かった、今後は〜するね」「覚えておくね」: promises about Es's own behaviour that nothing
+# carries out (#114). The model may not make them; code says what can and cannot be done.
+_PROMISE_RE = re.compile(r"(?:今後は|これからは|次からは|次回から|今度から)[^。！!\n]{0,40}"
+                         r"(?:する|します|るね|ようにする|ようにします|気をつけ|心がけ|意識する)|"
+                         r"(?:ように|形で|感じで)(?:する|進める|やっていく|していく)ね|"
+                         r"覚えて(?:おく|おきます|とく)(?:ね|よ|から)?[。！!]?$")
+_FUTURE_WISH_RE = re.compile(r"(?:これからは|今後は|次からは|次回から|今度から)[^。！!\n]{0,40}"
+                             r"(?:て|で|ように)(?:ほしい|欲しい|ください|くれ|ね|ほしいな)?[。！!\s]*$")
+NO_PROMISE_NOTE = ("ただ、私の受け答えの決まりはプログラムで決まっていて、今の私が自分で変えることはできないから、"
+                   "約束はできないんだ。")
+
+
+def _answer_behavior_wish(text, result):
+    """「〇〇はWarframeのタスクにして。次からは分類が分からない時は聞いてね」: the change ran; the wish
+    for the future is answered too, honestly, instead of being dropped (#114)."""
+    reply = result.get("reply") or ""
+    if result.get("pending") or not behavior_wish(text) or NO_PROMISE_NOTE in reply \
+            or result.get("intent") in ("policy", "feature", "chat", "advise", "status"):
+        return
+    note = NO_PROMISE_NOTE
+    if db.get_setting("chat_mode", "work") != "talk" and not db.get_setting("pending_feature"):
+        wish = next(c for c in re.split(r"[。！!\n]", text) if c.strip() and _FUTURE_WISH_RE.search(c))
+        db.set_setting("pending_feature", wish.strip())
+        task_context.begin(wish.strip(), _progress["message_id"])
+        note += "\n" + FEATURE_OFFER
+    result["reply"] = (reply + "\n" + note).strip()
+    with db.connect() as con:
+        con.execute("UPDATE messages SET content = ? WHERE id = (SELECT MAX(id) FROM messages WHERE role = 'assistant')",
+                    (result["reply"],))
+
+
+def strip_promises(reply):
+    """Remove sentences promising future behaviour or to remember something.
+    Returns (reply, removed): removed is "behavior", "memory" (only 「覚えておくね」) or ""."""
+    sentences = re.split(r"(?<=[。！!？?\n])", reply)
+    dropped = [s for s in sentences if _PROMISE_RE.search(s.strip())]
+    if not dropped:
+        return reply, ""
+    kept = "".join(s for s in sentences if s not in dropped).strip()
+    memory_only = all(re.search(r"覚えて(?:おく|おきます|とく)", s) for s in dropped)
+    return kept, "memory" if memory_only else "behavior"
+
+
+def behavior_wish(text):
+    """「次からは分類が分からない時は聞いてね」: a wish about how Es should behave from now on."""
+    return any(_FUTURE_WISH_RE.search(c) for c in re.split(r"[。！!\n]", text) if c.strip())
 
 
 def strip_model_offers(reply):
@@ -1385,7 +1443,8 @@ def _partial(text):
     safe = strip_model_records(text)
     safe = re.sub(r"[（(]記録\s*[:：].*$", "", safe)
     _progress["partial"] = "".join(part for part in re.split(r"(?<=[。！!？?\n])", safe)
-                                    if not _CLAIM_RE.search(part) and not _MODEL_OFFER_RE.search(part))
+                                    if not _CLAIM_RE.search(part) and not _MODEL_OFFER_RE.search(part)
+                                    and not _PROMISE_RE.search(part.strip()))
 
 
 def progress():
@@ -1856,6 +1915,8 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
         try:
             selected = choices.before(text, selection)
             result = _choice_reply(selected, cfg, message_id) if selected else _chat(text, cfg, message_id)
+            if not selected:
+                _answer_behavior_wish(text, result)
             choices.expose(result)
             return result
         finally:
