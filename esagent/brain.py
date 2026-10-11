@@ -68,6 +68,10 @@ What you CAN do:
 - Your chat window has: "/" slash commands (type "/" or "/help" to see them), sending new messages
   while you are still thinking (they queue up), a live timer showing how long you are thinking,
   a 雑談モード (/talk), and memory ("覚えておいて" or /remember).
+- Reading aloud: your replies can be spoken with a VOICEVOX voice (on/off in the window; its state now is
+  given below). 会話モード: the user can talk to you with the microphone; their speech arrives as text.
+  You cannot hear music, videos or other sounds; for the app's own YouTube you know only the title and
+  whether it is playing.
 What you CANNOT do: browse the web, read or edit files, open Unity, run programs, read email, delete tasks,
 or change your own program, screen or features. Changes to E.S. Agent itself are made by Claude Code:
 offer to register the idea as a task in the EsAgent project, or to hand it over with /claude.
@@ -245,6 +249,47 @@ def _candidates(picked, tasks, limit=5, rotate=True):
     return pool[:limit]
 
 
+def _voice_state():
+    """Whether replies are read aloud now, from the settings (#120)."""
+    try:
+        import voice
+        s = voice.settings()
+    except Exception:
+        return "unknown"
+    return "ON" if s.get("enabled") else "OFF (the feature exists; the user can turn it on)"
+
+
+# 「喋れるようになった？」「音楽聞こえる？」: what Es can do now is answered from the settings, not by
+# the model, which said 「音は出せない」 while reading aloud was on (#120).
+_ASKS = r"(?:[？?]|の[？?]?|かな|か[？?]?|って[？?]?)?[。！!\s]*$"
+_SPEAK_Q_RE = re.compile(r"(?:喋れる|しゃべれる|喋れるように|しゃべれるように|声(?:を|が)?出せる|声で話せる|声で話して(?:る|くれる)|"
+                         r"読み上げ(?:られる|できる|て(?:る|くれる)))[^。！!\n]{0,8}" + _ASKS)
+_HEAR_Q_RE = re.compile(r"(?:聞こえる|聴こえる|聞こえて(?:る)?|聞き取れる|マイク(?:は|って)?(?:使える|で話せる))[^。！!\n]{0,8}" + _ASKS)
+
+
+def _ability_flow(text, cfg):
+    """Answer questions about Es's own voice and hearing from the current settings. Returns a reply or None."""
+    said = text.strip()
+    if len(said) > 40 or _ACTION_HINT_RE.search(said) or re.search(r"と(?:喋|しゃべ|話)|(?:彼|彼女|友達|あの人|みんな)(?:は|が|って)", said):
+        return None  # 「友達と喋れるようになった？」 is not about Es
+    if _SPEAK_Q_RE.search(said):
+        import voice
+        s, st = voice.settings(), voice.status(cfg)
+        who = voice.credit(cfg).split(":", 1)[-1]
+        if not s.get("enabled"):
+            return (f"声で話す機能はあるよ（VOICEVOX の{who}の声で返事を読み上げる）。でも、いまは読み上げがオフになってるの。"
+                    "チャット画面の読み上げの切り替えでオンにできるよ。")
+        trouble = {"missing": "読み上げのエンジン（VOICEVOX）が見つからなくて", "error": "読み上げのエンジンにつながらなくて"}
+        note = f"ただ、いまは{trouble[st['engine']]}、声が出せていないかも。" if st.get("engine") in trouble else ""
+        return f"うん、話せるよ。返事を VOICEVOX の{who}の声で読み上げてるよ。{note}"
+    if _HEAR_Q_RE.search(said):
+        music = re.search(r"音楽|曲|BGM|動画|音", said)
+        return ("会話モードをオンにすると、マイクで話してくれた言葉を Edge の音声認識で文字にして受け取れるよ。"
+                "音楽や動画の音そのものは聞こえないんだ。"
+                + ("アプリ内の YouTube なら、タイトルと再生しているかどうかだけは分かるよ。" if music else ""))
+    return None
+
+
 def _responder_prompt(today, intent, text, focus, events):
     picked, tasks = _relevant_tasks(text, focus)
     by_project = {}
@@ -289,6 +334,8 @@ For a Claude Code handoff, say it is ready and that the「Claude Codeで開く�
 If something was not done, say so plainly. Do not list other tasks."""
 
     return f"""{PERSONA}
+
+Reading aloud now: {_voice_state()}.
 
 Today is {today.isoformat()} ({WEEKDAYS[today.weekday()]}), now {dt.datetime.now():%H:%M}.
 
@@ -2178,6 +2225,11 @@ def _chat(text, cfg, message_id=None):
         if records:
             db.add_message("notice", "\n".join(records))
         return {"reply": reply, "events": records, "handoffs": [], "intent": "es-reply"}
+    ability = _ability_flow(text, cfg)
+    if ability:
+        task_context.clear()
+        db.add_message("assistant", ability)
+        return {"reply": ability, "events": [], "handoffs": [], "intent": "ability"}
     media_reply = playback.answer(text)
     if media_reply is not None:
         task_context.clear()
