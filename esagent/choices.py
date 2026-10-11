@@ -5,6 +5,7 @@ import secrets
 import threading
 
 import db
+import recurring
 import task_context
 
 lock = threading.RLock()
@@ -12,6 +13,9 @@ TOPICS = {'daily': ('日常の話', '今日はどんな一日だった？'),
           'ideas': ('アイデアの話', '最近、試してみたいアイデアはある？'),
           'feeling': ('今の気分', 'いまの気分はどう？話せる範囲で教えてね。')}
 _YES = re.compile(r'^(?:はい|うん|そうだね|そうして|お願い|おねがい|OK|ok|いいよ|それで|よろしく|登録して|始めて)[。！!\s]*$')
+_PLAIN = re.compile(r'繰り?返し(?:は)?(?:なし|無し|いらない)|普通に追加|そのまま追加|周期なし')
+# A new request that names a task is not an answer to the pending question.
+_OTHER_TASK = re.compile(r'[「『"“＂#]')
 _NO = re.compile(r'^(?:いいえ|やめる|やめて|キャンセル|あとで|しない)[。！!\s]*$')
 
 
@@ -46,6 +50,9 @@ def publish(kind, payload=None):
         options = [{'value': key, 'label': v[0]} for key, v in TOPICS.items()]
     elif kind in labels:
         options = [{'value': 'accept', 'label': labels[kind]}]
+    elif kind == 'repeat_add':  # #135: the period of a new weekly/daily task
+        options = [{'value': 'accept', 'label': recurring.describe(payload['rule']) + 'で追加'}] if payload.get('rule') else []
+        options.append({'value': 'plain', 'label': '繰り返しなしで追加'})
     else:
         raise ValueError('unsupported offer')
     options.append({'value': 'cancel', 'label': '今回はやめる'})
@@ -73,10 +80,16 @@ def before(text, selection=None):
         value = 'accept'
     elif _NO.fullmatch(text.strip()) and offer:
         value = 'cancel'
+    elif offer and offer.get('kind') == 'repeat_add' and recurring.parse(text) and not _OTHER_TASK.search(text):
+        value = 'rule'  # 「毎週月曜4時」 typed as the answer (#135)
+    elif offer and offer.get('kind') == 'repeat_add' and _PLAIN.search(text) and not _OTHER_TASK.search(text):
+        value = 'plain'
     else:
         invalidate()
         return None
     option = next((o for o in offer['options'] if o['value'] == value), None)
+    if value == 'rule' and selection is None:
+        option = {'value': 'rule', 'label': text.strip()}
     if not option:
         raise ValueError('unsupported choice')
     # Conditional update protects against a concurrent direct settings edit too.
@@ -87,7 +100,12 @@ def before(text, selection=None):
         return {'kind': 'stale', 'label': '以前の選択肢に回答', 'payload': {}, 'value': ''}
     db.set_setting('pending_focus', '')
     db.set_setting('pending_feature', '')
-    return {**offer, 'value': value, 'label': option['label']}
+    chosen = {**offer, 'value': value, 'label': option['label']}
+    if value == 'rule':
+        chosen['rule'] = recurring.parse(text)
+    elif value == 'plain' and selection is None:
+        chosen['label'] = text.strip()  # keep what the user typed as their message
+    return chosen
 
 
 def expose(result):
