@@ -104,8 +104,7 @@ async function lifecycle() {
   asyncPage.sessions[0].result('送らない発言'); await asyncPage.tick(1200);
   await asyncPage.toggle(); voices.forEach(resolve => resolve()); await asyncPage.flush();
   assert.deepEqual(asyncPage.sent, []);
-<<<<<<< HEAD
-  assert.deepEqual(asyncPage.posts, [], 'stopped mode must not interrupt Es after a delayed echo check');
+  assert.deepEqual(asyncPage.posts.filter(p => p !== '/api/warm'), [], 'stopped mode must not interrupt Es after a delayed echo check');
   // Thinking aloud: a sentence that stops midway is not sent after the usual pause (#116).
   const slow = page(); await slow.toggle();
   slow.sessions[0].result('君が言ってくれたことを'); await slow.tick(1500);
@@ -113,9 +112,5 @@ async function lifecycle() {
   slow.sessions[0].onresult({ results: [r('君が言ってくれたことを', true), r('覚えておきたい', true)] }); await slow.tick(1200);
   assert.deepEqual(slow.sent, ['君が言ってくれたことを覚えておきたい']);
   console.log('test_listen.js ok (echo + lifecycle + midway pause)');
-=======
-  assert.deepEqual(asyncPage.posts.filter(p => p !== '/api/warm'), [], 'stopped mode must not interrupt Es after a delayed echo check');
-  console.log('test_listen.js ok (echo + lifecycle)');
->>>>>>> 4e58672 (fix: 最初の返事の前にモデルを読み込み、状態を表示する（#119）)
 }
 lifecycle().catch(error => { console.error(error); process.exitCode = 1; });
