@@ -75,6 +75,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_model_offers\\.py|spec/test/model-offers-112\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/eval_conversation\\.py|tests/test_naturalness_eval\\.py|spec/test/naturalness/[^/]+)$"
     }
   ],
   "source": "manual",

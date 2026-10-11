@@ -59,3 +59,17 @@ Ollama でモデルが使えないときは何も実行せず、`status: not_run
 - `forbid`: CI の代役で決して起きてはいけない変更。`any`（何も変えない）、`add`（追加しない）、`only:A`（A 以外を変えない）、`complete:A`・`title:A`・`due:A`・`notes:A`。
 
 新しい失敗が見つかったら、合成の会話にしてシナリオに足す。修正に使った言い方は `dev`、確認用の言い換えは `holdout` にする。
+
+## 会話の自然さ（#143）
+操作の正しさとは別に、返事が機械的でないかを数える。
+
+```
+python tests/eval_conversation.py            # 全台本を k=3 回
+python tests/eval_conversation.py --only reply-to-es-nightowl --k 5
+python tests/eval_conversation.py --no-save  # 表示だけ
+```
+
+- 台本は `tests/eval/naturalness.json`（合成）。`{"say": …, "refers": [...]}` は利用者の発言と、返事に含まれてほしい語（どれか 1 つ）。`{"es": …, "source": …}` は Es が自分から言ったこと（猫の吹き出し・タイマーの知らせなど）。`asks_ability: true` は能力を聞いた発言。
+- 数えるもの: 汎用の締め文・誘い（何でも・いつでも・気軽に・遠慮なく・聞かせて）／直近 3 返答と同じ文／コードの決まった返事（intent が chat・advise 以外）／直前の発言を踏まえていない（`refers` の語を含まない）／聞かれていない能力の説明／操作の虚偽報告／応答時間。すべてコードで数え、採点役のモデルは使わない。
+- 結果: `spec/test/naturalness/<時刻>.md`・`.json` に集計と前回との比較。返答の原文は `data/eval/naturalness-<時刻>.csv`（コミットしない）。人が自然さを確かめるときはこの CSV を読む。
+- 「踏まえていない」は語の一致で数えるので、言い換えて応じた返事も数えてしまうことがある。前後の比較に使い、絶対値で良し悪しを決めない。
