@@ -12,7 +12,7 @@ lock = threading.RLock()
 TOPICS = {'daily': ('日常の話', '今日はどんな一日だった？'),
           'ideas': ('アイデアの話', '最近、試してみたいアイデアはある？'),
           'feeling': ('今の気分', 'いまの気分はどう？話せる範囲で教えてね。')}
-_YES = re.compile(r'^(?:はい|うん|そうだね|そうして|お願い|おねがい|OK|ok|いいよ|それで|よろしく|登録して|始めて)[。！!\s]*$')
+_YES = re.compile(r'^(?:はい|うん|そうだね|そうして|お願い|おねがい|OK|ok|いいよ|それで|よろしく|登録して|登録する|登録しておいて|追加する|追加して|追加で|入れて|始めて)[。！!\s]*$')
 _PLAIN = re.compile(r'繰り?返し(?:は)?(?:なし|無し|いらない)|普通に追加|そのまま追加|周期なし')
 # A new request that names a task is not an answer to the pending question.
 _OTHER_TASK = re.compile(r'[「『"“＂#]')

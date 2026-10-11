@@ -72,6 +72,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_specific_small_talk\\.py|spec/test/specific-small-talk-109\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_model_offers\\.py|spec/test/model-offers-112\\.md)$"
     }
   ],
   "source": "manual",

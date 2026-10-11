@@ -1245,7 +1245,14 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     if _TALK_START_RE.search(text) and db.get_setting("chat_mode", "work") == "work":
         reply += "\n（雑談モードにする？上のボタンか「雑談モードにして」で切り替えられるよ）"
     reply = clean_model_reply(reply, events)
-    if intent == "chat" and not evidence:
+    reply, offered = strip_model_offers(reply)
+    if offered and db.get_setting("chat_mode", "work") != "talk" and _WISH_ABOUT_ES_RE.search(text) \
+            and _WISH_RE.search(text):
+        # The model offered to register the wish; make it a real, approvable offer (#112).
+        db.set_setting("pending_feature", text)
+        task_context.begin(text, _progress["message_id"])
+        reply += "\n" + FEATURE_OFFER
+    elif intent == "chat" and not evidence:
         reply = tidy_chat_reply(reply, text, history)
     return reply
 
@@ -1283,6 +1290,25 @@ def tidy_chat_reply(reply, text, history):
         return len(n) >= 6 and any(n == e or (len(_bigrams(n)) > 3 and _similarity(n, e) >= 0.8) for e in earlier)
     kept = [s for s in sentences if not drop(s)]
     return "".join(kept).strip() if kept else reply
+
+
+# 「その機能をタスクとして追加する？『うん』か『追加する』でOKだよ」 written by the model had nothing
+# behind it, so a yes failed (#112). Only code makes offers: such sentences are removed.
+_MODEL_OFFER_RE = re.compile(
+    r"(?:タスク|EsAgent|改修|機能|要望|アイデア|ToDo)[^。！!\n]{0,25}(?:追加|登録|入れ)(?:する|しよう|しておく|しとく|しようか|して(?:おく|おこう|みる)?)?"
+    r"(?:か|かな|ね)?[？?]|"
+    r"[「『]?(?:うん|はい|追加する|追加して|登録する|登録して)[」』]?(?:か|と|で|って)[^。！!\n]{0,25}(?:追加|登録|入れ|OK|オッケー|ok)")
+_WISH_ABOUT_ES_RE = re.compile(r"(?:君|きみ|キミ|Es|エス|アシスタント|EsAgent|このアプリ|このツール)|" + _FEATURE_RE.pattern)
+FEATURE_OFFER = "改修のタスクとして EsAgent に登録しておく？下のボタンか「うん」で入れるよ。まだ登録していないよ。"
+
+
+def strip_model_offers(reply):
+    """Remove the model's own offers to add or register something. Returns (reply, removed)."""
+    sentences = re.split(r"(?<=[。！!？?\n])", reply)
+    kept = [s for s in sentences if not _MODEL_OFFER_RE.search(s)]
+    if len(kept) == len(sentences):
+        return reply, False
+    return "".join(kept).strip() or "うん、そう思うんだね。", True
 
 
 NO_CHANGE_NOTE = "まだ何も登録・変更していないよ。登録するなら「〇〇をタスクに追加して」と言ってね。"
@@ -1335,7 +1361,8 @@ def _partial(text):
     jobs.check()
     safe = strip_model_records(text)
     safe = re.sub(r"[（(]記録\s*[:：].*$", "", safe)
-    _progress["partial"] = "".join(part for part in re.split(r"(?<=[。！!？?\n])", safe) if not _CLAIM_RE.search(part))
+    _progress["partial"] = "".join(part for part in re.split(r"(?<=[。！!？?\n])", safe)
+                                    if not _CLAIM_RE.search(part) and not _MODEL_OFFER_RE.search(part))
 
 
 def progress():
@@ -1727,8 +1754,9 @@ def _feature_flow(cfg, text):
                 [f"＋ #{t['id']} {t['title']}（EsAgent）"])
     if pending:
         db.set_setting("pending_feature", "")
+    # In 雑談モード Es does not offer to register wishes by itself (#112).
     if _WISH_RE.search(text) and _FEATURE_RE.search(text) and not _REFERENCE_RE.search(text) \
-            and not _REGISTER_RE.search(text):
+            and not _REGISTER_RE.search(text) and db.get_setting("chat_mode", "work") != "talk":
         db.set_setting("pending_feature", text)
         task_context.begin(text, _progress['message_id'])
         return ("いいね、それ。でも私は自分の画面やプログラムを直せないんだ。\n"
