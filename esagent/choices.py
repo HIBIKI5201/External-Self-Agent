@@ -85,6 +85,8 @@ def before(text, selection=None):
         value = 'accept'
     elif _NO.fullmatch(text.strip()) and offer:
         value = 'cancel'
+    elif offer and offer.get('kind') == 'project_add' and pending_rename(text):
+        value = 'rename'  # 「名前を〇〇に直して」 while the project is asked: the pending task's name (#115)
     elif offer and offer.get('kind') == 'project_add' and _project_answer(offer, text):
         value = _project_answer(offer, text)  # 「Warframeで」「未分類でいい」 typed (#115)
     elif offer and offer.get('kind') == 'repeat_add' and recurring.parse(text) and not _OTHER_TASK.search(text):
@@ -95,6 +97,8 @@ def before(text, selection=None):
         invalidate()
         return None
     option = next((o for o in offer['options'] if o['value'] == value), None)
+    if value == 'rename' and selection is None:
+        option = {'value': 'rename', 'label': text.strip()}
     if value == 'rule' and selection is None:
         option = {'value': 'rule', 'label': text.strip()}
     if not option:
@@ -110,10 +114,22 @@ def before(text, selection=None):
     chosen = {**offer, 'value': value, 'label': option['label']}
     if value == 'rule':
         chosen['rule'] = recurring.parse(text)
+    elif value == 'rename':
+        chosen['title'] = pending_rename(text)
     elif value in ('plain', 'none') or value.startswith('p:'):
         if selection is None:
             chosen['label'] = text.strip()  # keep what the user typed as their message
     return chosen
+
+
+_RENAME = re.compile(r'(?:名前|タイトル|名称)(?:を|は)\s*[「『]?(?P<a>[^「」『』\n]{1,60}?)[」』]?\s*(?:に|へ)(?:変えて|変更して|直して|して)|'
+                     r'[「『](?P<b>[^「」『』\n]{1,60})[」』]\s*(?:に|へ)(?:変えて|変更して|直して)')
+
+
+def pending_rename(text):
+    """The new name in 「名前を〇〇に直して」, or None."""
+    m = _RENAME.search(text)
+    return (m['a'] or m['b']).strip() if m else None
 
 
 def _project_answer(offer, text):

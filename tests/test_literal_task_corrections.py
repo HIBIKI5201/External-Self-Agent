@@ -76,7 +76,8 @@ def test_model_cannot_add_unspoken_title_words_and_multi_add_preserves_each_name
 def test_real_model_add_then_rename_uses_literal_names_and_keeps_other_tasks():
     with Sandbox(copy_real=False) as sb:
         other=db.add_task("買い物")
-        sb.chat("洗濯をタスクに追加して")
+        if sb.chat("洗濯をタスクに追加して").get("choices"):
+            sb.chat("未分類でいい")  # the project is asked before adding (#115)
         assert sorted(t["title"] for t in db.list_tasks())==["洗濯","買い物"]
         result=sb.chat("あ、さっきのは名前を洗濯物をたたむに変えて")
         assert sorted(t["title"] for t in db.list_tasks())==["洗濯物をたたむ","買い物"], result

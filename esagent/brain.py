@@ -924,14 +924,20 @@ def _budget(cfg):
 
 
 def _literal_add_title(text):
-    match = re.fullmatch(r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?をタスクに(?:追加して|登録して|して)(?:おいて|ください|ね)?[。！!\s]*', text)
+    # 「〇〇を追加して」 too: the model once made the name 「〇〇を追加」 (#115).
+    match = re.fullmatch(r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?(?:をタスクに(?:追加して|登録して|して|入れて)|'
+                         r'を(?:追加して|登録して))(?:おいて|ください|ね)?[。！!\s]*', text)
     if not match:
         deadline = re.fullmatch(r"\s*(?P<date>[^。、\n]{1,60}?)までに(?P<title>[^。、\n]{1,100}?)[。！!\s]*", text)
         if not deadline or not (annotate_dates(deadline["date"], dt.date.today()) != deadline["date"] or re.search(r"\d{4}-\d{2}-\d{2}", deadline["date"])):
             return None
         match = deadline
     title = match["title"].strip()
-    if _PRONOUN_RE.search(title) or re.search(r"と|、|,|および|締め?切|期限|期日|メモ|詳細", title) or annotate_dates(title, dt.date.today()) != title:
+    for p in sorted((p["name"] for p in db.list_projects() if p["name"]), key=len, reverse=True):
+        if title.startswith(p) and re.match(r"(?:に|へ|として|で)", title[len(p):]):
+            title = re.sub(r"^(?:に|へ|として|で)\s*", "", title[len(p):])  # 「就活にB社の説明会」
+            break
+    if not title or _PRONOUN_RE.search(title) or re.search(r"と|、|,|および|締め?切|期限|期日|メモ|詳細", title) or annotate_dates(title, dt.date.today()) != title:
         return None
     return title
 
@@ -1951,6 +1957,14 @@ def _choice_reply(selected, cfg, message_id=None):
         reply, events = _register_feature(cfg, wish, payload.get('context') or [wish])
     elif kind == 'topic' and value in choices.TOPICS:
         reply = choices.TOPICS[value][1]
+    elif kind == 'project_add' and value == 'rename' and selected.get('title'):
+        # The name was corrected before the project was chosen: ask again with the new name (#115).
+        payload = {**payload, 'action': {**payload.get('action', {}), 'title': selected['title']}}
+        reply = (f"名前を「{selected['title']}」に直したよ。どの分類に入れる？"
+                 "ボタンか分類の名前で選んでね。「未分類でいい」でもいいよ。まだ追加していないよ。")
+        db.add_message('assistant', reply)
+        choices.publish('project_add', payload)
+        return {'reply': reply, 'events': [], 'handoffs': [], 'ui': {}, 'intent': 'proposal'}
     elif kind == 'project_add':
         reply, events = _finish_project_add(payload, value, cfg)
     elif kind == 'repeat_add' and value in ('accept', 'plain', 'rule'):

@@ -201,6 +201,8 @@ def run(sc, model=None, cfg_overrides=None, fake_model=None):
         cfg.update(cfg_overrides or {})
         keys = {}
         for t in sc.get("tasks", []):
+            if t.get("project"):
+                db.ensure_project(t["project"])
             row = db.add_task(t["title"], project=t.get("project"), due=_date(t.get("due"), today) or None,
                               notes=t.get("notes", ""))
             keys[t["key"]] = row["id"]

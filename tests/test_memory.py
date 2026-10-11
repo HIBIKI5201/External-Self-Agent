@@ -60,7 +60,8 @@ def test_says_unknown_instead_of_inventing():
 @needs_llm
 def test_model_knows_what_it_actually_did():
     with Sandbox() as sb:
-        sb.chat("金曜までにC社のESを出す")
+        if sb.chat("金曜までにC社のESを出す").get("choices"):
+            sb.chat("未分類でいい")  # the project is asked before adding (#115)
         sb.llm_calls.clear()
         r = sb.chat("さっき何を登録した？")
         # Answered from the operation records in code since #70; the model is not asked.
