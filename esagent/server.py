@@ -33,6 +33,7 @@ import skills  # noqa: E402
 import youtube  # noqa: E402
 import choices  # noqa: E402
 import task_context  # noqa: E402
+import utterances  # noqa: E402
 import voice  # noqa: E402
 import runtime_log
 import playback
@@ -50,7 +51,8 @@ def state():
         "done": db.recently_done(),
         "projects": db.list_projects(),
         "handoffs": db.list_handoffs(),
-        "messages": db.recent_messages(80),
+        # Es's murmurs and button feedback are in the log and the context, not in the chat (#139).
+        "messages": [m for m in db.recent_messages(160) if m.get("shown") != 0][-80:],
         "llm": llm.status(CFG),
         "bgm": CFG.get("bgm", []),
         "google": gsync.status(),
@@ -285,7 +287,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not jobs.CURRENT.get():
                     voice.reply(CFG, result)  # async jobs deliver once after final revision validation
                 if result.get("events"):
-                    events.push("chat_events", lines=result["events"])
+                    line = utterances.reaction(result["events"])
+                    ev = events.push("chat_events", lines=result["events"], text=line)
+                    utterances.record(line, source="task", kind="murmur", key=ev["key"])
                 if result.get("ui", {}).get("focus"):
                     pomodoro.start(CFG, result["ui"]["focus"])
             if jobs.CURRENT.get():
@@ -315,6 +319,10 @@ class Handler(BaseHTTPRequestHandler):
             return h
         if path == "/api/voice":  # reading aloud on/off and volume (#44)
             return voice.update(CFG, enabled=body.get("enabled"), volume=body.get("volume"))
+        if path == "/api/es/said":  # a line the cat or the chat window showed (#139)
+            mid = utterances.record(str(body.get("text") or ""), source=str(body.get("source") or "pet"),
+                                    kind=str(body.get("kind") or "notice"), key=body.get("key"))
+            return {"recorded": mid is not None}
         if path == "/api/voice/say":  # a line the cat or the chat window shows
             text = str(body.get("text") or "")[:500]
             return {"queued": voice.say(CFG, text, key=body.get("key"))}

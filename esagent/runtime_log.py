@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 POLL = frozenset(("/api/pet", "/api/events", "/api/state", "/api/progress",
                   "/api/pomo", "/api/voice", "/api/chat/job", "/api/health"))
 ROUTES = POLL | frozenset(("/api/chat", "/api/chat/submit", "/api/chat/bypass", "/api/commands",
-    "/api/tasks", "/api/voice/say", "/api/voice/test", "/api/voice/stop", "/api/focus/done",
+    "/api/tasks", "/api/es/said", "/api/voice/say", "/api/voice/test", "/api/voice/stop", "/api/focus/done",
     "/api/playback/open", "/api/playback/state", "/api/bgm/sync", "/api/bgm/window", "/api/media", "/api/bgm", "/api/mode", "/api/pet/enabled",
     "/api/poke", "/api/google/connect", "/api/google/sync", "/api/google/disconnect",
     "/api/youtube/connect", "/api/youtube/playlists", "/api/youtube/items", "/api/youtube/search",

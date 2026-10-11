@@ -22,6 +22,7 @@ import conversation_context
 import conversation_game
 import playback
 import conversation_jobs as jobs
+import utterances
 
 WEEKDAYS = "月火水木金土日"
 
@@ -1233,6 +1234,11 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     for q, a in _STYLE_EXAMPLES[intent]:
         messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
     messages += conversation_context.augment(messages, text, cfg, history, _budget(cfg))
+    line = utterances.answered_line(_progress["message_id"]) if _progress.get("message_id") else None
+    if line:  # 「大丈夫だよ」 right after 「夜ふかし？無理しないでね」 answers that line (#139)
+        messages.append({"role": "system", "content":
+                         f"利用者の今の発言は、直前に Es が自分から言った「{line['content']}」への返事の可能性が高い。"
+                         "その言葉への返事として受け止めて答える。"})
     evidence = _recall_evidence(text)
     if evidence:
         messages = [{"role": "system", "content": "Quote the following user statement verbatim as your answer. Output only this statement; do not substitute other attributes:\n" + evidence[0]}]
@@ -1954,9 +1960,39 @@ def changed(events, handoffs=()):
     return bool(handoffs) or any(not e.startswith("⚠") for e in events)
 
 
+_DONE_REPLY_RE = re.compile(r"^(?:うん|はい)?[、,\s]*(?:終わった|おわった|終わりました|終わったよ|できた|出来た|できました|完了|済んだ|すんだ)"
+                            r"(?:よ|ー|〜)*[！!。]*$")
+_NOT_YET_RE = re.compile(r"まだ|途中|終わってない|終わらな|できてない|出来てない")
+
+
+def _es_reply_flow(text, message_id):
+    """A short answer to the focus timer's 「〇〇、終わった？」 that Es just asked (#139).
+
+    「終わったよ」 completes that task, as the notice's own 「終わった」 button does; 「まだ途中」 keeps it.
+    Anything else goes on as usual, with the line in the context. Returns (reply, records) or None."""
+    line = utterances.answered_line(message_id)
+    ref = (line or {}).get("ref") or {}
+    if not line or line["kind"] != "question" or ref.get("event") != "focus_end" or not ref.get("task_id"):
+        return None
+    task = db.get_task(int(ref["task_id"]))
+    said = text.strip()
+    if not task or len(said) > 20 or re.search(r"[？?]", said):
+        return None
+    if _DONE_REPLY_RE.search(said):
+        if task["status"] == "done":
+            return f"「{task['title']}」はもう完了になってるよ。おつかれさま！", []
+        task = db.update_task(task["id"], status="done")
+        return (f"やったね！「{task['title']}」を完了にしたよ。",
+                [f"✔ #{task['id']} {task['title']} を完了にしました"])
+    if _NOT_YET_RE.search(said):
+        return f"了解、「{task['title']}」はそのままにしておくね。休憩したら続きをやろう。", []
+    return None
+
+
 def _chat(text, cfg, message_id=None):
     today = dt.date.today()
-    history = db.recent_messages(80, roles=("user", "assistant", "notice"), before=message_id)
+    # "es": what Es said by herself (the cat, timer notices…), so a reply to it is understood (#139).
+    history = db.recent_messages(80, roles=("user", "assistant", "notice", "es"), before=message_id)
     annotated = annotate_dates(text, today)
     late = message_id is not None  # answering a message that waited for the model
     if message_id is None:
@@ -1969,6 +2005,13 @@ def _chat(text, cfg, message_id=None):
         task_context.clear()
         db.add_message("assistant", game_reply)
         return {"reply": game_reply, "events": [], "handoffs": [], "intent": "game"}
+    answered = _es_reply_flow(text, message_id)
+    if answered is not None:  # 「終わったよ」 to the timer's 「〇〇、終わった？」 (#139)
+        reply, records = answered
+        db.add_message("assistant", reply)
+        if records:
+            db.add_message("notice", "\n".join(records))
+        return {"reply": reply, "events": records, "handoffs": [], "intent": "es-reply"}
     media_reply = playback.answer(text)
     if media_reply is not None:
         task_context.clear()

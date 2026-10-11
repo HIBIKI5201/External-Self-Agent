@@ -6,6 +6,7 @@ import json
 import re
 
 import db
+import utterances
 
 STATS = contextvars.ContextVar("conversation_context_stats", default={})
 TOPICS = (("食事", r"夕食|晩ごはん|晩御飯|晩飯|夕飯"),
@@ -54,6 +55,12 @@ def select(history, budget):
             groups.append([{"role": role, "content": message["content"]}])
         elif role == "assistant" and groups:
             groups[-1].append({"role": role, "content": message["content"]})
+        elif role == "es":  # what Es said by herself (#139), labelled as such
+            turn = {"role": "assistant", "content": utterances.label(message) if message.get("source") else message["content"]}
+            if groups and message.get("source") is None:
+                groups[-1].append(turn)
+            else:
+                groups.append([turn])
         elif role == "notice" and groups and groups[-1][-1]["role"] == "assistant":
             groups[-1][-1]["content"] = "（記録: " + message["content"] + "）\n" + groups[-1][-1]["content"]
     picked, used, shortened = [], 0, 0
@@ -65,12 +72,13 @@ def select(history, budget):
                 break
             # Reserve at least half for the initiating user; records are retained separately.
             per = remaining // len(group)
+            starts = group[0]["role"]
             compact = []
             for turn in group:
                 text = clip(turn["content"], per)
                 if text:
                     compact.append({"role": turn["role"], "content": text})
-            if not compact or compact[0]["role"] != "user":
+            if not compact or compact[0]["role"] != starts:
                 break
             group = compact
             shortened += 1

@@ -90,6 +90,7 @@
   let lineTimer = null;
   function say(text, opts = {}) {
     speak(text, opts);
+    record(text, opts);
     $("#minicat-text").textContent = text;
     $("#esline-text").textContent = text;
     $("#esline-btns").innerHTML = (opts.buttons || []).map((x, i) =>
@@ -100,6 +101,15 @@
     $("#esline").hidden = false;
     clearTimeout(lineTimer);
     if (!opts.buttons) lineTimer = setTimeout(() => ($("#esline").hidden = true), opts.ms || Math.max(4000, text.length * 160));
+  }
+
+  // Everything Es says here goes to the one utterance log (#139); a line about an event carries the
+  // event's key, so the cat, other windows and the server record it only once. Replies to chat
+  // messages are already stored and pass record: false.
+  function record(text, opts) {
+    if (opts.record === false || !text) return;
+    post("/api/es/said", { text, source: opts.source || "window", kind: opts.kind || "feedback",
+      ...(opts.ukey ? { key: opts.ukey } : {}) }).catch(() => {});
   }
 
   // ---- reading aloud (#44): the server plays every line once; this window only hands lines over ----
@@ -174,25 +184,26 @@
     const embed = bgm.mode === "embed" && bgm.focusOnly;
     if (ev.kind === "focus_start") {
       if (embed && bgm.url) playEmbed();
-      say(ev.task ? `「${ev.task}」、いこう。` : "集中タイム。がんばろ。", { ms: 3000, voice: false });
+      say(ev.task ? `「${ev.task}」、いこう。` : "集中タイム。がんばろ。", { ms: 3000, voice: false, kind: "notice", source: "timer", ukey: ev.key });
     } else if (ev.kind === "focus_end") {
       chime();
       flashMini("stretch", 1700);
       if (embed) pauseEmbed();
-      if (ev.leveled_up) say(`なかよし度が上がった！ Lv${ev.level}「${ev.level_name}」`, { ms: 7000, voice: false });
-      else if (ev.task_id) say(`おつかれさま！「${ev.task}」、終わった？`, { voice: false, buttons: [
+      const timer = { voice: false, source: "timer", ukey: ev.key };
+      if (ev.leveled_up) say(`なかよし度が上がった！ Lv${ev.level}「${ev.level_name}」`, { ms: 7000, ...timer, kind: "notice" });
+      else if (ev.task_id) say(`おつかれさま！「${ev.task}」、終わった？`, { ...timer, kind: "question", buttons: [
         { label: "終わった", onClick: async () => { await post(`/api/tasks/${ev.task_id}`, { status: "done" }); say("やったね！"); window.EsHooks?.refresh?.(); } },
         { label: "まだ", onClick: () => say("了解。次の25分で進めよ。") }] });
-      else say(ev.long ? "おつかれさま！4回目だから長めに休んでね。" : "おつかれさま！ちょっと休憩しよ。", { voice: false });
+      else say(ev.long ? "おつかれさま！4回目だから長めに休んでね。" : "おつかれさま！ちょっと休憩しよ。", { ...timer, kind: "notice" });
       window.EsHooks?.refresh?.();
     } else if (ev.kind === "break_end") {
       chime();
-      say("休憩おわり。次、いく？", { voice: false, buttons: [{ label: "集中する", onClick: startFocus }, { label: "あとで" }] });
+      say("休憩おわり。次、いく？", { voice: false, kind: "question", source: "timer", ukey: ev.key, buttons: [{ label: "集中する", onClick: startFocus }, { label: "あとで" }] });
     } else if (ev.kind === "pause" || ev.kind === "reset") {
       if (embed) pauseEmbed();
     } else if (ev.kind === "answered") {
       window.EsHooks?.refresh?.();
-      say("待たせてごめんね、返事したよ。", { ms: 3500, key: `event:${ev.id}` });
+      say("待たせてごめんね、返事したよ。", { ms: 3500, key: `event:${ev.id}`, kind: "notice", source: "system", ukey: ev.key });
     } else if (ev.kind === "resume") {
       if (embed && P.mode === "focus" && bgm.url) playEmbed();
     }
@@ -643,7 +654,7 @@
     loadApi(() => {
       if (!embedVisible()) return;
       bgm.player.playVideo();
-      if (!bgm.greeted) { bgm.greeted = true; say(pick(["BGM かけるね。", "いい感じの曲、流しとくね。"]), { ms: 2500 }); }
+      if (!bgm.greeted) { bgm.greeted = true; say(pick(["BGM かけるね。", "いい感じの曲、流しとくね。"]), { ms: 2500, kind: "notice", source: "bgm" }); }
     });
   }
   function embedVisible() { return bgm.mode === "embed" && !$("#bgm").classList.contains("closed") && !$("#yt-dialog").open; }
@@ -686,7 +697,7 @@
       $("#voice-volume").onchange = (e) => setVoice({ volume: +e.target.value });
       $("#voice-test").onclick = () => post("/api/voice/test", {}).catch(() => say("試聴できなかった…", { voice: false }));
       $("#voice-stop").onclick = () => post("/api/voice/stop", {}).then(renderVoice).catch(() => {});
-      $("#minicat").onclick = () => { flashMini("talk", 1500); say(pick(["にゃ？", "なになに？", "にゃー"]), { ms: 2000 }); };
+      $("#minicat").onclick = () => { flashMini("talk", 1500); say(pick(["にゃ？", "なになに？", "にゃー"]), { ms: 2000, kind: "murmur" }); };
       setMini("idle");
       $("#bgm-focus").addEventListener("change", syncBgm);
       document.querySelectorAll("[data-sound]").forEach((b) => b.onclick = () => setSound(b.dataset.sound, !soundOn[b.dataset.sound]));
@@ -716,8 +727,8 @@
     },
     react(result) {
       const ev = (result && result.events) || [];
-      if (ev.some((e) => e.startsWith("✔"))) { flashMini("happy"); say(pick(["やったね！", "えらい！その調子。", "ひとつ片づいたね。"]), { ms: 3000 }); }
-      else if (ev.some((e) => e.startsWith("→"))) say("Claude に頼んでおくね。右のボタンから開けるよ。", { ms: 3500 });
+      if (ev.some((e) => e.startsWith("✔"))) { flashMini("happy"); say(pick(["やったね！", "えらい！その調子。", "ひとつ片づいたね。"]), { ms: 3000, record: false }); }
+      else if (ev.some((e) => e.startsWith("→"))) say("Claude に頼んでおくね。右のボタンから開けるよ。", { ms: 3500, record: false });  // the server records the event's line
     },
     say,
   };
