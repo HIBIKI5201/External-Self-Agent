@@ -171,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/progress":
             return self._send(200, brain.progress())
         if path == "/api/chat/bypass":  # messages the window sends without queueing (#23)
-            return self._send(200, {"pattern": brain._STATUS_RE.pattern})
+            return self._send(200, {"pattern": brain._STATUS_RE.pattern, "exclude": brain._TASK_REF_RE.pattern})
         if path == "/api/commands":
             return self._send(200, skills.catalog())
         if path == "/api/admin/tables":
