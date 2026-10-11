@@ -437,6 +437,72 @@ def _narrow_bulk_updates(actions, user_text):
     return actions
 
 
+UNSORTED_RE = re.compile(r"未分類|分類(?:は)?(?:なし|いらない|しない)")
+
+
+def _project_question(actions, user_text, context_text=""):
+    """One new task whose project the user did not name: ask with candidates instead of guessing (#115).
+
+    Candidates are the projects of similar tasks first (a project that holds the similar ones leads),
+    then the model's guess, then (work mode) the projects with the most open tasks. In 雑談モード Es
+    asks only when similar tasks give a candidate. Returns (reply, offer payload) or None."""
+    adds = [a for a in actions if a.get("type") == "add_task" and (a.get("title") or "").strip()]
+    if len(adds) != 1 or len(actions) != 1 or UNSORTED_RE.search(user_text):
+        return None
+    projects = [p["name"] for p in db.list_projects() if p["name"]]
+    said = f"{user_text} {context_text}".lower()
+    if not projects or any(p.lower() in said for p in projects):
+        return None
+    action = adds[0]
+    title = action["title"].strip()
+    if _duplicate_of(title):
+        return None  # _apply reports the duplicate as before
+    open_tasks = db.list_tasks()
+    similar = [t for t in open_tasks if t["project"] and (_similarity(title, t["title"]) >= 0.4
+                                                          or _word_hit(title, t, open_tasks))]
+    counts = {}
+    for t in similar:
+        counts[t["project"]] = counts.get(t["project"], 0) + 1
+    cands = sorted(counts, key=lambda p: -counts[p])
+    talking = db.get_setting("chat_mode", "work") == "talk"
+    if talking and not cands:
+        return None
+    guess = (action.get("project") or "").strip()
+    if guess in projects and guess not in cands:
+        cands.append(guess)
+    if not talking:
+        busy = {}
+        for t in open_tasks:
+            if t["project"]:
+                busy[t["project"]] = busy.get(t["project"], 0) + 1
+        cands += [p for p in sorted(busy, key=lambda p: -busy[p]) if p not in cands]
+    cands = cands[:3]
+    if not cands:
+        return None
+    lead = f"似たタスクがある「{cands[0]}」が候補だよ。" if counts else ""
+    reply = (f"「{title}」はどの分類に入れる？{lead}"
+             "ボタンか分類の名前で選んでね。「未分類でいい」でもいいよ。まだ追加していないよ。")
+    keep = {k: action.get(k) or "" for k in ("title", "due", "notes")}
+    return reply, {"action": keep, "projects": cands, "user_text": user_text, "context_text": context_text}
+
+
+def _finish_project_add(payload, value, cfg):
+    """The answer to _project_question: add the task once, in the chosen project or none."""
+    action = payload.get("action") or {}
+    projects = payload.get("projects") or []
+    if not isinstance(action.get("title"), str) or not action["title"]:
+        return "その選択には対応していないよ。何も変更していないよ。", []
+    if value == "none":
+        project = ""
+    elif value.startswith("p:") and value[2:].isdigit() and int(value[2:]) < len(projects):
+        project = projects[int(value[2:])]
+    else:
+        return "その選択には対応していないよ。何も変更していないよ。", []
+    events, _, touched = _apply([{**action, "type": "add_task", "project": project}], cfg,
+                                user_text=payload.get("user_text") or "", context_text=payload.get("context_text") or "")
+    return _template_reply("add", events, touched), events
+
+
 def _apply(actions, cfg, user_text="", context_text=""):
     with jobs.boundary():
         return _apply_current(actions, cfg, user_text, context_text)
@@ -858,14 +924,20 @@ def _budget(cfg):
 
 
 def _literal_add_title(text):
-    match = re.fullmatch(r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?をタスクに(?:追加して|登録して|して)(?:おいて|ください|ね)?[。！!\s]*', text)
+    # 「〇〇を追加して」 too: the model once made the name 「〇〇を追加」 (#115).
+    match = re.fullmatch(r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?(?:をタスクに(?:追加して|登録して|して|入れて)|'
+                         r'を(?:追加して|登録して))(?:おいて|ください|ね)?[。！!\s]*', text)
     if not match:
         deadline = re.fullmatch(r"\s*(?P<date>[^。、\n]{1,60}?)までに(?P<title>[^。、\n]{1,100}?)[。！!\s]*", text)
         if not deadline or not (annotate_dates(deadline["date"], dt.date.today()) != deadline["date"] or re.search(r"\d{4}-\d{2}-\d{2}", deadline["date"])):
             return None
         match = deadline
     title = match["title"].strip()
-    if _PRONOUN_RE.search(title) or re.search(r"と|、|,|および|締め?切|期限|期日|メモ|詳細", title) or annotate_dates(title, dt.date.today()) != title:
+    for p in sorted((p["name"] for p in db.list_projects() if p["name"]), key=len, reverse=True):
+        if title.startswith(p) and re.match(r"(?:に|へ|として|で)", title[len(p):]):
+            title = re.sub(r"^(?:に|へ|として|で)\s*", "", title[len(p):])  # 「就活にB社の説明会」
+            break
+    if not title or _PRONOUN_RE.search(title) or re.search(r"と|、|,|および|締め?切|期限|期日|メモ|詳細", title) or annotate_dates(title, dt.date.today()) != title:
         return None
     return title
 
@@ -1885,6 +1957,16 @@ def _choice_reply(selected, cfg, message_id=None):
         reply, events = _register_feature(cfg, wish, payload.get('context') or [wish])
     elif kind == 'topic' and value in choices.TOPICS:
         reply = choices.TOPICS[value][1]
+    elif kind == 'project_add' and value == 'rename' and selected.get('title'):
+        # The name was corrected before the project was chosen: ask again with the new name (#115).
+        payload = {**payload, 'action': {**payload.get('action', {}), 'title': selected['title']}}
+        reply = (f"名前を「{selected['title']}」に直したよ。どの分類に入れる？"
+                 "ボタンか分類の名前で選んでね。「未分類でいい」でもいいよ。まだ追加していないよ。")
+        db.add_message('assistant', reply)
+        choices.publish('project_add', payload)
+        return {'reply': reply, 'events': [], 'handoffs': [], 'ui': {}, 'intent': 'proposal'}
+    elif kind == 'project_add':
+        reply, events = _finish_project_add(payload, value, cfg)
     elif kind == 'repeat_add' and value in ('accept', 'plain', 'rule'):
         reply, events = repeat_chat.finish_add(payload, value, selected.get('rule'))
     else:
@@ -2246,6 +2328,12 @@ def _chat(text, cfg, message_id=None):
             if route_text != annotated:  # agreeing to Es's own proposal
                 context += " " + last_reply
             hold = write_guard.analyze(annotated, db.list_tasks(include_done=True)).hold
+            asked = None if hold else _project_question(actions, annotated, context)
+            if asked:  # the project is unknown: ask before adding (#115)
+                reply, offer = asked
+                db.add_message("assistant", reply)
+                choices.publish("project_add", offer)
+                return {"reply": reply, "events": [], "handoffs": [], "intent": "proposal"}
             if hold and intent in ACTION_INTENTS:
                 # 「実行しないで」「と同僚が言っていた」「迷っている」: no write, whatever was proposed (#67).
                 events, handoffs = [], []

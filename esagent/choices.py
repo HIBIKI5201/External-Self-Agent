@@ -52,6 +52,9 @@ def publish(kind, payload=None):
         options = [{'value': key, 'label': v[0]} for key, v in TOPICS.items()]
     elif kind in labels:
         options = [{'value': 'accept', 'label': labels[kind]}]
+    elif kind == 'project_add':  # #115: the project of a new task
+        options = [{'value': f'p:{i}', 'label': f'{name}に入れる'} for i, name in enumerate(payload['projects'])]
+        options.append({'value': 'none', 'label': '未分類で追加'})
     elif kind == 'repeat_add':  # #135: the period of a new weekly/daily task
         options = [{'value': 'accept', 'label': recurring.describe(payload['rule']) + 'で追加'}] if payload.get('rule') else []
         options.append({'value': 'plain', 'label': '繰り返しなしで追加'})
@@ -82,6 +85,10 @@ def before(text, selection=None):
         value = 'accept'
     elif _NO.fullmatch(text.strip()) and offer:
         value = 'cancel'
+    elif offer and offer.get('kind') == 'project_add' and pending_rename(text):
+        value = 'rename'  # 「名前を〇〇に直して」 while the project is asked: the pending task's name (#115)
+    elif offer and offer.get('kind') == 'project_add' and _project_answer(offer, text):
+        value = _project_answer(offer, text)  # 「Warframeで」「未分類でいい」 typed (#115)
     elif offer and offer.get('kind') == 'repeat_add' and recurring.parse(text) and not _OTHER_TASK.search(text):
         value = 'rule'  # 「毎週月曜4時」 typed as the answer (#135)
     elif offer and offer.get('kind') == 'repeat_add' and _PLAIN.search(text) and not _OTHER_TASK.search(text):
@@ -90,6 +97,8 @@ def before(text, selection=None):
         invalidate()
         return None
     option = next((o for o in offer['options'] if o['value'] == value), None)
+    if value == 'rename' and selection is None:
+        option = {'value': 'rename', 'label': text.strip()}
     if value == 'rule' and selection is None:
         option = {'value': 'rule', 'label': text.strip()}
     if not option:
@@ -105,9 +114,33 @@ def before(text, selection=None):
     chosen = {**offer, 'value': value, 'label': option['label']}
     if value == 'rule':
         chosen['rule'] = recurring.parse(text)
-    elif value == 'plain' and selection is None:
-        chosen['label'] = text.strip()  # keep what the user typed as their message
+    elif value == 'rename':
+        chosen['title'] = pending_rename(text)
+    elif value in ('plain', 'none') or value.startswith('p:'):
+        if selection is None:
+            chosen['label'] = text.strip()  # keep what the user typed as their message
     return chosen
+
+
+_RENAME = re.compile(r'(?:名前|タイトル|名称)(?:を|は)\s*[「『]?(?P<a>[^「」『』\n]{1,60}?)[」』]?\s*(?:に|へ)(?:変えて|変更して|直して|して)|'
+                     r'[「『](?P<b>[^「」『』\n]{1,60})[」』]\s*(?:に|へ)(?:変えて|変更して|直して)')
+
+
+def pending_rename(text):
+    """The new name in 「名前を〇〇に直して」, or None."""
+    m = _RENAME.search(text)
+    return (m['a'] or m['b']).strip() if m else None
+
+
+def _project_answer(offer, text):
+    """A short typed answer naming one offered project, or 未分類. Longer requests are new messages."""
+    text = text.strip()
+    if len(text) > 30 or _OTHER_TASK.search(text):
+        return None
+    if re.search(r'未分類|分類(?:は)?(?:なし|いらない)', text):
+        return 'none'
+    hits = [i for i, name in enumerate(offer.get('payload', {}).get('projects', [])) if name.lower() in text.lower()]
+    return f'p:{hits[0]}' if len(hits) == 1 else None
 
 
 def expose(result):
