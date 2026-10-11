@@ -778,7 +778,22 @@ _CLAIM_RE = re.compile(
     r"|始め(?:ます(?:ね|よ)?|ました|ておきました|ておいた(?:よ)?)")
 _RECORD_RE = re.compile(r"(?:記録\s*[:：]|(?:^|\n)\s*[＋+✎✔→↺・]\s*#\d+)")
 _FORGET_RE = re.compile(r"忘れて|後回し|今はいい|いったん置|一旦置|触れないで|出さないで")
-_ACK_RE = re.compile(r"もう(動いて|始めて|やって|始まって)|始めたよ|やってるよ|動いてるよ")
+# A report that work has started, as a whole sentence: not 「やってるような感じ」 (#113).
+_ACK_RE = re.compile(r"(?:もう(?:動いて|始めて|やって|始まって)(?:る|います)?|始めた|やってる|動いてる)"
+                     r"(?:よ|ね|から|ところ)*[。！!〜ー\s]*$")
+_MEMORY_ASK_RE = re.compile(r"[？?]|どう(?:なって|やって|すれば|したら)|教えて|できる|仕組みは|して(?:ほしい|ください|おいて|ね)?[。！!\s]*$")
+_FROM_NOW_RE = re.compile(r"これからは|今後は|次からは|次回から")
+
+
+def _talking():
+    """雑談モード: fixed replies that do not change anything are left to the conversation (#113)."""
+    return db.get_setting("chat_mode", "work") == "talk"
+
+
+def _said_just_before(reply, history):
+    """The same fixed reply twice in a row reads like a machine; the second time the model answers (#113)."""
+    last = next((m["content"] for m in reversed(history) if m["role"] == "assistant"), "")
+    return last.strip() == reply.strip()
 _COMPANY_RE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9一-龥ァ-ヶー]{1,12}社")
 # What an update_task may change: each field needs its own sign in what the user said (#20).
 _RENAME_RE = re.compile(r"名前|タイトル|名称|タスク名|件名|改名|リネーム|呼び方|」(に|へ)(変え|変更|直|し)")
@@ -808,7 +823,9 @@ _POLICY_WISH_RE = re.compile(r"(して|するように|しないで|やめて)(�
 _POLICY_RE = re.compile(r"(質問|確認|聞い|聞き返)(して)?から|聞き返して|勝手に|曖昧な|あいまいな|返事は|返答は|答え方|話し方|口調|"
                         r"(君|きみ|キミ|Es|エス)(は|には|に|が)|これからは|今後は|次からは")
 # Reports about the user's own work are not requests for Es (#21).
-_SELF_DO_RE = re.compile(r"自分で|これから(直|やる|やり|作業|修正|取り掛か|進め)|"
+# 「自分でしゃべるけどね」 is no report about work: 自分で needs a work verb (#113).
+_SELF_DO_RE = re.compile(r"自分で(?:直|やる|やり|やっ|進め|作業|修正|片付|片づ|書|作|対応|調べ|探|決め|仕上げ)|"
+                         r"これから(直|やる|やり|作業|修正|取り掛か|進め)|"
                          r"(直し|やり|進め|修正し|作業し|取り掛かり)(ます|てくる|てみる|に行く)|やってくる|取り掛かる")
 _ASKED_RE = re.compile(r"(もう|既に|すでに|さっき)[^。\n]{0,15}(依頼|頼ん|お願いし|渡し|任せ)|"
                        r"(依頼|お願い)(した|済み|ずみ)|頼んだ|任せた|渡した|投げた")
@@ -1425,7 +1442,7 @@ def _feature_title(cfg, wish):
     return (title.splitlines()[0] if title else wish)[:40]
 
 
-_RECALL_RE = re.compile(r"(今回|さっき|前|この前|最初)の(?P<a>[^、。？?\s]{1,12}?)(は|って|だけ|を|、|？|\?)|"
+_RECALL_RE = re.compile(r"(今回|さっき|(?<![名手以建午])前|この前|最初)の(?P<a>[^、。？?\s]{1,12}?)(は|って|だけ|を|、|？|\?)|"
                         r"(?P<b>[^、。？?\s]{1,12}?)(って|は)(何|なん)だっけ|"
                         r"(?P<c>[^、。？?\s]{1,12}?)(覚えてる|おぼえてる|教えたよね|言ったよね)")
 
@@ -1467,6 +1484,9 @@ def _recall_flow(text, message_id):
     if not topic:
         return None
     if len(topic) < 2:
+        return None
+    # 「〇〇っていう名前のアビリティを使ってるよ」 tells, it does not ask (#113).
+    if not re.search(r"[？?]|何|なん|教えて|覚えて|おぼえて|だっけ|言ったよね|教えたよね|答えて|言って", text):
         return None
     if _recall_evidence(text, message_id):
         return None
@@ -1875,7 +1895,10 @@ def _mentions_task(text):
 
 
 def is_status_question(text):
-    return (bool(_STATUS_RE.search(text)) and not _ACTION_HINT_RE.search(text) and len(text) <= 60
+    m = _STATUS_RE.search(text)
+    if m and m[0] == "どうなって" and set(_WORD_RE.findall(text)) - _WAIT_WORDS:
+        return False  # 「記憶の仕組みはどうなってるの？」 asks about something else (#113)
+    return (bool(m) and not _ACTION_HINT_RE.search(text) and len(text) <= 60
             and not _mentions_task(text))
 
 
@@ -2077,10 +2100,12 @@ def _chat(text, cfg, message_id=None):
         if unknown:
             db.add_message("assistant", unknown)
             return {"reply": unknown, "events": [], "handoffs": [], "intent": "recall"}
-        if _REMEMBER_RE.search(text) or "記憶" in text:
+        # 「記憶ってすごいね」 is talk; only a request or a question about memory gets the fixed answer (#113).
+        if _REMEMBER_RE.search(text) or ("記憶" in text and _MEMORY_ASK_RE.search(text)):
             reply = _remember(cfg, text, history)
-            db.add_message("assistant", reply)
-            return {"reply": reply, "events": [], "handoffs": [], "intent": "remember"}
+            if not _said_just_before(reply, history):
+                db.add_message("assistant", reply)
+                return {"reply": reply, "events": [], "handoffs": [], "intent": "remember"}
         offer = _offer_flow(text)
         if offer:
             reply, ui = offer
@@ -2106,7 +2131,7 @@ def _chat(text, cfg, message_id=None):
             if events:
                 db.add_message("notice", "\n".join(events))
             return {"reply": reply, "events": events, "handoffs": [], "intent": "guarded"}
-        if _ACK_RE.search(text) and not _ACTION_HINT_RE.search(text):
+        if _ACK_RE.search(text) and not _ACTION_HINT_RE.search(text) and not _talking():
             reply = "了解、じゃあ私も集中するね。終わったら教えて。"
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "intent": "ack"}
@@ -2129,11 +2154,12 @@ def _chat(text, cfg, message_id=None):
         if meaning:
             db.add_message("assistant", meaning)
             return {"reply": meaning, "events": [], "handoffs": [], "intent": "meaning"}
-        report = _report_flow(text)
+        report = None if _talking() else _report_flow(text)
         if report:
             db.add_message("assistant", report[0])
             return {"reply": report[0], "events": [], "handoffs": [], "intent": "report"}
-        policy = None if db.get_setting("pending_feature") else _policy_flow(text)
+        policy = None if db.get_setting("pending_feature") or (_talking() and not _FROM_NOW_RE.search(text)) \
+            else _policy_flow(text)
         if policy:
             db.add_message("assistant", policy)
             return {"reply": policy, "events": [], "handoffs": [], "intent": "policy"}
