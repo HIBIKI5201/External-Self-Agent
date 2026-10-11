@@ -750,7 +750,8 @@ _COMPLETE_HINT_RE = re.compile(r"完了|終わ|おわ|済|すんだ|片付|か�
                                r"送った|送信した|チェック|done|Done|DONE")
 _LIST_LINE_RE = re.compile(r"^\s*(\d+[.．)]|[・\-*])\s*\S", re.M)
 _ASK_NEXT_RE = re.compile(r"何(を|から)|どれ(を|から)|おすすめ|オススメ|次は|やること|手伝って")
-_STATUS_RE = re.compile(r"どこまで|進捗|状況|できてる|出来て|進んで|終わってる")
+# Was also named _STATUS_RE, which the wait question pattern below replaced (#134).
+_PROGRESS_ASK_RE = re.compile(r"どこまで|進捗|状況|できてる|出来て|進んで|終わってる")
 _IDEAS_RE = re.compile(r"案を|アイデア|考えて|提案|出して")
 _FEATURE_RE = re.compile(r"表示|画面|機能|カラム|ボタン|UI|コマンド|モード|EsAgent|君の|キミの|きみの|このツール|このアプリ")
 _REGISTER_RE = re.compile(r"登録して|追加して|入れて|お願い")
@@ -977,7 +978,7 @@ def _route_once(cfg, text, today, history, feedback):
     if not isinstance(parsed, dict) or parsed.get('intent') not in INTENTS or not isinstance(parsed.get('focus', ''), str):
         raise ValueError('invalid router shape')
     intent = parsed.get("intent") if parsed.get("intent") in INTENTS else "chat"
-    if _STATUS_RE.search(text) and not re.search(r"追加|登録", text):
+    if _PROGRESS_ASK_RE.search(text) and not re.search(r"追加|登録", text):
         return "summary", "", []
     talking = db.get_setting("chat_mode") == "talk"
     # 「資料の修正」 is a task name, not a request to fix something (#80).
@@ -1439,6 +1440,46 @@ _DID_RE = re.compile(r"(?:変え|変更し|更新し|追加し|追加され|登�
                      r"(?:項目|こと|もの|の|か|って|[？?\s]|$)|操作を(?:説明|教えて|振り返)|何を(?:変え|変更し|し)たの")
 
 
+_STATE_ASK_RE = re.compile(r"どうなって|どういう状況|どんな状況|状況は|進捗|進み具合|どこまで")
+_SINGLE_REF_RE = re.compile(r"(?:その|あの|この|さっきの)(?:タスク|やつ|件)|^それ|^あれ")
+
+
+def _numbered_tasks(text):
+    """「#115」「115番のタスク」 name a task by its number."""
+    ids = re.findall(r"#(\d+)|(\d+)\s*番(?!目)", text)
+    found = [db.get_task(int(a or b)) for a, b in ids]
+    return [t for t in found if t]
+
+
+def _recent_tasks(history, every, latest=False):
+    """Tasks the last few messages were about: named titles and #ids in the operation records.
+    With latest, only the newest message that names any task counts (「その」 = the one just talked about)."""
+    def named(m):
+        found = _named_tasks(m["content"], every)
+        if m["role"] == "notice":
+            for line in m["content"].splitlines():
+                found += [t for t in (db.get_task(int(i)) for i in re.findall(r"#(\d+)", line[:12])) if t]
+        return found
+    recent = history[-6:]
+    if latest:
+        for m in reversed(recent):
+            found = named(m)
+            if found:
+                return list({t["id"]: t for t in found}.values())
+        return []
+    found = _named_tasks(" ".join(m["content"] for m in recent), every)
+    found += [t for m in recent if m["role"] == "notice" for t in named(m)]
+    return list({t["id"]: t for t in found}.values())
+
+
+def _which_task(cands):
+    """Ask instead of guessing, or of answering something unrelated (#134)."""
+    if not cands:
+        return "どのタスクのことか分からなかったよ。タスクの名前か番号で教えてね（何も変更していないよ）。"
+    names = "、".join(f"「{t['title']}」" for t in cands[:5])
+    return f"{names}のどれのこと？名前か番号で教えてね（何も変更していないよ）。"
+
+
 def _lookup_flow(text, history):
     """「資料の修正の締切とメモを一覧で教えて」: stored values, read in code (#76, #68).
 
@@ -1446,18 +1487,29 @@ def _lookup_flow(text, history):
     advice. Only the named tasks (done ones too) are shown, with each value exactly as stored and
     「未設定」 for an empty one. Nothing is written. Returns the reply or None."""
     fields = [f for f, pattern in _LOOKUP_FIELDS if re.search(pattern, text)]
+    state_ask = bool(_STATE_ASK_RE.search(text)) and _mentions_task(text)
+    if state_ask:  # 「そのタスクって今どうなってる？」: its state and due date (#134)
+        fields = list(dict.fromkeys(fields + ["status", "due"]))
     if not fields or not _LOOKUP_ASK_RE.search(text):
         return None
     clauses = [c for c in re.split(r"[。、，,！!\n]|(?<=ないで)", text) if c.strip()]
     if any(_WRITE_ASK_RE.search(c) and not write_guard.NEG_RE.search(c) for c in clauses):
         return None  # a change request, maybe with a question attached
     every = db.list_tasks(include_done=True)
-    tasks = _named_tasks(text, every)
-    if not tasks and _PLURAL_REF_RE.search(text):
-        recent = " ".join(m["content"] for m in history[-6:])
-        tasks = _named_tasks(recent, every)
+    tasks = _named_tasks(text, every) or _numbered_tasks(text)
+    if not tasks and (_PLURAL_REF_RE.search(text) or _SINGLE_REF_RE.search(text)):
+        plural = bool(_PLURAL_REF_RE.search(text))
+        tasks = _recent_tasks(history, every, latest=not plural)
+        if len(tasks) > 1 and not plural:
+            return _which_task(tasks)
     if not tasks and re.search(r"全部|すべて|全て|全タスク", text):
         tasks = db.list_tasks()
+    if not tasks and state_ask:
+        words = " ".join(set(_WORD_RE.findall(text)) - _WAIT_WORDS)
+        active = db.list_tasks()
+        tasks = [t for t in active if words and _word_hit(words, t, active)]
+        if len(tasks) != 1:
+            return _which_task(tasks)
     if not tasks:
         return None
     lines =["保存されている内容だよ（何も変更していないよ）。"]
@@ -1726,8 +1778,27 @@ _STATUS_RE = re.compile(r"(考え|返事|返信|返答|処理|反応)[^。\n]{0,
                         r"時間が?かか")
 
 
+# 「そのタスクって今どうなってる？」 asks about a task, not about the wait (#134). The chat window
+# also gets this pattern so it does not send such a question past the queue.
+_TASK_REF_RE = re.compile(r"タスク|ToDo|TODO|todo|やること|#\d+|\d+\s*番(?!目)")
+_WAIT_WORDS = {"返事", "返信", "返答", "処理", "反応", "時間", "モデル", "考え"}
+
+
+def _mentions_task(text):
+    """The message names a task: タスク/#12/12番, a task's title, its project, or a word only one
+    open task's title has (「資料って今どうなってる？」)."""
+    if _TASK_REF_RE.search(text):
+        return True
+    every = db.list_tasks(include_done=True)
+    if _named_tasks(text, every) or any(t["project"] and t["project"] in text for t in every):
+        return True
+    words = set(_WORD_RE.findall(text)) - _WAIT_WORDS
+    return bool(words) and any(_word_hit(" ".join(words), t, db.list_tasks()) for t in db.list_tasks())
+
+
 def is_status_question(text):
-    return bool(_STATUS_RE.search(text)) and not _ACTION_HINT_RE.search(text) and len(text) <= 60
+    return (bool(_STATUS_RE.search(text)) and not _ACTION_HINT_RE.search(text) and len(text) <= 60
+            and not _mentions_task(text))
 
 
 def _ago(stamp, now):
