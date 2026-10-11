@@ -78,6 +78,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/eval_conversation\\.py|tests/test_naturalness_eval\\.py|spec/test/naturalness/[^/]+)$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/utterances\\.py|tests/test_utterance_log\\.py|spec/test/utterance-log-139\\.md)$"
     }
   ],
   "source": "manual",

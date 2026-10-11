@@ -55,13 +55,18 @@ def _sentences(reply):
     return [n for n in (_norm(s) for s in re.split(r"(?<=[。！!？?\n])", reply)) if len(n) >= 6]
 
 
-def es_say(text, source):
-    """Record a line Es said by itself, the way the app does. False when nothing records it yet."""
+def es_say(turn):
+    """Record a line Es said by itself, the way the app does. False when nothing records it yet.
+    "event"/"task" give the reference the app attaches (the focus timer's task)."""
     try:
         import utterances
     except ImportError:
         return False
-    utterances.record(text, source=source)
+    ref = {"event": turn["event"]} if turn.get("event") else None
+    task = next((t for t in db.list_tasks() if t["title"] == turn.get("task")), None)
+    if ref and task:
+        ref["task_id"] = task["id"]
+    utterances.record(turn["es"], source=turn.get("source", "pet"), kind=turn.get("kind", "notice"), ref=ref)
     return True
 
 
@@ -77,7 +82,7 @@ def play(script):
             db.add_task(t["title"], due=due)
         for turn in script["turns"]:
             if "es" in turn:
-                recorded = es_say(turn["es"], turn.get("source", "pet"))
+                recorded = es_say(turn)
                 rows.append({"es": turn["es"], "recorded": recorded})
                 continue
             start = time.time()

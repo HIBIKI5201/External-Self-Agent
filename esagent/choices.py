@@ -21,7 +21,9 @@ _NO = re.compile(r'^(?:いいえ|やめる|やめて|キャンセル|あとで|�
 
 def _last_reply():
     with db.connect() as con:
-        row = con.execute("SELECT id FROM messages WHERE role IN ('assistant', 'es') ORDER BY id DESC LIMIT 1").fetchone()
+        # Lines Es says by herself (source set, #139) do not replace the reply an offer belongs to.
+        row = con.execute("SELECT id FROM messages WHERE role IN ('assistant', 'es') AND source IS NULL "
+                          "ORDER BY id DESC LIMIT 1").fetchone()
     return row['id'] if row else None
 
 

@@ -90,7 +90,7 @@ class Pet:
         self.root.after(50, self._animate)
         self.root.after(200, self._poll)
         self.root.after(12000, self._fidget)
-        self.root.after(1500, lambda: self.say(self._greeting()))
+        self.root.after(1500, lambda: self.say(self._greeting(), kind="notice", source="clock"))
 
     # ---- placement ------------------------------------------------------------------
     def _visibility_tick(self):
@@ -170,9 +170,13 @@ class Pet:
         self.root.after(random.randint(9000, 18000), self._fidget)
 
     # ---- speech bubble ------------------------------------------------------------------
-    def say(self, text, buttons=None, secs=None, voice=True, key=None):
+    def say(self, text, buttons=None, secs=None, voice=True, key=None, kind="feedback", source="pet", ukey=None):
         if self._hidden:
             return  # the chat window owns companion speech while the desktop cat is hidden
+        # Everything the cat says goes to the one utterance log (#139); an event's line carries its key
+        # so the server, other windows and the cat record it only once.
+        body = {"text": text, "kind": kind, "source": source, **({"key": ukey} if ukey else {})}
+        threading.Thread(target=lambda: self._quiet(lambda: api("/api/es/said", body)), daemon=True).start()
         if voice and self.voice.get("enabled"):
             self._speak(text, key)
         self._close_bubble()
@@ -240,7 +244,7 @@ class Pet:
             if st["overdue"] and self.warned_day != today and self.mood == "idle":
                 self.warned_day = today
                 self.flash("worried", 6)
-                self.say(f"「{st['overdue']}」の締切、過ぎちゃってるよ…")
+                self.say(f"「{st['overdue']}」の締切、過ぎちゃってるよ…", kind="notice", source="task")
         except Exception:
             self.online, self.mood = False, "sleep"
         self.root.after(1000, self._poll)
@@ -250,28 +254,34 @@ class Pet:
         if kind == "focus_start":
             task = ev.get("task")
             self.say(f"「{task}」、いこう。となりで丸くなってるね。" if task else "集中タイム。となりで丸くなってるね。", secs=3.5,
+                     kind="notice", source="timer", ukey=ev.get("key"),
                      voice=False)  # timer notices are read aloud by the server
         elif kind == "focus_end":
             self.flash("stretch", 1.7)
             if ev.get("leveled_up"):
-                self.say(f"なかよし度が上がった！ Lv{ev['level']}「{ev['level_name']}」", secs=7, voice=False)
+                self.say(f"なかよし度が上がった！ Lv{ev['level']}「{ev['level_name']}」", secs=7, voice=False,
+                         kind="notice", source="timer", ukey=ev.get("key"))
             elif ev.get("task_id"):
                 tid = ev["task_id"]
                 self.say(f"おつかれさま！{'長めに休もう。' if ev.get('long') else 'ひと休みしよ。'}\n「{ev['task']}」、終わった？",
                          buttons=[("終わった", lambda: self._done(tid)), ("まだ", lambda: self.say("了解。次の25分で進めよ。"))],
+                         kind="question", source="timer", ukey=ev.get("key"),
                          voice=False)
             else:
-                self.say("おつかれさま！ちょっと休憩しよ。", voice=False)
+                self.say("おつかれさま！ちょっと休憩しよ。", voice=False, kind="notice", source="timer", ukey=ev.get("key"))
         elif kind == "break_end":
-            self.say("休憩おわり。次、いく？", buttons=[("集中する", self._start), ("あとで", None)], voice=False)
+            self.say("休憩おわり。次、いく？", buttons=[("集中する", self._start), ("あとで", None)], voice=False,
+                     kind="question", source="timer", ukey=ev.get("key"))
         elif kind == "chat_events":
             lines, key = ev.get("lines") or [], f"event:{ev['id']}"
+            # The server chose and recorded the line (ev["text"]); the cat shows that same line.
+            line, opts = ev.get("text") or "", {"key": key, "kind": "murmur", "source": "task", "ukey": ev.get("key")}
             if any(l.startswith("✔") for l in lines):
-                self.flash("happy"); self.say(random.choice(["やったね！", "えらい！", "ひとつ片づいたね。"]), secs=3, key=key)
+                self.flash("happy"); self.say(line or random.choice(["やったね！", "えらい！", "ひとつ片づいたね。"]), secs=3, **opts)
             elif any(l.startswith("→") for l in lines):
-                self.flash("happy"); self.say("Claude に頼んだよ。", secs=3, key=key)
+                self.flash("happy"); self.say(line or "Claude に頼んだよ。", secs=3, **opts)
             elif any(l.startswith("＋") for l in lines):
-                self.flash("talk", 2); self.say("メモしたよ。", secs=2.5, key=key)
+                self.flash("talk", 2); self.say(line or "メモしたよ。", secs=2.5, **opts)
 
     # ---- actions -------------------------------------------------------------------------
     def _safe(self, fn):
@@ -371,7 +381,7 @@ class Pet:
             self._save_pos()
         else:  # a single click is just a hello; double-click opens the chat
             self.flash("talk", 1.8)
-            self.say(random.choice(["にゃ？", "なになに？", "にゃー"]), secs=1.5)
+            self.say(random.choice(["にゃ？", "なになに？", "にゃー"]), secs=1.5, kind="murmur")
 
     def _double(self, e):
         self.drag = None

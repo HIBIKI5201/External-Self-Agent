@@ -426,10 +426,10 @@ async function pump() {
       const job = await waitJob(item);
       const r = job.result || {};
       if (r.reply && !item.invalidated && (r.failed || r.cancelled || r.interrupted)) {
-        window.Es?.say(r.reply, { ms: 9000, voice: false });
+        window.Es?.say(r.reply, { ms: 9000, voice: false, record: false });
       }
       offline = false;
-      if (r.pending) window.Es?.say(r.note, { ms: 6000 });
+      if (r.pending) window.Es?.say(r.note, { ms: 6000, record: false });
       else if (!queue[0].invalidated && job.state !== "superseded") window.Es?.react(r);  // a "うん" to a focus offer is started by the server
     } catch (err) {
       if (err.offline) { offline = true; delivered = false; }   // keep it and try again
@@ -504,7 +504,7 @@ async function waitJob(item) {
 async function sendText(text, forcedRelation = null) {
   if (busy && bypassRe && bypassRe.test(text) && !(bypassExclude && bypassExclude.test(text)) && !text.startsWith("/")) {
     api("/api/chat", { text, queuedAt: localIso(), requestId: requestId() })
-      .then(r => { window.Es?.say(r.reply, { ms: 9000, voice: false }); return refresh(); })
+      .then(r => { window.Es?.say(r.reply, { ms: 9000, voice: false, record: false }); return refresh(); })
       .catch(err => window.Es?.say("送れなかった… " + err.message, { ms: 6000 }));
     return;
   }

@@ -8,6 +8,7 @@ import companion
 import db
 import events
 import media
+import utterances
 import voice
 
 DEFAULT = {"mode": "idle", "ends_at": 0, "paused": 0, "round": 0, "task_id": None}
@@ -63,8 +64,14 @@ def _safe_media(action):
         pass
 
 
-def _say(cfg, ev, text):
-    """Timer notices are read aloud here, once, even with no window or cat to show them (#44)."""
+def _say(cfg, ev, text, kind="notice"):
+    """Timer notices are read aloud here, once, even with no window or cat to show them (#44), and
+    recorded once in Es's utterance log (#139)."""
+    try:
+        ref = {"event": ev["kind"], **({"task_id": ev["task_id"]} if ev.get("task_id") else {})}
+        utterances.record(text, source="timer", kind=kind, key=ev["key"], ref=ref)
+    except Exception:
+        pass
     try:
         voice.say(cfg, text, key=f"event:{ev['id']}")
     except Exception:
@@ -144,7 +151,8 @@ def tick(cfg):
                          leveled_up=stats.get("leveled_up"), level=stats["level"], level_name=stats["level_name"])
         rest = "長めに休もう。" if finished[1] else "ひと休みしよ。"
         _say(cfg, ev, f"なかよし度が上がった！レベル{stats['level']}、{stats['level_name']}。" if stats.get("leveled_up")
-             else f"おつかれさま！{rest}「{ev['task']}」、終わった？" if ev["task"] else f"おつかれさま！{rest}")
+             else f"おつかれさま！{rest}「{ev['task']}」、終わった？" if ev["task"] else f"おつかれさま！{rest}",
+             kind="question" if ev["task"] and not stats.get("leveled_up") else "notice")
         _bgm("pause")
     else:
-        _say(cfg, events.push("break_end"), "休憩おわり。次、いく？")
+        _say(cfg, events.push("break_end"), "休憩おわり。次、いく？", kind="question")

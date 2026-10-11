@@ -87,7 +87,11 @@ MIGRATIONS = {
                  # Timing of a user message (#23): pressed send in the window, reached the server,
                  # Es started on it, reply done; wait_reason = "model" if it waited for the model.
                  ("queued_at", "TEXT"), ("received_at", "TEXT"), ("started_at", "TEXT"), ("finished_at", "TEXT"),
-                 ("wait_reason", "TEXT"), ("request_id", "TEXT"), ("request_revision", "INTEGER")],
+                 ("wait_reason", "TEXT"), ("request_id", "TEXT"), ("request_revision", "INTEGER"),
+                 # What Es said by herself (#139, utterances.py): where, what kind, the event it
+                 # belongs to (recorded once), whether the chat shows it, and what it was about.
+                 ("source", "TEXT"), ("kind", "TEXT"), ("event_key", "TEXT"), ("shown", "INTEGER"),
+                 ("ref", "TEXT")],
     "tasks": [("gtask_id", "TEXT"), ("glist_id", "TEXT"), ("g_updated", "TEXT"), ("synced_at", "TEXT"),
               ("rev", "INTEGER NOT NULL DEFAULT 1"), ("synced_rev", "INTEGER NOT NULL DEFAULT 0"),
               ("repeat", "TEXT"), ("last_reset", "TEXT")],
@@ -176,6 +180,7 @@ def init():
                     if table == "tasks" and name == "synced_rev":
                         con.execute("UPDATE tasks SET synced_rev = rev WHERE gtask_id IS NOT NULL "
                                     "AND synced_at IS NOT NULL AND updated_at = synced_at")
+        con.execute("CREATE INDEX IF NOT EXISTS messages_event_key ON messages(event_key)")
 
 
 def get_setting(key, default=None):

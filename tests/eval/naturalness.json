@@ -1,5 +1,5 @@
 {
-  "about": "Naturalness scripts for #143. Synthetic only; no real conversation text. A turn is {\"say\": user text} or {\"es\": what Es said by itself, \"source\": pet|notice|voice|timer}. \"refers\": words of which the reply should contain at least one (does it answer what was just said?). \"asks_ability\": the user asked about Es's own abilities, so explaining them is fine. mode: work|talk.",
+  "about": "Naturalness scripts for #143. Synthetic only; no real conversation text. A turn is {\"say\": user text} or {\"es\": what Es said by itself, \"source\": pet|window|timer|task|bgm|clock|system, \"kind\": notice|question|murmur, \"event\"/\"task\": the reference the app attaches}. \"refers\": words of which the reply should contain at least one (does it answer what was just said?). \"asks_ability\": the user asked about Es's own abilities, so explaining them is fine. mode: work|talk.",
   "scripts": [
     {"id": "smalltalk-cooking", "kind": "雑談", "mode": "talk", "tasks": [],
      "turns": [{"say": "今日はカレーを作ったよ", "refers": ["カレー"]},
@@ -25,7 +25,7 @@
      "turns": [{"es": "夜更かし？無理しないでね", "source": "pet"},
                {"say": "大丈夫だよ", "refers": ["夜", "無理", "寝", "休"]}]},
     {"id": "reply-to-es-focus", "kind": "Esの発言への返事", "mode": "work", "tasks": [{"title": "合成の資料"}],
-     "turns": [{"es": "おつかれさま！「合成の資料」、終わった？", "source": "timer"},
+     "turns": [{"es": "おつかれさま！「合成の資料」、終わった？", "source": "timer", "kind": "question", "event": "focus_end", "task": "合成の資料"},
                {"say": "まだ途中", "refers": ["合成の資料", "資料", "続き", "次"]}]},
     {"id": "correction", "kind": "訂正", "mode": "talk", "tasks": [],
      "turns": [{"say": "昨日は映画を見たよ", "refers": ["映画"]},
