@@ -32,7 +32,7 @@
       "pathPattern": "(^|/)(tests/test_output_retry\\.py|spec/test/output-retry-32\\.md)$"
     },
     {
-      "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|spec/test/conversation-repeat-53\\.md)$"
+      "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|tests/test_periodic_add\\.py|spec/test/conversation-repeat-53\\.md|spec/test/periodic-add-135\\.md)$"
     },
     {
       "pathPattern": "(^|/)(tests/test_duplicate_result\\.py|spec/test/duplicate-result-54\\.md)$"

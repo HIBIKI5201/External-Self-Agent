@@ -1730,6 +1730,8 @@ def _choice_reply(selected, cfg, message_id=None):
         reply, events = _register_feature(cfg, wish, payload.get('context') or [wish])
     elif kind == 'topic' and value in choices.TOPICS:
         reply = choices.TOPICS[value][1]
+    elif kind == 'repeat_add' and value in ('accept', 'plain', 'rule'):
+        reply, events = repeat_chat.finish_add(payload, value, selected.get('rule'))
     else:
         reply = 'その選択には対応していないよ。何も変更していないよ。'
     db.add_message('notice' if kind == 'stale' else 'assistant', reply)
@@ -1975,6 +1977,15 @@ def _chat(text, cfg, message_id=None):
         if forget:
             db.add_message("assistant", forget)
             return {"reply": forget, "events": [], "handoffs": [], "intent": "forget"}
+        periodic = repeat_chat.periodic_add(text, history)
+        if periodic:  # 「ウィークリーに「週課A」を追加して」: ask the period first (#135)
+            reply, events, offer = periodic
+            db.add_message("assistant", reply)
+            if events:
+                db.add_message("notice", "\n".join(events))
+            if offer:
+                choices.publish("repeat_add", offer)
+            return {"reply": reply, "events": events, "handoffs": [], "intent": "repeat"}
         guarded = _guarded_write_flow(text, annotated, history)
         if guarded:
             reply, events = guarded

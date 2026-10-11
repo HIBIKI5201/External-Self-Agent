@@ -142,3 +142,81 @@ def handle(text, history):
     description = recurring.describe(task['repeat'])
     reply = f'「{task["title"]}」を{description}にリセットする設定にしたよ（次の締切 {task["due"]}）。\n{recurring.GOOGLE_NOTE}'
     return reply, [f'{marker} #{task["id"]} {task["title"]}（🔁{description} / {task["due"]}）']
+
+# 「ゲームのウィークリーに「週課A」を追加して」 (#135): a weekly wish without a day and time.
+# Es does not pick the day or time; it asks, with the project's own period as a candidate.
+_PERIOD_WORD = re.compile(r'ウィークリー|デイリー|週課|日課|毎週|毎日')
+_KINDS = (('weekly', re.compile(r'ウィークリー|週課|毎週')), ('daily', re.compile(r'デイリー|日課|毎日')))
+_ADD_VERB = re.compile(r'(?:追加|登録)(?:して|しといて|しておいて|お願い|頼む|する)|入れて|入れといて')
+_UNQUOTED = re.compile(r'(?:ウィークリー|デイリー|週課|日課)(?:の?タスク)?(?:に|へ|として)\s*(?P<name>[^、。「」『』]+?)\s*を?'
+                       r'(?:追加|登録|入れ)')
+_PLAIN = re.compile(r'繰り?返し(?:は)?(?:なし|無し|いらない)|普通に追加|そのまま追加|周期なし')
+
+
+def _project(text):
+    names = [p['name'] for p in db.list_projects() if p['name'] and p['name'] in text]
+    return max(names, key=len) if names else None
+
+
+def periodic_add(text, history):
+    """An add request that names a period (ウィークリー/デイリー). Returns (reply, events, offer) or None.
+
+    With a readable rule (毎週月曜4時) the task is added with it at once; without one, nothing is
+    added and the offer (choices kind 'repeat_add') waits for the period, 「繰り返しなし」, or cancel."""
+    outside = re.sub(_QUOTED, '「」', text)
+    if not (_PERIOD_WORD.search(outside) and _ADD_VERB.search(outside)) or _SAME.search(text):
+        return None
+    unchanged = 'タスクは変更していないよ。'
+    project = _project(outside)
+    if recurring._RULE_RE.search(text):
+        result = handle(text, history)
+        if result and project:
+            reply, events = result
+            for line in events:
+                m = re.match(r'＋ #(\d+)', line)
+                if m:
+                    db.update_task(int(m[1]), project=project)
+        return (*result, None) if result else None
+    quotes = re.findall(_QUOTED, text)
+    if len(quotes) > 1:
+        return '追加するタスクを 1 つずつ教えてね。' + unchanged, [], None
+    name = quotes[0][1:-1].strip() if quotes else None
+    if not name:
+        m = _UNQUOTED.search(text)
+        name = m['name'].strip() if m else None
+    if not name:
+        return '追加するタスク名を「」で囲んで教えてね。' + unchanged, [], None
+    if any(t['title'] == name for t in db.list_tasks()):
+        return f'「{name}」はすでにあるよ。周期を変えるなら、その番号と周期を指定してね。' + unchanged, [], None
+    kind = next((k for k, pattern in _KINDS if pattern.search(outside)), 'weekly')
+    rules = {t['repeat'] for t in db.list_tasks(include_done=True, project=project)
+             if project and recurring.valid_rule(t.get('repeat')) and t['repeat'].startswith(kind)}
+    candidate = rules.pop() if len(rules) == 1 else None
+    example = '毎週月曜4時' if kind == 'weekly' else '毎日5時'
+    reply = f'「{name}」をいつリセットする？「{example}」のように教えてね。'
+    if candidate:
+        reply += f'{project}のほかの繰り返しと同じ{recurring.describe(candidate)}でよければ「うん」でいいよ。'
+    reply += '繰り返しなしで普通に追加することもできるよ。まだ何も追加していないよ。'
+    offer = {'title': name, 'project': project, 'rule': candidate}
+    return reply, [], offer
+
+
+def finish_add(payload, value, rule=None):
+    """The answer to periodic_add's question: add once, with the period or without it."""
+    title, project = payload.get('title'), payload.get('project')
+    if not isinstance(title, str) or not title:
+        return 'その選択には対応していないよ。何も変更していないよ。', []
+    if any(t['title'] == title for t in db.list_tasks()):
+        return f'「{title}」はもうあるので、追加していないよ。', []
+    rule = payload.get('rule') if value == 'accept' else rule
+    if value != 'plain' and not recurring.valid_rule(rule):
+        return '周期を読み取れなかったよ。もう一度「毎週月曜4時」のように頼んでね。何も変更していないよ。', []
+    task = db.add_task(title, project=project)
+    if value == 'plain':
+        where = f'（{project}）' if project else ''
+        return (f'「{title}」{where}を繰り返しなしで追加したよ。リセットはされないよ。',
+                [f'＋ #{task["id"]} {task["title"]}' + where])
+    task = recurring.set_rule(task['id'], rule)
+    description = recurring.describe(task['repeat'])
+    return (f'「{task["title"]}」を追加して、{description}にリセットする設定にしたよ（次の締切 {task["due"]}）。\n'
+            f'{recurring.GOOGLE_NOTE}', [f'＋ #{task["id"]} {task["title"]}（🔁{description} / {task["due"]}）'])
