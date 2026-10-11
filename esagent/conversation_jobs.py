@@ -16,7 +16,8 @@ _LOCK = threading.RLock()
 _LIVE = {}  # (database path, id) -> revision; scoped to this server process
 _WRITING = re.compile(r"^(?:INSERT(?: OR \w+)? INTO|UPDATE|DELETE FROM)\s+(tasks|memories|projects|handoffs)\b", re.I)
 ID = re.compile(r"[A-Za-z0-9_-]{16,80}")
-MODES = {"independent", "correction", "append", "cancel", "topic", "auto"}
+# continue: the next piece of the same spoken message (#116), joined to it while it is not done.
+MODES = {"independent", "correction", "append", "cancel", "topic", "auto", "continue"}
 
 
 class Stopped(Exception):
@@ -153,6 +154,9 @@ def accept(body, cfg, operation):
         if _row(request_id):
             return status(request_id)
         previous = _row(target) if mode != "independent" else None
+        if mode == "continue" and (not previous or previous["revision"] != expected or previous["committed"]
+                                   or previous["state"] not in ("queued", "running")):
+            mode, previous = "independent", None  # already answered or changed something: a new message
         if mode != "independent":
             if not previous or previous["revision"] != expected:
                 raise ValueError("対象の依頼は更新されています。履歴を確認して、現在の依頼を選び直してください。")
@@ -182,7 +186,12 @@ def accept(body, cfg, operation):
                 db.add_message("user", text)
                 db.add_message("assistant", note)
                 return {"jobId": target, "revision": expected, "state": "cancelled", "result": result}
-            if mode in ("correction", "append"):
+            if mode == "continue":
+                request_id, revision = target, expected + 1
+                text = previous["text"] + " " + text
+                with db.connect() as con:  # the earlier piece is replaced by the whole message
+                    con.execute("UPDATE messages SET status='merged' WHERE request_id=? AND role='user'", (target,))
+            elif mode in ("correction", "append"):
                 request_id = target
                 revision = expected + 1
                 original = previous["text"]
@@ -220,6 +229,11 @@ def _work(request_id, revision, body, cfg, operation):
                 with db.connect() as con:
                     con.execute("UPDATE conversation_jobs SET state='done',result=?,updated_at=? WHERE id=? AND revision=?",
                                 (json.dumps(result, ensure_ascii=False), db.now(), request_id, revision))
+                    if body.get("relation") == "continue":  # an earlier piece stored late is hidden too (#116)
+                        con.execute("UPDATE messages SET status='merged' WHERE request_id=? AND role='user' "
+                                    "AND request_revision < ?", (request_id, revision))
+                        con.execute("UPDATE messages SET status='joined' WHERE request_id=? AND role='user' "
+                                    "AND request_revision = ?", (request_id, revision))
                 import voice
                 voice.reply(cfg, result, key=f"job:{request_id}:{revision}")
     except Stopped:

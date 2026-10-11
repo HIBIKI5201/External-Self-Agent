@@ -81,3 +81,42 @@ vm.runInContext(liveSource, live);
   assert.equal((await vm.runInContext('waitJob(queue[0])', live)).state, 'superseded');
   console.log('immediate receipt, correction target, independent request, stale revision: passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// 会話モード (#116): a spoken piece heard while the previous one still waits joins it.
+const voiceSubmitted = [];
+const voice = vm.createContext({
+  crypto, S: {messages: []}, queue: [], busy: true, bypassRe: null, Date,
+  localIso: () => '2026-10-12T00:00:00.000Z',
+  requestId: () => crypto.randomUUID().replaceAll('-', ''),
+  saveQueue() {}, renderLive() {}, pump() {},
+  window: {Es: {say() {}}},
+  $: () => ({value: 'auto', addEventListener() {}}),
+  api: async (path, body) => {
+    if (path !== '/api/chat/submit') return {};
+    voiceSubmitted.push(body);
+    if (body.relation === 'continue') return body.targetId === 'done'.padEnd(32, '0')
+      ? {jobId: body.requestId, revision: 1, state: 'queued'}
+      : {jobId: body.targetId, revision: body.targetRevision + 1, state: 'queued'};
+    return {jobId: body.requestId, revision: 1, state: 'queued'};
+  }
+});
+vm.runInContext(liveSource, voice);
+(async () => {
+  await vm.runInContext('sendText("君が言ってくれた", null, {via: "voice"})', voice);
+  await vm.runInContext('sendText("チャットのときとかの", null, {via: "voice"})', voice);
+  assert.equal(vm.runInContext('queue.length', voice), 1, 'the second piece joins the first');
+  assert.equal(vm.runInContext('queue[0].text', voice), '君が言ってくれた チャットのときとかの');
+  assert.equal(vm.runInContext('queue[0].parts', voice), 2);
+  assert.equal(vm.runInContext('queue[0].revision', voice), 2);
+  assert.equal(voiceSubmitted[1].relation, 'continue');
+  assert.equal(voiceSubmitted[1].targetId, voiceSubmitted[0].requestId);
+  await vm.runInContext('sendText("タイプした文")', voice);
+  assert.equal(vm.runInContext('queue.length', voice), 2, 'typed text is never joined');
+  // Long after the last piece, or after the answer: a message of its own.
+  vm.runInContext('queue[0].lastPart = Date.now() - 60000', voice);
+  vm.runInContext('queue.splice(1, 1)', voice);
+  await vm.runInContext('sendText("しばらくして話した", null, {via: "voice"})', voice);
+  assert.equal(vm.runInContext('queue.length', voice), 2);
+  assert.equal(voiceSubmitted.at(-1).relation, 'independent');
+  console.log('voice pieces join the waiting spoken message: passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

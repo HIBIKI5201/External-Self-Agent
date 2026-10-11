@@ -413,7 +413,9 @@ def pending_messages():
 
 def recent_messages(limit, roles=None, before=None):
     with connect() as con:
-        sql = "SELECT * FROM messages WHERE NOT (role IN ('assistant','es') AND COALESCE(status,'') = 'cancelled')"
+        # 'merged': a spoken piece that was joined into the next one (#116); the joined text is stored.
+        sql = ("SELECT * FROM messages WHERE NOT (role IN ('assistant','es') AND COALESCE(status,'') = 'cancelled') "
+               "AND COALESCE(status,'') != 'merged'")
         args = []
         if roles:
             sql += f" AND role IN ({','.join('?' * len(roles))})"

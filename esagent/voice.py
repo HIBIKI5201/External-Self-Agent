@@ -97,7 +97,11 @@ def status(cfg):
             "error": _state["error"], "speaking": bool(_state["speaking"]), "queued": queued,
             "credit": credit(cfg), "started_by_es": _proc is not None and _proc.poll() is None,
             "recent": recent_lines(),
-            "device": _state.get("device", "") if _proc is not None else ""}
+            "device": _state.get("device", "") if _proc is not None else "",
+            # 会話モード's timing (#116): silence that ends a sentence, a longer wait after a sentence
+            # that stops midway, and how long a next piece still joins the previous message.
+            "listen": {k: int(cfg.get("listen_" + k + "_ms", d)) for k, d in
+                       (("silence", 1200), ("incomplete", 3000), ("merge", 15000))}}
 
 
 # ---- what is read aloud -------------------------------------------------------------------
