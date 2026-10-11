@@ -29,6 +29,9 @@
       "pathPattern": "(^|/)esagent/llm\\.py$"
     },
     {
+      "pathPattern": "(^|/)(tests/test_warm_model\\.py|spec/test/warm-model-119\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)(tests/test_output_retry\\.py|spec/test/output-retry-32\\.md)$"
     },
     {

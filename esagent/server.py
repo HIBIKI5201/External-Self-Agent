@@ -328,6 +328,8 @@ class Handler(BaseHTTPRequestHandler):
             return {"queued": voice.say(CFG, text, key=body.get("key"))}
         if path == "/api/voice/test":  # 試聴: a fixed line, even while reading aloud is off
             return {"queued": voice.say(CFG, voice.SAMPLE, force=True)}
+        if path == "/api/warm":  # the window opened, or the user started typing or speaking (#119)
+            return llm.warm(CFG)
         if path == "/api/voice/stop":
             voice.stop()
             return voice.status(CFG)

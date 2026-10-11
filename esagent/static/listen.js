@@ -83,7 +83,10 @@
     line.textContent = text ? `${state}${text}` : state;
   }
 
+  let warmedAt = 0;
   async function heardSome(text) {
+    // Speech has started: load the model now, before the sentence ends (#119).
+    if (Date.now() - warmedAt > 20000) { warmedAt = Date.now(); post("/api/warm").catch(() => {}); }
     // The first non-echo words of what you are saying stop Es's reading (barge-in).
     if (barged || checking || !text.trim()) return;
     checking = true;  // results keep arriving while Es's lines are fetched
