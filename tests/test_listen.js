@@ -104,7 +104,7 @@ async function lifecycle() {
   asyncPage.sessions[0].result('送らない発言'); await asyncPage.tick(1200);
   await asyncPage.toggle(); voices.forEach(resolve => resolve()); await asyncPage.flush();
   assert.deepEqual(asyncPage.sent, []);
-  assert.deepEqual(asyncPage.posts, [], 'stopped mode must not interrupt Es after a delayed echo check');
+  assert.deepEqual(asyncPage.posts.filter(p => p !== '/api/warm'), [], 'stopped mode must not interrupt Es after a delayed echo check');
   // Thinking aloud: a sentence that stops midway is not sent after the usual pause (#116).
   const slow = page(); await slow.toggle();
   slow.sessions[0].result('君が言ってくれたことを'); await slow.tick(1500);

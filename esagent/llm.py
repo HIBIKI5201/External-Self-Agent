@@ -5,6 +5,7 @@ import contextvars
 from contextlib import contextmanager
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -187,13 +188,64 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
     return msg
 
 
+def _same(name, want):
+    return name == want or name.split(":")[0] == want
+
+
+def loaded(cfg):
+    """Whether the model is in memory now (Ollama /api/ps), None when Ollama cannot be asked."""
+    try:
+        with urllib.request.urlopen(_url(cfg, "/api/ps"), timeout=1.5) as r:
+            return any(_same(m.get("name", ""), cfg["model"]) for m in json.load(r).get("models", []))
+    except Exception:
+        return None
+
+
+# Loading the model takes 15-20 seconds after it was unloaded (keep_alive). The chat window asks for it
+# when it opens and when the user starts typing or speaking, so the first reply does not wait for it (#119).
+_WARM = {"state": "idle", "at": 0.0, "ms": None, "error": ""}
+_warm_lock = threading.Lock()
+WARM_INTERVAL = 20  # seconds between two requests to load
+
+
+def warm(cfg, wait=False):
+    """Load the model without generating anything (Ollama /api/generate with no prompt)."""
+    with _warm_lock:
+        if _WARM["state"] == "loading" or time.time() - _WARM["at"] < WARM_INTERVAL:
+            return dict(_WARM)
+        _WARM.update(state="loading", at=time.time(), error="")
+
+    def run():
+        started = time.time()
+        if loaded(cfg):
+            _WARM.update(state="ready", ms=0)
+            return
+        # The same num_ctx as chat(): Ollama reloads the model when the context size differs.
+        body = {"model": cfg["model"], "prompt": "", "stream": False, "keep_alive": cfg.get("keep_alive", "10m"),
+                "options": {"num_ctx": cfg.get("num_ctx", 8192)}}
+        req = urllib.request.Request(_url(cfg, "/api/generate"), data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                json.load(r)
+            _WARM.update(state="ready", ms=round((time.time() - started) * 1000))
+        except Exception as e:
+            _WARM.update(state="error", error=str(e)[:200])
+    if wait:
+        run()
+    else:
+        threading.Thread(target=run, name="llm-warm", daemon=True).start()
+    return dict(_WARM)
+
+
 def status(cfg):
-    """{'ollama': reachable, 'model': model pulled}."""
+    """{'ollama': reachable, 'model': model pulled, 'loaded': in memory now, 'warming': being loaded}."""
     try:
         with urllib.request.urlopen(_url(cfg, "/api/tags"), timeout=1.5) as r:
             names = [m["name"] for m in json.load(r).get("models", [])]
     except Exception:
         return {"ollama": False, "model": False, "name": cfg["model"]}
     want = cfg["model"]
-    have = any(n == want or n.split(":")[0] == want for n in names)
-    return {"ollama": True, "model": have, "name": want}
+    have = any(_same(n, want) for n in names)
+    return {"ollama": True, "model": have, "name": want, "loaded": bool(loaded(cfg)) if have else False,
+            "warming": _WARM["state"] == "loading"}

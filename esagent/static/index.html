@@ -235,6 +235,8 @@ function render() {
   const l = S.llm;
   if (!l.ollama) setStatus(false, "Ollama 未起動（タスク管理だけ使えます）");
   else if (!l.model) setStatus(false, `${l.name} 未ダウンロード`);
+  else if (l.warming) setStatus(true, `${l.name} 読み込み中…（最初の返事の準備）`);
+  else if (l.loaded === false) setStatus(true, `${l.name} 待機中（話しかけると読み込みます）`);
   else setStatus(true, `${l.name} 準備OK`);
 
   renderGoogle(S.google || {});
@@ -454,6 +456,14 @@ async function pump() {
     await refresh();
   }
 }
+
+// Load the model before the first message after a while (#119): when the window opens and when the
+// user starts typing. The server ignores repeats within 20 seconds and never generates text for this.
+let warmedAt = 0;
+const warm = () => { if (Date.now() - warmedAt > 20000) { warmedAt = Date.now(); api("/api/warm", {}).catch(() => {}); } };
+$("#input").addEventListener("input", warm);
+$("#input").addEventListener("focus", warm);
+warm();
 
 $("#send").addEventListener("submit", (e) => {
   e.preventDefault();
