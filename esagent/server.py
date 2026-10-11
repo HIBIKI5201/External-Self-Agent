@@ -34,6 +34,7 @@ import youtube  # noqa: E402
 import choices  # noqa: E402
 import task_context  # noqa: E402
 import utterances  # noqa: E402
+import feedback  # noqa: E402
 import voice  # noqa: E402
 import runtime_log
 import playback
@@ -52,7 +53,8 @@ def state():
         "projects": db.list_projects(),
         "handoffs": db.list_handoffs(),
         # Es's murmurs and button feedback are in the log and the context, not in the chat (#139).
-        "messages": [m for m in db.recent_messages(160) if m.get("shown") != 0][-80:],
+        "messages": (shown := [m for m in db.recent_messages(160) if m.get("shown") != 0][-80:]),
+        "feedback": feedback.ratings(m["id"] for m in shown if m["role"] == "assistant"),
         "llm": llm.status(CFG),
         "bgm": CFG.get("bgm", []),
         "google": gsync.status(),
@@ -319,6 +321,11 @@ class Handler(BaseHTTPRequestHandler):
             return h
         if path == "/api/voice":  # reading aloud on/off and volume (#44)
             return voice.update(CFG, enabled=body.get("enabled"), volume=body.get("volume"))
+        if path == "/api/feedback":  # 👍/👎 or a rewrite of one reply (#144)
+            row = feedback.rate(body.get("messageId") or 0, rating=body.get("rating"), rewrite=body.get("rewrite"), cfg=CFG)
+            if not row:
+                raise ValueError("評価できるのは Es の返事だけです。")
+            return {"id": row["id"], "rating": row["rating"], "rewritten": bool(row["rewrite"])}
         if path == "/api/es/said":  # a line the cat or the chat window showed (#139)
             mid = utterances.record(str(body.get("text") or ""), source=str(body.get("source") or "pet"),
                                     kind=str(body.get("kind") or "notice"), key=body.get("key"))

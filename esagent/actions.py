@@ -231,6 +231,24 @@ def run_action(action, args, cfg):
     elif name == "/clear":
         db.clear_messages()
         return None, []
+    elif name == "/feedback":  # ratings of replies (#144)
+        import feedback
+        words = args.split()
+        if words[:1] == ["delete"] and len(words) == 2 and words[1].lstrip("#").isdigit():
+            ok = feedback.delete(int(words[1].lstrip("#")))
+            reply = f"評価 #{words[1].lstrip('#')} を消しました。" if ok else "その番号の評価はありません。"
+        elif words[:1] == ["export"]:
+            out = feedback.export(include_templates="all" in words[1:])
+            reply = (f"書き出しました（この PC の中だけ）:\nSFT {out['sft'][1]} 件 {out['sft'][0]}\n"
+                     f"DPO {out['dpo'][1]} 件 {out['dpo'][0]}")
+        else:
+            rows = feedback.listing()
+            mark = {1: "👍", -1: "👎", 0: "・"}
+            reply = ("返事への評価（新しい順）:\n" + "\n".join(
+                f"#{r['id']} {mark[r['rating']]}{' ✎' if r['rewrite'] else ''} 「{r['reply'][:30]}」"
+                + (f" → 「{r['rewrite'][:30]}」" if r['rewrite'] else "") for r in rows)
+                + "\n消す: /feedback delete 番号　書き出し: /feedback export（決まった返事も含める: /feedback export all）"
+                if rows else "まだ評価はありません。返事にマウスを乗せると 👍・👎・書き直しのボタンが出ます。")
     elif name == "/model":
         reply = f"モデル: {cfg['model']}（思考モード: {'オン' if cfg.get('think_router') else 'オフ'}）"
     else:

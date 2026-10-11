@@ -91,7 +91,9 @@ MIGRATIONS = {
                  # What Es said by herself (#139, utterances.py): where, what kind, the event it
                  # belongs to (recorded once), whether the chat shows it, and what it was about.
                  ("source", "TEXT"), ("kind", "TEXT"), ("event_key", "TEXT"), ("shown", "INTEGER"),
-                 ("ref", "TEXT")],
+                 ("ref", "TEXT"),
+                 # How a reply was made (brain's intent): "chat"/"advise" were written by the model (#144).
+                 ("intent", "TEXT")],
     "tasks": [("gtask_id", "TEXT"), ("glist_id", "TEXT"), ("g_updated", "TEXT"), ("synced_at", "TEXT"),
               ("rev", "INTEGER NOT NULL DEFAULT 1"), ("synced_rev", "INTEGER NOT NULL DEFAULT 0"),
               ("repeat", "TEXT"), ("last_reset", "TEXT")],

@@ -2043,7 +2043,13 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
         result = None
         try:
             selected = choices.before(text, selection)
+            with db.connect() as con:
+                last_id = con.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
             result = _choice_reply(selected, cfg, message_id) if selected else _chat(text, cfg, message_id)
+            if result.get("intent"):  # which replies the model wrote, for the ratings (#144)
+                with db.connect() as con:
+                    con.execute("UPDATE messages SET intent = ? WHERE role = 'assistant' AND id > ?",
+                                (result["intent"], last_id))
             if not selected:
                 _answer_behavior_wish(text, result)
             choices.expose(result)

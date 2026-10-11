@@ -5,6 +5,9 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)(esagent/feedback\\.py|skills/feedback/SKILL\\.md|tests/test_reply_feedback\\.py|spec/test/reply-feedback-144\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)esagent/static/index\\.html$"
     },
     {
