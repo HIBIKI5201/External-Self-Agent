@@ -69,6 +69,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_task_status_question\\.py|spec/test/task-status-question-134\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)(tests/test_specific_small_talk\\.py|spec/test/specific-small-talk-109\\.md)$"
     }
   ],
   "source": "manual",
