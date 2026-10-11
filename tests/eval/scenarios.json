@@ -199,7 +199,12 @@
     {"id": "small-talk-specific-holdout", "split": "holdout", "tags": ["雑談"], "mode": "talk", "tasks": [], "turns": [{"say": "晩ごはんはオムライスにした"}, {"say": "卵がうまく巻けなかった"}, {"say": "次はもう少し弱火でやってみる"}], "expect": {"no_change": true, "reply_lacks": ["何でも話", "なんでも話", "いつでも", "音が聞こえ", "聞こえない"]}, "forbid": ["any"]},
     {"id": "feature-offer-accept-dev", "split": "dev", "tags": ["提案"], "tasks": [], "turns": [{"say": "チャット画面にタイマーの音を選べるボタンが欲しいな"}, {"say": "追加する"}], "expect": {"added": 1}, "forbid": []},
     {"id": "feature-offer-stale-holdout", "split": "holdout", "tags": ["提案"], "tasks": [], "turns": [{"say": "このアプリに夜はBGMを小さくする機能があったらいいな"}, {"say": "ところで今日は雨だね"}, {"say": "うん"}], "expect": {"added": 0, "no_change": true}, "forbid": ["any"]},
+<<<<<<< HEAD
     {"id": "fixed-reply-misfire-dev", "split": "dev", "tags": ["雑談", "決まった応答"], "mode": "talk", "tasks": [{"key": "A", "title": "合成の資料"}], "turns": [{"say": "人間が寝てる時にやってるような感じでさ"}, {"say": "自分でしゃべるけどね、これ"}, {"say": "ゾーラっていう名前のアビリティを使ってるよ"}, {"say": "記憶ってすごいね"}], "expect": {"no_change": true, "reply_lacks": ["私も集中する", "自分で進める", "まだ聞いてない", "/remember"]}, "forbid": ["any"]},
     {"id": "fixed-reply-misfire-holdout", "split": "holdout", "tags": ["雑談", "決まった応答"], "mode": "talk", "tasks": [{"key": "A", "title": "合成の資料"}], "turns": [{"say": "みんなが休んでる間に動いてるような人っているよね"}, {"say": "自分で歌うのは苦手なんだ"}, {"say": "ルミナっていう名前の武器が強いらしい"}, {"say": "記憶力っていいなあ"}], "expect": {"no_change": true, "reply_lacks": ["私も集中する", "自分で進める", "まだ聞いてない", "/remember"]}, "forbid": ["any"]}
+=======
+    {"id": "no-promise-dev", "split": "dev", "tags": ["約束"], "tasks": [], "turns": [{"say": "もうちょっと文脈を読み取る仕組みがほしいな"}, {"say": "すぐ返事して、細かいことは後から考えて返して"}], "expect": {"no_change": true, "reply_lacks": ["ようにするね", "形で進めるね", "気をつけるね", "していくね", "覚えておくね"]}, "forbid": ["any"]},
+    {"id": "no-promise-holdout", "split": "holdout", "tags": ["約束"], "mode": "talk", "tasks": [], "turns": [{"say": "次からはもう少し短く返してほしいな"}, {"say": "あと、絵文字も使ってほしい"}], "expect": {"no_change": true, "reply_lacks": ["ようにするね", "形で進めるね", "気をつけるね", "していくね", "覚えておくね"]}, "forbid": ["any"]}
+>>>>>>> 36106ad (fix: 仕組みのない約束を返事から外し、振る舞いの希望に正直に答える（#114）)
   ]
 }
