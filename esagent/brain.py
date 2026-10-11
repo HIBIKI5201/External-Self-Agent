@@ -271,6 +271,11 @@ You may name one more task to do next. Do not list all tasks. Do not invent task
         task_block = ""
         guidance = """This is conversation, not task management. Talk like a friendly, curious companion:
 react to what the user said, share a short thought, and ask at most one follow-up question.
+Pick up one concrete detail from the user's latest message (a name, an event, a feeling) and respond to it.
+Sometimes a short reaction without a question is best. Do not close with a generic invitation such as
+「何でも話してね」「いつでも聞かせて」, and do not repeat a question or closing line from your earlier replies.
+Do not explain your own limits (sound, files, the web) unless the user asks about them.
+Stay on the user's topic; do not switch to another topic unless they ask.
 Do not suggest tasks unless the user asks about them.
 If the user asks for something you cannot do, say so in one sentence and say what you can do instead.
 Facts: answer technical or factual questions only when you are sure. If you are not sure (for example
@@ -1240,7 +1245,44 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     if _TALK_START_RE.search(text) and db.get_setting("chat_mode", "work") == "work":
         reply += "\n（雑談モードにする？上のボタンか「雑談モードにして」で切り替えられるよ）"
     reply = clean_model_reply(reply, events)
+    if intent == "chat" and not evidence:
+        reply = tidy_chat_reply(reply, text, history)
     return reply
+
+
+# Small talk kept ending in the same 「何でも話してね」, repeating earlier lines and explaining what
+# Es cannot hear (#109). Such sentences are dropped when the reply has something else to say.
+_GENERIC_CLOSER_RE = re.compile(r"(?:何でも|なんでも|いつでも|気軽に|遠慮なく|好きなだけ)[^。！!？?\n]{0,15}"
+                                r"(?:話|聞|言|相談|教え|声をかけ)|聞かせて(?:ね|ください|ほしい|欲しい)?(?:な)?[。！!〜ー♪\s]*$")
+_SELF_LIMIT_RE = re.compile(r"(?:音|声|曲|音楽|BGM)(?:は|が|を)?[^。！!？?\n]{0,8}(?:聞こえ|聴こえ|聞け|聴け|出せ)(?:ない|ません)|"
+                            r"画面(?:は|が|を)?[^。！!？?\n]{0,6}見(?:え|れ)(?:ない|ません)|私は(?:AI|プログラム)だから")
+_ABILITY_ASK_RE = re.compile(r"聞こえ|聴こえ|喋れ|しゃべれ|話せる|声|音|見える|見えて|できる[？?]|できるの|機能")
+
+
+def _norm(sentence):
+    return re.sub(r"[\s。、！!？?〜ー♪…「」]", "", sentence)
+
+
+def tidy_chat_reply(reply, text, history):
+    """Drop a generic closing line, a line repeated from the last replies, and an unasked self-limit."""
+    sentences = [s for s in re.split(r"(?<=[。！!？?\n])", reply) if s.strip()]
+    if len(sentences) < 2:
+        return reply
+    earlier = [_norm(s) for m in history[-6:] if m["role"] == "assistant"
+               for s in re.split(r"(?<=[。！!？?\n])", m["content"]) if len(_norm(s)) >= 6]
+    words = set(_WORD_RE.findall(text))
+
+    def drop(s):
+        closer = _GENERIC_CLOSER_RE.search(s)
+        # 「何でも話してね」 is generic even next to the user's words; 「〇〇を聞かせて」 is not.
+        if closer and (not closer[0].startswith("聞かせ") or not any(w in s for w in words)):
+            return True
+        if _SELF_LIMIT_RE.search(s) and not _ABILITY_ASK_RE.search(text):
+            return True
+        n = _norm(s)
+        return len(n) >= 6 and any(n == e or (len(_bigrams(n)) > 3 and _similarity(n, e) >= 0.8) for e in earlier)
+    kept = [s for s in sentences if not drop(s)]
+    return "".join(kept).strip() if kept else reply
 
 
 NO_CHANGE_NOTE = "まだ何も登録・変更していないよ。登録するなら「〇〇をタスクに追加して」と言ってね。"
