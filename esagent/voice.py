@@ -112,6 +112,22 @@ _MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _LEAD = re.compile(r"^\s*(#{1,6}\s+|[-*・>]\s+|[✔＋→✖×※]\s*)", re.M)
 
 
+# How a few things are read (#117), for the voice only; the chat keeps the text as written.
+# VOICEVOX read 「いいよ～！次は？」 as 「…イイヨ？、ジワ？」 and 「E.S. Agent」 as 「イイ、エス、エエジェント」.
+_NAME = re.compile(r"E\.?\s?S\.?\s*(?:Agent|エージェント)|ES\s?Agent", re.I)
+_WAVE = "～〜"  # U+FF5E fullwidth tilde, U+301C wave dash
+_RANGE = re.compile(rf"(?<=[0-9０-９月火水木金土日])\s*[{_WAVE}]\s*(?=[0-9０-９月火水木金土日])")
+_LONG = re.compile(rf"(?<=[ぁ-ゖァ-ヺ一-龥ー])[{_WAVE}]+")
+
+
+def readable(text):
+    """「10～12時」→「10から12時」, 「いいよ～！」→「いいよー！」, 「E.S. Agent」→「エスエージェント」."""
+    t = _NAME.sub("エスエージェント", text)
+    t = _RANGE.sub("から", t)
+    t = _LONG.sub("ー", t)
+    return re.sub(rf"[{_WAVE}]", "", t)
+
+
 def speakable(text, max_chars=200):
     """The words of a line as they should be read: no Markdown marks, code or long URLs.
     Long text is cut at a sentence end; nothing else about the meaning changes."""
@@ -126,7 +142,7 @@ def speakable(text, max_chars=200):
     t = re.sub(r"^[-=:、 ]{3,}$", "", t, flags=re.M)  # table rules
     lines = [l.strip() for l in t.splitlines() if l.strip()]
     t = "".join(l if re.search(r"[。．！？!?、」』）)]$", l) else l + "。" for l in lines)
-    t = re.sub(r"\s+", " ", t).strip()
+    t = readable(re.sub(r"\s+", " ", t).strip())
     if len(t) > max_chars:
         cut = t[:max_chars]
         end = max(cut.rfind(c) for c in "。！？!?")

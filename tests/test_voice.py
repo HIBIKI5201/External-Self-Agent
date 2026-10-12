@@ -5,8 +5,10 @@ import subprocess
 import sys
 from urllib.parse import unquote_plus
 
+from markers import needs_voicevox
 from support import Sandbox
 
+import db  # noqa: E402
 import voice  # noqa: E402  (support puts esagent/ on the path)
 
 SPEAKERS = [{"name": "ずんだもん", "styles": [{"name": "ノーマル", "id": 3}]},
@@ -237,3 +239,33 @@ def test_recent_lines_are_kept_for_the_echo_check():
         assert voice.status(cfg)["recent"] == ["休憩おわり。次、いく？"]
         voice._recent[0][1] -= voice.ECHO_SECS + 1
         assert voice.status(cfg)["recent"] == []
+
+
+def test_reading_fixes_keep_the_chat_text():
+    """#117: 「～！次は」 was read ジ, 「E.S. Agent」 イイ、エス、エエジェント. Only the voice text changes."""
+    assert voice.speakable("言葉がいいよ～！次は？") == "言葉がいいよー！次は？"
+    assert voice.speakable("言葉がいいよ〜！次は？") == "言葉がいいよー！次は？"
+    for name in ("E.S. Agent", "E.S.Agent", "ES Agent", "e.s. agent", "E.S.エージェント"):
+        assert voice.speakable(f"{name}だよ") == "エスエージェントだよ。", name
+    assert voice.speakable("10～12時に集合") == "10から12時に集合。"
+    assert voice.speakable("月〜金は忙しい") == "月から金は忙しい。"
+    assert voice.speakable("Esだよ。次回もよろしく") == "Esだよ。次回もよろしく。"
+
+
+@needs_voicevox
+def test_voicevox_reads_the_fixed_text():
+    import json
+    import urllib.parse
+    import urllib.request
+    cfg = db.load_config()
+    url = cfg.get("voicevox_url", "http://127.0.0.1:50021").rstrip("/")
+    speakers = json.load(urllib.request.urlopen(url + "/speakers", timeout=30))
+    sid = speakers[0]["styles"][0]["id"]
+
+    def kana(text):
+        req = urllib.request.Request(url + "/audio_query?" + urllib.parse.urlencode({"text": text, "speaker": sid}),
+                                     method="POST")
+        return json.load(urllib.request.urlopen(req, timeout=60))["kana"]
+    assert "ツギ" in kana(voice.speakable("言葉がいいよ～！次は？"))
+    assert "イイ、エス" not in kana(voice.speakable("E.S. Agent"))
+    assert kana(voice.speakable("E.S. Agent")).startswith("エスエ")

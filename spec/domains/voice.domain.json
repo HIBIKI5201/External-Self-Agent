@@ -5,6 +5,9 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)spec/test/reading-fixes-117\\.md$"
+    },
+    {
       "pathPattern": "(^|/)(tests/test_voice_pieces\\.py|spec/test/voice-pieces-116\\.md)$"
     },
     {
