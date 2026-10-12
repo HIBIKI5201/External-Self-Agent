@@ -160,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, LookupError) as e:
                 return self._send(404, {"error": str(e)})
         if path == "/api/health":
-            return self._send(200, {"ok": True, "app": "E.S. Agent"})
+            return self._send(200, {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION})
         if path == "/api/state":
             return self._send(200, state())
         if path == "/api/pomo":

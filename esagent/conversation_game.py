@@ -47,12 +47,40 @@ def _answer(value):
     return f"「{head}」からの未使用の言葉が思いつかなかった。私の負け。しりとりは終了だよ。"
 
 
+# 「しりとりをしようよ。」「暇だから、しりとりしよう」「しりとりしない？」「りから始めて」: the model played
+# these without the state when only a few exact phrasings started the game (#156).
+_START_RE = re.compile(
+    r"^(?:[^。！!？?\n]{0,15}[、,]\s*)?しりとり(?:を|で|でも)?\s*"
+    r"(?:しよう|しよ|やろう|やろ|したい|やりたい|しない|しなーい|しなぃ|する|やる|始めよう|始めよ|始めて|開始|"
+    r"遊ぼう|遊ぼ|に戻ろう|に戻して|して)?"
+    r"(?:よ|ね|か|かな|ぜ|っ|ー|〜|～)*[。！!？?\s]*"
+    r"(?:[、,]?\s*[「『]?(?P<head>[ぁ-ゖァ-ヺ])[」』]?から(?:始めて|始めよう|始める|で|ね|スタート)?[。！!？?\s]*)?"
+    r"(?:[、,]?\s*(?P<who>君|きみ|キミ|あなた|Es|エス|俺|おれ|私|わたし|僕|ぼく|自分)から(?:ね|で|どうぞ)?[。！!？?\s]*)?$")
+_USER_FIRST = ("俺", "おれ", "私", "わたし", "僕", "ぼく", "自分")
+
+
+def start(text):
+    """The game's first state for a start request, or None."""
+    m = _START_RE.match(text)
+    if not m or not re.search(r"しりとり(?:を|で|でも)?\s*(?:しよう|しよ|やろう|やろ|したい|やりたい|しない|しなーい|しなぃ|する|やる|"
+                              r"始め|開始|遊ぼ|に戻|して|[。！!？?\s]*$)", text):
+        return None
+    head = reading(m["head"]) if m["head"] else None
+    first = "user" if m["who"] in _USER_FIRST else "es"
+    return {"activity": "shiritori", "turn": first, "last_word": "", "next": head or ("" if first == "user" else "げ"),
+            "used": []}
+
+
 def handle(text):
     text = text.strip()
     value = state()
-    if re.fullmatch(r"(?:しりとり)(?:を|で)?(?:しよう|しよ|やろう|したい|して|始めて|開始|に戻ろう|に戻して)?[。！!\s]*", text):
-        value = {"activity": "shiritori", "turn": "es", "last_word": "", "next": "げ", "used": []}
-        return _answer(value)
+    begun = start(text)
+    if begun:
+        if begun["turn"] == "es":
+            return _answer(begun)
+        save(begun)
+        head = f"「{begun['next']}」から" if begun["next"] else "好きな言葉から"
+        return f"しりとり始めよう！あなたからだね。{head}どうぞ。"
     if not value:
         return None
     if re.fullmatch(r"(?:しりとりを|しりとりは)?(?:終了|終わり|やめて|やめよう|おしまい)[。！!\s]*", text):
@@ -71,7 +99,7 @@ def handle(text):
     word, sound = (match[1], reading(match[2])) if match else (literal, reading(literal))
     if not sound:
         return "しりとり中だよ。一語だけ答えてね。漢字の言葉は「漢字（よみ）」の形で読みも教えて。終了するなら「しりとりをやめて」と言ってね。"
-    if sound[0] != value["next"]:
+    if value["next"] and sound[0] != value["next"]:
         return f"今は「{value['next']}」からだよ。もう一度どうぞ。"
     if sound in value["used"]:
         return f"「{word}」はもう使ったよ。別の言葉をどうぞ。"

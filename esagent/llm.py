@@ -96,6 +96,7 @@ def _log(cfg, body, data, started, error=None):
             "elapsed_ms": round((time.time() - started) * 1000),
             "error": error,
             "validation": _VALIDATION.get(),
+            "code": db.CODE_VERSION,  # which code answered (#156)
             "context": __import__("conversation_context").STATS.get(),
         }
         with open(path, "a", encoding="utf-8") as f:

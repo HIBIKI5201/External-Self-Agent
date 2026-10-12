@@ -8,6 +8,39 @@ from contextlib import contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
+
+
+def code_version():
+    """The running code: VERSION and the git commit, read from the files (no git process). It lets a
+    conversation in the logs be matched to the code that answered it (#156)."""
+    def read(*parts):
+        try:
+            with open(os.path.join(ROOT, *parts), encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+    commit = ""
+    head = read(".git") if os.path.isfile(os.path.join(ROOT, ".git")) else read(".git", "HEAD")
+    if head.startswith("gitdir:"):  # a worktree: .git is a file that points at its own folder
+        gitdir = head.split(":", 1)[1].strip()
+        head = read(gitdir, "HEAD")
+        common = read(gitdir, "commondir")
+        base = os.path.normpath(os.path.join(gitdir, common)) if common else gitdir
+    else:
+        base = os.path.join(ROOT, ".git")
+    if head.startswith("ref:"):
+        ref = head.split(":", 1)[1].strip()
+        commit = read(base, *ref.split("/"))
+        if not commit:
+            for line in read(base, "packed-refs").splitlines():
+                if line.endswith(" " + ref):
+                    commit = line.split()[0]
+    else:
+        commit = head
+    return {"version": read("VERSION"), "commit": commit[:7]}
+
+
+CODE_VERSION = code_version()
 DB_PATH = os.path.join(DATA_DIR, "esagent.db")
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 

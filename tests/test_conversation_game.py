@@ -79,3 +79,27 @@ def test_game_words_never_offer_or_execute_task_operations():
         result = sb.chat("全部のタスクを完了にして")
         assert result["intent"] == "game" and not result["events"] and not db.list_tasks()
         assert not result.get("choices")
+
+
+def test_everyday_start_phrasings_keep_the_state():
+    """#156: 「しりとりをしようよ。」 started a game the model played without the state."""
+    with Sandbox(copy_real=False, mode="talk") as sb, patch.object(brain.llm, "chat", side_effect=AssertionError("model called")):
+        for text in ("しりとりをしようよ。", "暇だから、しりとりしよう。", "しりとりしない？", "しりとりしなーい。"):
+            r = sb.chat(text)
+            assert r["intent"] == "game" and game.state()["turn"] == "user", (text, r)
+        # 「りから」: Es starts with り; 「俺から」: the user starts, with any word.
+        r = sb.chat("しりとりしよう、りから始めて")
+        assert game.state()["used"][0].startswith("り") and game.state()["turn"] == "user", r
+        r = sb.chat("しりとりしよう。俺からね")
+        assert "あなたから" in r["reply"] and game.state()["turn"] == "user" and game.state()["next"] == "", r
+        r = sb.chat("リンゴ")
+        assert r["intent"] == "game" and game.state()["turn"] == "user" and len(game.state()["used"]) == 2, r
+        # The logged conversation: the user hands the turn over, Es answers with a word.
+        r = sb.chat("俺が回答したら、次は君がしゃべるんだよ。")
+        assert "今はあなたの番" in r["reply"], r
+    for text in ("しりとりしてたの忘れた。", "しりとりはしない", "しりとりのルールって何？"):
+        assert game.start(text) is None, text
+
+
+def test_health_tells_the_running_code():
+    assert set(db.CODE_VERSION) == {"version", "commit"} and db.CODE_VERSION["version"]
