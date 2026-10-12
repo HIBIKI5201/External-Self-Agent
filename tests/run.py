@@ -22,7 +22,6 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     offline = "--offline" in sys.argv
     llm_ok = not offline and support.ollama_ready()
-    voicevox_ok = not offline and support.voicevox_ready()
     passed = failed = skipped = 0
     for fname in sorted(os.listdir(HERE)):
         if not (fname.startswith("test_") and fname.endswith(".py")):
@@ -33,7 +32,8 @@ def main():
             label = f"{fname[:-3]}.{name}"
             if args and not any(a in label for a in args):
                 continue
-            if getattr(fn, "needs_voicevox", False) and not voicevox_ok:
+            # Checked right before the test: the running app stops its own engine after a quiet while.
+            if getattr(fn, "needs_voicevox", False) and (offline or not support.voicevox_ready()):
                 skipped += 1
                 print(f"  -  {label}（VOICEVOX が起動していないためスキップ）")
                 continue
