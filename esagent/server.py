@@ -253,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
                 gsync.request()  # mutations should reach Google; YouTube and voice calls do not trigger sync
             return 200, result
         except youtube.YouTubeError as e:
-            return e.code, {"error": str(e)}
+            return e.code, {"error": str(e), **({"link": e.link} if e.link else {})}
         except LookupError as e:
             return 404, {"error": str(e)}
         except ValueError as e:  # bad input from the screen

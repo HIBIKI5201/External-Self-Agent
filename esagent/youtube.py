@@ -1,6 +1,7 @@
 """Read-only YouTube library and search; playback uses the official IFrame player."""
 import html
 import re
+import urllib.parse
 
 import gapi
 import gauth
@@ -9,9 +10,31 @@ API = "https://www.googleapis.com/youtube/v3"
 
 
 class YouTubeError(Exception):
-    def __init__(self, message, code=503):
+    def __init__(self, message, code=503, link=""):
         super().__init__(message)
         self.code = code
+        self.link = link
+
+
+_CONSOLE_HOSTS = ("console.developers.google.com", "console.cloud.google.com")
+
+
+def enable_link(body):
+    """The page that enables the YouTube Data API, taken from Google's error text (#86). Only an https link
+    on Google's own console for the YouTube API is returned; anything else is dropped."""
+    for raw in re.findall(r"https://[^\s\"'<>\\]+", body or ""):
+        url = urllib.parse.urlsplit(raw.rstrip(".,)"))
+        query = urllib.parse.parse_qs(url.query)
+        if url.scheme != "https" or url.netloc not in _CONSOLE_HOSTS or url.username or url.port:
+            continue
+        if not re.fullmatch(r"/apis/(?:api|library)/youtube\.googleapis\.com(?:/overview)?", url.path):
+            continue
+        project = (query.get("project") or [""])[0]
+        if project and not re.fullmatch(r"[A-Za-z0-9-]{1,40}", project):
+            continue
+        return urllib.parse.urlunsplit(("https", url.netloc, url.path,
+                                        urllib.parse.urlencode({"project": project}) if project else "", ""))
+    return ""
 
 
 def status():
@@ -45,7 +68,10 @@ def _request(path, params, page_token):
         if e.reason in ("quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded", "userRateLimitExceeded"):
             raise YouTubeError("YouTubeの利用上限に達しました。時間をおいて再試行してください。", 429) from None
         if e.reason in ("accessNotConfigured", "serviceDisabled"):
-            raise YouTubeError("YouTubeの接続設定が必要です。設定手順からAPIを有効にしてください。", 403) from None
+            # Signed in fine; the Google Cloud project has the API switched off. Reconnecting does not help.
+            raise YouTubeError("Googleへのログインは済んでいます。Google Cloud のプロジェクトで YouTube Data API v3 が"
+                               "有効になっていないため読み込めません（再接続では直りません）。下のリンクから API を有効にして、"
+                               "数分おいてから開き直してください。", 403, link=enable_link(getattr(e, "body", ""))) from None
         if e.code == 403:
             raise YouTubeError("YouTubeの読み取りが許可されていません。再接続し、接続設定も確認してください。", 403) from None
         if e.code == 404:

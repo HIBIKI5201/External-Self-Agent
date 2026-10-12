@@ -11,10 +11,11 @@ CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 
 
 class SyncError(Exception):
-    def __init__(self, message, code=None, reason=None):
+    def __init__(self, message, code=None, reason=None, body=""):
         super().__init__(message)
         self.code = code
         self.reason = reason
+        self.body = body  # Google's whole error text (it may name a page to fix the problem)
 
 
 def request(base, method, path, params=None, body=None):
@@ -39,7 +40,7 @@ def request(base, method, path, params=None, body=None):
             reason = None
         if e.code == 401:
             raise gauth.AuthError(f"Google が認証を拒否しました: {detail}")
-        raise SyncError(f"Google API {e.code}: {detail}", code=e.code, reason=reason)
+        raise SyncError(f"Google API {e.code}: {detail}", code=e.code, reason=reason, body=raw[:4000])
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
         raise gauth.OfflineError(str(e))
 
