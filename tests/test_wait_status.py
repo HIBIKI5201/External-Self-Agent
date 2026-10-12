@@ -2,6 +2,7 @@
 import datetime as dt
 import threading
 import time
+from unittest.mock import patch
 
 import brain
 import db
@@ -52,7 +53,8 @@ def test_each_cause_is_named_from_measurements():
 
 
 def test_status_question_is_not_blocked_by_a_running_reply():
-    with Sandbox(copy_real=False) as sb:
+    # Without Ollama (CI), connecting to its closed port takes ~2 s on Windows; that is not the lock (#161).
+    with Sandbox(copy_real=False) as sb, patch.object(llm, "status", return_value={"ollama": True, "model": True}):
         held = threading.Event()
         release = threading.Event()
 
