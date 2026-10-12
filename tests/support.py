@@ -33,6 +33,15 @@ def ollama_ready(cfg=None):
     return any(n == cfg["model"] or n.split(":")[0] == cfg["model"] for n in names)
 
 
+def voicevox_ready(cfg=None):
+    cfg = cfg or db.load_config()
+    try:
+        with urllib.request.urlopen(cfg.get("voicevox_url", "http://127.0.0.1:50021").rstrip("/") + "/version", timeout=2):
+            return True
+    except Exception:
+        return False
+
+
 class Sandbox:
     """with Sandbox() as sb: sb.chat("..."), sb.skill("/tasks"), sb.llm_calls ..."""
 
