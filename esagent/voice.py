@@ -100,8 +100,21 @@ def status(cfg):
             "device": _state.get("device", "") if _proc is not None else "",
             # 会話モード's timing (#116): silence that ends a sentence, a longer wait after a sentence
             # that stops midway, and how long a next piece still joins the previous message.
-            "listen": {k: int(cfg.get("listen_" + k + "_ms", d)) for k, d in
-                       (("silence", 1200), ("incomplete", 3000), ("merge", 15000))}}
+            "listen": {**{k: int(cfg.get("listen_" + k + "_ms", d)) for k, d in
+                          (("silence", 1200), ("incomplete", 3000), ("merge", 15000))},
+                       "corrections": listen_corrections(cfg)}}
+
+
+# What the recogniser heard for words this app knows (#118): word -> mishearings. config.json's
+# listen_corrections adds to or replaces these.
+LISTEN_CORRECTIONS = {"Warframe": ["ウォーフレーム", "ウォー フレーム", "四フレーム", "五フレーム", "4フレーム", "5フレーム",
+                                    "ワーフレーム"]}
+
+
+def listen_corrections(cfg):
+    table = {**LISTEN_CORRECTIONS, **(cfg.get("listen_corrections") or {})}
+    return {str(w)[:60]: [str(h)[:60] for h in (heard or [])][:20] for w, heard in list(table.items())[:50]
+            if isinstance(heard, list)}
 
 
 # ---- what is read aloud -------------------------------------------------------------------

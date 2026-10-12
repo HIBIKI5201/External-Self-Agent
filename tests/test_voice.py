@@ -269,3 +269,9 @@ def test_voicevox_reads_the_fixed_text():
     assert "ツギ" in kana(voice.speakable("言葉がいいよ～！次は？"))
     assert "イイ、エス" not in kana(voice.speakable("E.S. Agent"))
     assert kana(voice.speakable("E.S. Agent")).startswith("エスエ")
+def test_listen_corrections_come_from_defaults_and_config():
+    """#118: the window gets the table of known words and their mishearings."""
+    table = voice.listen_corrections({"listen_corrections": {"Sinfonia": ["シンフォニア"]}})
+    assert "ウォーフレーム" in table["Warframe"] and table["Sinfonia"] == ["シンフォニア"]
+    assert voice.listen_corrections({"listen_corrections": {"Warframe": ["ワーフレ"]}})["Warframe"] == ["ワーフレ"]
+    assert voice.listen_corrections({"listen_corrections": {"x": "not a list"}}).get("x") is None

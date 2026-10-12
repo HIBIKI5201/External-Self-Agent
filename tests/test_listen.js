@@ -1,6 +1,6 @@
 // 会話モード (#89): telling Es's own voice (heard through the mic) from the user's words.
 const assert = require('node:assert/strict');
-const { isEcho, words, silenceFor } = require('../esagent/static/listen.js');
+const { isEcho, words, silenceFor, fixHeard } = require('../esagent/static/listen.js');
 
 const es = ['今は手をつけるべきタスクがありません。新しくやりたいことがあれば教えてください。'];
 
@@ -26,6 +26,16 @@ assert.deepEqual(words([r('洗濯を', true), r('追加して', true)], 1), { fi
 const t = { silence: 1200, incomplete: 3000 };
 for (const s of ['君が言ってくれた。', '明日の予定を教えて', 'ちょっと見て', 'それってなんなの？', '']) assert.equal(silenceFor(s, t), 1200, s);
 for (const s of ['をたとき、とかの。', 'チャット。と。', 'ゲームの話をするときに', '資料を', '思ったんだけど', '言ってくれたから、']) assert.equal(silenceFor(s, t), 3000, s);
+
+// Known words the recogniser hears wrong are fixed before sending; ordinary words are not (#118).
+const table = { Warframe: ['ウォーフレーム', '四フレーム', '五フレーム'] };
+for (const [heard, sent] of [['五フレームの週課やる', 'Warframeの週課やる'], ['ウォーフレームしよう', 'Warframeしよう'],
+  ['おいS聞こえる？', 'おいEs聞こえる？'], ['Sが考えてる時', 'Esが考えてる時'], ['ねえS、今日どう？', 'ねえEs、今日どう？']]) {
+  assert.equal(fixHeard(heard, table), sent, heard);
+}
+for (const s of ['四つ買った', '五個ある', 'Sサイズの服', 'Sランクとった', 'ESの提出', 'これはS', 'MよりSがいい', '5フレームずれる']) {
+  assert.equal(fixHeard(s, table), s, s);
+}
 
 // Run the actual page code with browser events and a deterministic clock.
 const vm = require('node:vm');
