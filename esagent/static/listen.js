@@ -63,6 +63,10 @@
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("es-listen") : null;
   let rec = null, on = false, heard = "", timer = null, restart = null, epoch = 0;
   let fails = 0, barged = false, checking = false;
+  // The microphone Edge listens with (#93): the Windows default input device, named by the track the
+  // permission check opened. Shown only on this screen; never stored or sent.
+  let mic = "", lastHeard = 0, quiet = null;
+  const QUIET_MS = 20000;  // nothing recognised for this long: point at the Windows input device
 
   async function post(path, body) {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-EsAgent": "1" }, body: JSON.stringify(body || {}) });
@@ -80,7 +84,20 @@
     btn.textContent = on ? "会話モード：オン" : "会話モード";
     const line = $("#listen-line");
     line.hidden = !on && !state && !text;  // a reason the mode stopped stays visible
-    line.textContent = text ? `${state}${text}` : state;
+    const which = on && /^聞いています/.test(state) ? `（マイク：${mic || "不明"}）` : "";
+    line.textContent = text ? `${state}${text}` : state + which;
+  }
+
+  function watchQuiet(turn) {
+    clearTimeout(quiet);
+    quiet = setTimeout(() => {
+      if (!on || turn !== epoch) return;
+      if (Date.now() - lastHeard >= QUIET_MS && !heard) {
+        show("聞いています…");
+        $("#listen-line").textContent += " 何も聞き取れていません。Windows の既定の入力デバイス（設定 → システム → サウンド → 入力）が話しているマイクか確認してください。";
+      }
+      watchQuiet(turn);
+    }, QUIET_MS);
   }
 
   let warmedAt = 0;
@@ -141,6 +158,7 @@
     r.onresult = (e) => {
       if (!current()) return;
       fails = 0;
+      lastHeard = Date.now();
       const w = words(e.results, done);
       for (let i = done; i < e.results.length; i++) if (e.results[i].isFinal) done = i + 1;
       heard += w.final;
@@ -181,6 +199,7 @@
     epoch++;
     clearTimeout(restart); restart = null;
     clearTimeout(timer); timer = null; heard = "";
+    clearTimeout(quiet); quiet = null;
     barged = false; checking = false;
     if (rec) { const r = rec; rec = null; r.onend = null; try { r.abort(); } catch {} }
     show("");
@@ -190,9 +209,11 @@
   // fails with "not-allowed". Asking through getUserMedia shows the prompt; the stream is closed
   // at once, since recognition opens the microphone on its own.
   async function askMic() {
+    mic = "";
     if (!navigator.mediaDevices?.getUserMedia) return "";
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mic = (s.getAudioTracks?.()[0]?.label || "").trim();  // the default input device
       s.getTracks().forEach((t) => t.stop());
       return "";
     } catch (e) {
@@ -211,6 +232,8 @@
     const problem = await askMic();
     if (!on || turn !== epoch) return;  // turned off or restarted while permission was pending
     if (problem) { stop(); return show(problem); }
+    lastHeard = Date.now();
+    watchQuiet(turn);
     start();
   }
 
