@@ -527,6 +527,8 @@ _BUILTIN = {
     "sync": ("リポジトリの TODO を読み直し、Google ToDo / カレンダーを今すぐ同期", "", "sync", "今すぐ同期する。"),
     "clear": ("チャット履歴を消す（タスクは消えません）", "", "clear", "チャット履歴を消す。"),
     "model": ("使っているモデル", "", "model", "モデル名を表示する。"),
+    "feedback": ("返事への評価の一覧・削除・書き出し（例: /feedback delete 3、/feedback export）", "[delete 番号|export [all]]",
+                 "feedback", "返事への評価を一覧・削除・書き出しする。"),
 }
 
 

@@ -61,6 +61,12 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 0
 .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
 .msg.es { align-self: flex-start; background: var(--panel); border: 1px dashed var(--line); font-size: 13px; }
 .msg.queued { opacity: .55; }
+/* Ratings of a reply (#144): shown only while the pointer is on the reply, or once rated. */
+.msg.assistant { position: relative; }
+.rate { display: none; gap: 4px; margin-top: 4px; }
+.msg.assistant:hover .rate, .rate.done { display: flex; }
+.rate button { font-size: 12px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.rate button.on { color: var(--accent); border-color: var(--accent); }
 .msg.pending small { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
 .msg.queued small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
 .msg.thinking { align-self: flex-start; color: var(--muted); font-size: 12.5px; background: transparent; padding: 4px 2px; }
@@ -248,7 +254,8 @@ function render() {
   log.innerHTML = S.messages.length
     ? S.messages.map((m) => `<div class="msg ${esc(m.role)}${m.status === "pending" ? " pending" : ""}">${esc(m.content)}` +
         (m.status === "pending" ? `<small>⏳ 返事待ち — モデルの準備ができたら自動で返事します</small>` : "") +
-        (m.status === "joined" ? `<small>🎙 続けて話した音声をまとめて 1 つの発言にしました</small>` : "") + renderChoices(m) + `</div>`).join("")
+        (m.status === "joined" ? `<small>🎙 続けて話した音声をまとめて 1 つの発言にしました</small>` : "") + renderChoices(m) +
+        (m.role === "assistant" ? renderRate(m) : "") + `</div>`).join("")
     : `<div class="empty">Es です。予定やタスク、困っていることを話しかけてください。<br>「/」でコマンド、コードの作業は Claude Code に引き継げます。</div>`;
   log.insertAdjacentHTML("beforeend", `<div id="live"></div>`);
   renderLive();
@@ -355,6 +362,30 @@ function renderChoices(message) {
   return `<div class="chat-choices">${offer.options.map(o => `<button type="button" data-offer="${esc(offer.id)}" data-choice-value="${esc(o.value)}"${disabled}>${esc(o.label)}</button>`).join("")}</div>`;
 }
 
+// 👍/👎 and 「こう言ってほしかった」 on a reply (#144). Kept on this PC only (/feedback to list or delete).
+function renderRate(m) {
+  const f = (S.feedback || {})[m.id] || {};
+  const on = (v) => f.rating === v ? " on" : "";
+  return `<div class="rate${f.rating || f.rewritten ? " done" : ""}" data-mid="${m.id}">` +
+    `<button type="button" data-rate="1" class="${on(1)}" title="いい返事">👍</button>` +
+    `<button type="button" data-rate="-1" class="${on(-1)}" title="いまいち">👎</button>` +
+    `<button type="button" data-rewrite="1" class="${f.rewritten ? " on" : ""}" title="こう言ってほしかった">✎</button></div>`;
+}
+$("#log").addEventListener("click", async e => {
+  const r = e.target.closest(".rate button");
+  if (!r) return;
+  const mid = +r.closest(".rate").dataset.mid;
+  const body = { messageId: mid };
+  if (r.dataset.rewrite) {
+    const text = window.prompt("Es にこう言ってほしかった、という返事を書いてね（この PC の中にだけ保存）");
+    if (text === null) return;
+    body.rewrite = text;
+  } else {
+    const cur = (S.feedback || {})[mid]?.rating;
+    body.rating = cur === +r.dataset.rate ? 0 : +r.dataset.rate;
+  }
+  try { await api("/api/feedback", body); await refresh(); } catch (err) { window.Es?.say("評価を保存できなかった… " + err.message, { ms: 5000 }); }
+});
 $("#log").addEventListener("click", e => {
   const b = e.target.closest("button[data-offer]");
   if (!b || b.disabled || busy || queue.length || b.dataset.offer !== S.choices?.id) return;
