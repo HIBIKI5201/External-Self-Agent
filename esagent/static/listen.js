@@ -55,7 +55,27 @@
     return s && MIDWAY.test(s) ? t.incomplete : t.silence;
   }
 
-  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor }; return; }
+  // Words the app knows that the recogniser hears wrong (#118). Fixed before sending, never by the model:
+  // a table of exact mishearings (config listen_corrections, word -> what was heard), and 「S」 as Es's
+  // name only when it stands alone as a name (「おいS」「Sが」), not in 「Sサイズ」「Sランク」.
+  let corrections = {};
+  // Called (「おいS」「ねえS、」) or the subject of what follows (「Sが」「Sって」「Sさん」).
+  const ES_CALLED = /(^|[^A-Za-z0-9Ａ-Ｚａ-ｚ０-９])(おい|ねえ|ねぇ|ねー)\s*[SＳ](?![A-Za-z0-9Ａ-Ｚａ-ｚ０-９])/g;
+  const ES_NAME = /(^|[^A-Za-z0-9Ａ-Ｚａ-ｚ０-９])(?<!より|か|と|や|・|・)[SＳ](?=\s*(?:が|って|さん|ちゃん|に聞|は(?:どう|なんで|何|今))|、?聞こえ)/g;
+  function fixHeard(text, table = corrections) {
+    let out = String(text || "");
+    for (const [word, heard] of Object.entries(table || {})) {
+      for (const h of heard || []) {
+        if (!h) continue;
+        const at = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        out = out.replace(new RegExp(at(h) + "(?![0-9０-９])", "g"), word);
+      }
+    }
+    out = out.replace(ES_CALLED, (m, before, call) => `${before}${call}Es`);
+    return out.replace(ES_NAME, (m, before) => `${before}Es`);
+  }
+
+  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor, fixHeard }; return; }
 
   // ---- the page -----------------------------------------------------------------------
   const $ = (s) => document.querySelector(s);
@@ -128,8 +148,9 @@
     const echo = isEcho(text, await esLines());
     if (!on || turn !== epoch) return;
     if (echo) return show("聞いています…（Es の声は送りません）");
-    show("送信：", text);
-    window.EsHooks?.send?.(text, null, { via: "voice" });
+    const fixed = fixHeard(text);
+    show("送信：", fixed === text ? text : `${fixed}（聞き取り「${text}」を直しました）`);
+    window.EsHooks?.send?.(fixed, null, { via: "voice" });
     setTimeout(() => on && turn === epoch && show("聞いています…"), 1500);
   }
 
@@ -227,7 +248,9 @@
     on = true; fails = 0;
     const turn = ++epoch;
     channel?.postMessage("on");  // only one window listens
-    fetch("/api/voice").then(r => r.json()).then(v => { if (v.listen) timing = v.listen; }).catch(() => {});
+    fetch("/api/voice").then(r => r.json()).then(v => {
+      if (v.listen) { timing = v.listen; corrections = v.listen.corrections || {}; }
+    }).catch(() => {});
     show("マイクの許可を確認しています…");
     const problem = await askMic();
     if (!on || turn !== epoch) return;  // turned off or restarted while permission was pending

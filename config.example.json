@@ -49,5 +49,6 @@
   "voice_max_chars": 200,
   "listen_silence_ms": 1200,
   "listen_incomplete_ms": 3000,
-  "listen_merge_ms": 15000
+  "listen_merge_ms": 15000,
+  "listen_corrections": {"Warframe": ["ウォーフレーム", "四フレーム", "五フレーム"]}
 }
