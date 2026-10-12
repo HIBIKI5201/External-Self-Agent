@@ -52,6 +52,8 @@ def publish(kind, payload=None):
         options = [{'value': key, 'label': v[0]} for key, v in TOPICS.items()]
     elif kind in labels:
         options = [{'value': 'accept', 'label': labels[kind]}]
+    elif kind == 'repeat_bulk':  # #123: one period for several tasks
+        options = [{'value': 'accept', 'label': f"{len(payload['ids'])} 件に設定する"}]
     elif kind == 'project_add':  # #115: the project of a new task
         options = [{'value': f'p:{i}', 'label': f'{name}に入れる'} for i, name in enumerate(payload['projects'])]
         options.append({'value': 'none', 'label': '未分類で追加'})

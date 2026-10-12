@@ -203,6 +203,57 @@ def periodic_add(text, history):
     return reply, [], offer
 
 
+# 「Warframe の ToDo で、まだ毎週の設定がされていないものがあれば設定して」 (#123): one period for every open
+# task of a project that has none. Always shown and approved first, since it changes several tasks.
+_BULK_UNSET = re.compile(r'(?:未設定|設定され(?:て)?(?:い)?ない|されてない|付いてない|ついてない|ないもの|ないやつ|ないの)')
+_BULK_ASK = re.compile(r'(?:設定|そろえ|揃え|合わせ)(?:て|して|る)|にして')
+
+
+def bulk_repeat(text):
+    """Returns (reply, offer payload or None), or None when the message is not such a request."""
+    if not (re.search(r'繰り?返し|毎週|毎日|周期|ウィークリー|デイリー|リセット', text) and _BULK_UNSET.search(text)
+            and _BULK_ASK.search(text)):
+        return None
+    project = _project(text)
+    if not project:
+        return 'どのプロジェクトのタスクにそろえるか教えてね（例: 「Warframe のタスクで…」）。タスクは変更していないよ。', None
+    tasks = db.list_tasks(project=project)
+    targets = [t for t in tasks if not recurring.valid_rule(t.get('repeat'))]
+    if not targets:
+        return f'{project}の未完了のタスクは、もう全部に繰り返しが設定されているよ。タスクは変更していないよ。', None
+    rule = recurring.parse(text)
+    if not rule:
+        rules = {t['repeat'] for t in db.list_tasks(include_done=True, project=project) if recurring.valid_rule(t.get('repeat'))}
+        if len(rules) != 1:
+            why = 'まだ繰り返しのタスクがない' if not rules else '繰り返しの周期が 1 つにそろっていない'
+            return (f'{project}には{why}ので、周期を決められなかったよ。「毎週月曜9時」のように周期も教えてね。'
+                    'タスクは変更していないよ。'), None
+        rule = rules.pop()
+    names = '\n'.join(f'・#{t["id"]} {t["title"]}' for t in targets[:10]) + (f'\n…ほか {len(targets) - 10} 件' if len(targets) > 10 else '')
+    reply = (f'{project}の繰り返しが未設定のタスク {len(targets)} 件を、{recurring.describe(rule)}にリセットする設定にする？\n'
+             f'{names}\n承認するまで何も変えないよ。')
+    return reply, {'project': project, 'rule': rule, 'ids': [t['id'] for t in targets]}
+
+
+def finish_bulk(payload):
+    """Set the period on the approved tasks that still belong to the project, are open and have none."""
+    rule, project = payload.get('rule'), payload.get('project')
+    if not recurring.valid_rule(rule) or not isinstance(payload.get('ids'), list):
+        return 'その選択には対応していないよ。何も変更していないよ。', []
+    events, skipped = [], 0
+    for tid in payload['ids']:
+        t = db.get_task(int(tid))
+        if not t or t['status'] == 'done' or t['project'] != project or recurring.valid_rule(t.get('repeat')):
+            skipped += 1  # changed since it was shown
+            continue
+        t = recurring.set_rule(t['id'], rule)
+        events.append(f'✎ #{t["id"]} {t["title"]}（🔁{recurring.describe(t["repeat"])} / {t["due"]}）')
+    if not events:
+        return '対象のタスクが変わっていたので、何も設定しなかったよ。', []
+    note = f'（{skipped} 件は表示した後に変わっていたので設定していないよ）' if skipped else ''
+    return (f'{len(events)} 件を{recurring.describe(rule)}にリセットする設定にしたよ。{note}\n{recurring.GOOGLE_NOTE}', events)
+
+
 def finish_add(payload, value, rule=None):
     """The answer to periodic_add's question: add once, with the period or without it."""
     title, project = payload.get('title'), payload.get('project')
