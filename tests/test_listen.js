@@ -111,6 +111,19 @@ async function lifecycle() {
   assert.deepEqual(slow.sent, [], 'a midway pause must not send yet');
   slow.sessions[0].onresult({ results: [r('君が言ってくれたことを', true), r('覚えておきたい', true)] }); await slow.tick(1200);
   assert.deepEqual(slow.sent, ['君が言ってくれたことを覚えておきたい']);
-  console.log('test_listen.js ok (echo + lifecycle + midway pause)');
+  // The microphone in use is named on the status line, and a long silence points at Windows (#93).
+  const m = page(); let now = 0;
+  m.context.Date = { now: () => now };
+  m.context.navigator.mediaDevices = { getUserMedia: async () => ({
+    getAudioTracks: () => [{ label: 'HyperX QuadCast' }], getTracks: () => [{ stop() {} }] }) };
+  await m.toggle();
+  assert.match(m.line.textContent, /聞いています…（マイク：HyperX QuadCast）/);
+  now = 25000; await m.tick(20000);
+  assert.match(m.line.textContent, /既定の入力デバイス/);
+  const unnamed = page();
+  unnamed.context.navigator.mediaDevices = { getUserMedia: async () => ({ getAudioTracks: () => [{ label: '' }], getTracks: () => [] }) };
+  await unnamed.toggle();
+  assert.match(unnamed.line.textContent, /マイク：不明/);
+  console.log('test_listen.js ok (echo + lifecycle + midway pause + microphone)');
 }
 lifecycle().catch(error => { console.error(error); process.exitCode = 1; });
