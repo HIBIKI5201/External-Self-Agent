@@ -166,3 +166,28 @@ def test_youtube_http_routes_keep_csrf_guard_and_do_not_trigger_sync():
                 assert e.code == 401 and json.load(e)["error"] == "再接続してください"
     finally:
         app.shutdown(); app.server_close(); thread.join(timeout=2)
+
+
+def test_disabled_api_says_signed_in_and_links_only_to_google_console():
+    """#86: a disabled YouTube Data API looked like a failed sign-in; reconnecting never helped."""
+    body = json.dumps({"error": {"code": 403, "message": "YouTube Data API v3 has not been used in project 123456789 "
+                                 "before or it is disabled. Enable it by visiting https://console.developers.google.com/"
+                                 "apis/api/youtube.googleapis.com/overview?project=123456789 then retry.",
+                                 "errors": [{"reason": "accessNotConfigured"}]}})
+    error = urllib.error.HTTPError(youtube.API, 403, "Forbidden", {}, io.BytesIO(body.encode()))
+    with patch.object(youtube, "status", return_value={"connected": True}), \
+            patch.object(gauth, "access_token", return_value="fake"), patch.object(urllib.request, "urlopen", side_effect=error):
+        try:
+            youtube.playlists(); raise AssertionError("API error swallowed")
+        except youtube.YouTubeError as e:
+            assert e.code == 403 and "ログインは済んでいます" in str(e) and "再接続では直りません" in str(e), str(e)
+            assert e.link == ("https://console.developers.google.com/apis/api/youtube.googleapis.com/overview"
+                              "?project=123456789"), e.link
+    for bad in ("https://evil.example/apis/api/youtube.googleapis.com/overview?project=1",
+                "http://console.developers.google.com/apis/api/youtube.googleapis.com/overview?project=1",
+                "https://console.developers.google.com.evil.example/apis/api/youtube.googleapis.com/overview",
+                "https://console.cloud.google.com/apis/api/drive.googleapis.com/overview?project=1",
+                "https://console.cloud.google.com/apis/api/youtube.googleapis.com/overview?project=1%22%3E"):
+        assert youtube.enable_link("visit " + bad) == "", bad
+    assert youtube.enable_link("see https://console.cloud.google.com/apis/library/youtube.googleapis.com.") == \
+        "https://console.cloud.google.com/apis/library/youtube.googleapis.com"

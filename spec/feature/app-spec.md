@@ -266,6 +266,8 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 
 ## AS-14 BGM と環境音
 
+- **実装（#86）:** YouTube 欄で Google Cloud のプロジェクトの YouTube Data API v3 が無効（`accessNotConfigured` / `serviceDisabled`）のときは、ログインは済んでいて再接続では直らないことをはっきり書き、Google のエラー文にある API を有効にするページへのリンクを押せる形で出す（`youtube.enable_link`）。リンクは https で `console.developers.google.com` か `console.cloud.google.com` の YouTube API のページ（`/apis/api/youtube.googleapis.com…` または `/apis/library/youtube.googleapis.com`）、プロジェクト番号は英数字だけのときに限り、それ以外は出さない。有効にしてから反映まで数分かかることも添える。
+
 - **決定:** BGM は YouTube と連携し、再生先はリンクの種類から自動で選ぶ（#65）。YouTube／YouTube Music／埋め込みのモード選択は表示しない。
   - **YouTube の検索・ライブラリ（#37）** — BGM 欄の「動画・プレイリスト」から動画検索、自分のプレイリスト、プレイリスト内の動画を表示する。一覧は20件ごとのページ送り。一覧を開くとアプリ内の再生を一時停止し、動画を選ぶと一覧を閉じてアプリ内の公式プレーヤーで再生する。
   - **Google 接続（#37）** — 「GoogleでYouTubeに接続」を押した場合だけ `youtube.readonly` を追加で要求する。既存の ToDo・カレンダーと同じ OAuth クライアントを使い、通常のブラウザで同意を受ける。必要な権限が一部拒否された場合や更新トークンが無い場合は、以前の接続を保持する。YouTube Data API v3 の有効化が必要。

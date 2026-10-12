@@ -10,7 +10,7 @@
   };
   async function post(path, body) {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-EsAgent": "1" }, body: JSON.stringify(body || {}) });
-    const d = await r.json(); if (!r.ok) throw new Error(d.error || r.statusText); return d;
+    const d = await r.json(); if (!r.ok) throw Object.assign(new Error(d.error || r.statusText), { link: d.link || "" }); return d;
   }
 
   // ---- the bar above the chat: timer, sounds, なかよし度 and Es's latest line ----------
@@ -440,7 +440,15 @@
       }
       $("#yt-pages").hidden = !yt.next && !yt.previous;
       $("#yt-prev").disabled = !yt.previous; $("#yt-next").disabled = !yt.next;
-    } catch (e) { $("#yt-status").textContent = e.message; }
+    } catch (e) {
+      $("#yt-status").textContent = e.message;
+      // The page that enables the API (#86): the server passes only Google's own console link.
+      if (e.link && /^https:\/\/console\.(developers|cloud)\.google\.com\/apis\//.test(e.link)) {
+        const a = document.createElement("a");
+        a.href = e.link; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = "YouTube Data API を有効にするページを開く";
+        $("#yt-status").append(document.createElement("br"), a);
+      }
+    }
     finally { yt.busy = false; updateYouTube(yt); }
   }
 
