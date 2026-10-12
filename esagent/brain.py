@@ -2014,6 +2014,8 @@ def _choice_reply(selected, cfg, message_id=None):
         return {'reply': reply, 'events': [], 'handoffs': [], 'ui': {}, 'intent': 'proposal'}
     elif kind == 'project_add':
         reply, events = _finish_project_add(payload, value, cfg)
+    elif kind == 'repeat_bulk' and value == 'accept':
+        reply, events = repeat_chat.finish_bulk(payload)
     elif kind == 'repeat_add' and value in ('accept', 'plain', 'rule'):
         reply, events = repeat_chat.finish_add(payload, value, selected.get('rule'))
     else:
@@ -2316,6 +2318,13 @@ def _chat(text, cfg, message_id=None):
         if forget:
             db.add_message("assistant", forget)
             return {"reply": forget, "events": [], "handoffs": [], "intent": "forget"}
+        bulk = repeat_chat.bulk_repeat(text)
+        if bulk:  # one period for a project's tasks that have none, approved first (#123)
+            reply, offer = bulk
+            db.add_message("assistant", reply)
+            if offer:
+                choices.publish("repeat_bulk", offer)
+            return {"reply": reply, "events": [], "handoffs": [], "intent": "proposal" if offer else "repeat"}
         periodic = repeat_chat.periodic_add(text, history)
         if periodic:  # 「ウィークリーに「週課A」を追加して」: ask the period first (#135)
             reply, events, offer = periodic
