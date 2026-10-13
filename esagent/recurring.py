@@ -101,7 +101,7 @@ def tick():
     now = dt.datetime.now()
     reset = []
     with db.connect() as con:
-        rows = [dict(r) for r in con.execute("SELECT * FROM tasks WHERE repeat IS NOT NULL AND repeat != ''")]
+        rows = [dict(r) for r in con.execute("SELECT * FROM tasks WHERE repeat IS NOT NULL AND repeat != '' AND NOT read_only")]
     for t in rows:
         last, nxt = _points(t["repeat"], now)
         if t["last_reset"] and t["last_reset"] >= last.isoformat(timespec="minutes"):

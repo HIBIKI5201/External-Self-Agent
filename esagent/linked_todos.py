@@ -119,9 +119,10 @@ def _apply(src, items):
                 if not task["notes"]:
                     db.update_task(task["id"], notes=notes)
                     stats["updated"] += 1
+                db.set_read_only(task["id"])
                 save(item["name"], task["id"], False, notes if not task["notes"] else "")
             else:
-                task = db.add_task(item["name"], project=project, notes=notes)
+                task = db.add_task(item["name"], project=project, notes=notes, read_only=True)
                 stats["added"] += 1
                 save(item["name"], task["id"], False, notes)
             linked_ids.add(task["id"])
@@ -129,7 +130,7 @@ def _apply(src, items):
 
         if item["done"] and not row["done"]:
             if task and task["status"] != "done":
-                db.update_task(task["id"], status="done")
+                db.update_task(task["id"], status="done", source="linked")
                 stats["done"] += 1
             save(item["name"], row["task_id"], True, row["notes"])
             continue
@@ -137,11 +138,11 @@ def _apply(src, items):
             kept = notes
             if task:
                 ours = task["notes"] == row["notes"]
-                db.update_task(task["id"], status="todo", notes=notes if ours else None)
+                db.update_task(task["id"], status="todo", notes=notes if ours else None, source="linked")
                 kept = notes if ours else row["notes"]
                 stats["reopened"] += 1
             else:
-                task = db.add_task(item["name"], project=project, notes=notes)
+                task = db.add_task(item["name"], project=project, notes=notes, read_only=True)
                 stats["added"] += 1
             save(item["name"], task["id"], False, kept)
             continue

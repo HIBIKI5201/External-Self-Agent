@@ -126,13 +126,18 @@ def _apply_remote(local, g, list_id, project_id):
         status = "done"
     else:  # Google has no doing/delegated, so keep those unless the task was reopened
         status = "todo" if local["status"] == "done" else local["status"]
+    pushed = 1
+    if local.get("read_only") and (status == "done") != (local["status"] == "done"):
+        # #182: only the file it was read from completes a read-only task. Keep ours and leave the
+        # task unsynced, so the next push puts the check in Google back the way it was.
+        status, pushed = local["status"], 0
     ts = db.now()
     with db.connect() as con:
         con.execute(
             "UPDATE tasks SET title = ?, notes = ?, due = ?, status = ?, project_id = ?, glist_id = ?, "
-            "g_updated = ?, updated_at = ?, synced_at = ?, rev = rev + 1, synced_rev = rev + 1 WHERE id = ? AND rev = ?",
+            "g_updated = ?, updated_at = ?, synced_at = ?, rev = rev + 1, synced_rev = rev + ? WHERE id = ? AND rev = ?",
             ((g.get("title") or "").strip() or local["title"], g.get("notes") or "", _l_due(g), status,
-             project_id, list_id, g["updated"], ts, ts, local["id"], local["rev"]))
+             project_id, list_id, g["updated"], ts, ts, pushed, local["id"], local["rev"]))
 
 
 def _push_existing(t, current_list, project_list, default_id):
@@ -183,6 +188,11 @@ def _reconcile(list_id, project_id, g, project_list, default_id, stats):
     if remote_wins:
         _apply_remote(local, g, list_id, project_id)
         stats["pulled"] += 1
+        with db.connect() as con:
+            after = dict(con.execute("SELECT * FROM tasks WHERE id = ?", (local["id"],)).fetchone())
+        if after["rev"] != after["synced_rev"]:  # a read-only task's check was undone (#182)
+            _push_existing(after, list_id, project_list, default_id)
+            stats["pushed"] += 1
     elif local_changed:
         _push_existing(local, list_id, project_list, default_id)
         stats["pushed"] += 1

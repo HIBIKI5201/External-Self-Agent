@@ -17,7 +17,7 @@
       "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|tests/test_periodic_add\\.py|spec/test/conversation-repeat-53\\.md|spec/test/periodic-add-135\\.md)$"
     },
     {
-      "pathPattern": "(^|/)(esagent/linked_todos\\.py|tests/test_linked_todos\\.py)$"
+      "pathPattern": "(^|/)(esagent/linked_todos\\.py|tests/test_linked_todos\\.py|tests/test_read_only_tasks\\.py)$"
     }
   ],
   "source": "manual",
