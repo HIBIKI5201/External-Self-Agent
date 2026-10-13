@@ -365,6 +365,24 @@ class Handler(BaseHTTPRequestHandler):
             if not row:
                 raise ValueError("評価できるのは Es の返事だけです。")
             return {"id": row["id"], "rating": row["rating"], "rewritten": bool(row["rewrite"])}
+        if path == "/api/listen/diag":  # ?listen-diag: times of sound and of recognition only (#168)
+            kinds = ("diag-start", "diag-error", "voice", "result", "sent", "echo", "end", "error", "start", "note")
+            if body.get("kind") not in kinds:
+                raise ValueError("unknown diag event")
+            row = {"at": db.now(), "kind": body["kind"], **{k: body[k] for k in ("kind", "t", "from", "to", "peak", "floor", "final", "chars")
+                                       if isinstance(body.get(k), (int, float, bool))},
+                   **{k: str(body[k])[:40] for k in ("error", "event") if body.get(k)}}
+            with open(os.path.join(db.DATA_DIR, "listen-diag.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            return {"ok": True}
+        if path == "/api/listen/log":  # what 会話モード's recogniser did, never the words (#168)
+            event = str(body.get("event") or "")
+            detail = str(body.get("detail") or "")
+            if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed") \
+                    or not re.fullmatch(r"[a-z-]{0,30}", detail):
+                raise ValueError("unknown listen event")
+            log.info("listen: %s%s", event, f" ({detail})" if detail else "")
+            return {"ok": True}
         if path == "/api/es/said":  # a line the cat or the chat window showed (#139)
             mid = utterances.record(str(body.get("text") or ""), source=str(body.get("source") or "pet"),
                                     kind=str(body.get("kind") or "notice"), key=body.get("key"))

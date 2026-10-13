@@ -1,6 +1,6 @@
 // 会話モード (#89): telling Es's own voice (heard through the mic) from the user's words.
 const assert = require('node:assert/strict');
-const { isEcho, words, silenceFor, fixHeard } = require('../esagent/static/listen.js');
+const { isEcho, words, silenceFor, fixHeard, makeVad } = require('../esagent/static/listen.js');
 
 const es = ['今は手をつけるべきタスクがありません。新しくやりたいことがあれば教えてください。'];
 
@@ -37,6 +37,18 @@ for (const s of ['四つ買った', '五個ある', 'Sサイズの服', 'Sラン
   assert.equal(fixHeard(s, table), s, s);
 }
 
+// #168: speech in the microphone level, the signal that the recogniser should have heard something.
+const vad = makeVad(); const found = []; let ms = 0;
+const feed = (db, n) => { for (let i = 0; i < n; i++) { ms += 50; const out = vad.feed(db, ms); if (out) found.push(out); } };
+feed(-56, 60);            // 3 s of room noise
+feed(-36, 20);            // 1 s of speech
+feed(-56, 20);            // quiet again
+feed(-50, 40);            // a little louder noise: not speech
+assert.equal(found.length, 1, JSON.stringify(found));
+assert.ok(found[0].from >= 2900 && found[0].from <= 3100 && found[0].to >= 3900 && found[0].to <= 4100, JSON.stringify(found));
+feed(-38, 2); feed(-56, 20);  // a click shorter than 150 ms
+assert.equal(found.length, 1, 'a short click is not speech');
+
 // Run the actual page code with browser events and a deterministic clock.
 const vm = require('node:vm');
 const fs = require('node:fs');
@@ -52,7 +64,9 @@ function page(startErrors = 0) {
     result(text) { this.onresult?.({ results: [r(text, true)] }); }
   }
   const window = { SpeechRecognition: Recognition, EsHooks: { send: text => sent.push(text) } };
-  const context = { window, navigator: {}, document: { querySelector: s => s === '#listen' ? button : line },
+  const docEvents = {};
+  const context = { window, navigator: {}, document: { querySelector: s => s === '#listen' ? button : line,
+      visibilityState: 'visible', addEventListener: (name, fn) => { docEvents[name] = fn; } },
     fetch: async (path, options) => { if (options) posts.push(path); return { ok: true, json: async () => ({ recent: [] }) }; },
     setTimeout: (fn, delay) => { jobs.set(++id, { fn, at: time + delay }); return id; },
     clearTimeout: key => jobs.delete(key) };
@@ -68,7 +82,7 @@ function page(startErrors = 0) {
     }
     time = end; await flush();
   };
-  return { sessions, sent, posts, line, button, context, flush, tick, toggle: () => button.onclick() };
+  return { sessions, sent, posts, line, button, context, flush, tick, docEvents, toggle: () => button.onclick() };
 }
 async function lifecycle() {
   const p = page(); await p.toggle();
@@ -114,7 +128,7 @@ async function lifecycle() {
   asyncPage.sessions[0].result('送らない発言'); await asyncPage.tick(1200);
   await asyncPage.toggle(); voices.forEach(resolve => resolve()); await asyncPage.flush();
   assert.deepEqual(asyncPage.sent, []);
-  assert.deepEqual(asyncPage.posts.filter(p => p !== '/api/warm'), [], 'stopped mode must not interrupt Es after a delayed echo check');
+  assert.deepEqual(asyncPage.posts.filter(p => p === '/api/voice/stop'), [], 'stopped mode must not interrupt Es after a delayed echo check');
   // Thinking aloud: a sentence that stops midway is not sent after the usual pause (#116).
   const slow = page(); await slow.toggle();
   slow.sessions[0].result('君が言ってくれたことを'); await slow.tick(1500);
@@ -134,6 +148,26 @@ async function lifecycle() {
   unnamed.context.navigator.mediaDevices = { getUserMedia: async () => ({ getAudioTracks: () => [{ label: '' }], getTracks: () => [] }) };
   await unnamed.toggle();
   assert.match(unnamed.line.textContent, /マイク：不明/);
-  console.log('test_listen.js ok (echo + lifecycle + midway pause + microphone)');
+  // #168: a session that goes silent without ending is reopened; words being put together are not cut.
+  const stuck = page(); let clock = 0;
+  stuck.context.Date = { now: () => clock };
+  await stuck.toggle();
+  assert.equal(stuck.sessions.length, 1);
+  clock = 21000; await stuck.tick(20000);
+  assert.equal(stuck.sessions.length, 2, 'a silent session must be reopened');
+  assert.equal(stuck.sessions[0].aborted, true);
+  assert.ok(stuck.posts.includes('/api/listen/log'), 'the stall is reported to the server log');
+  stuck.sessions[1].result('今話して'); clock += 1000;
+  stuck.sessions[1].onresult({ results: [{ 0: { transcript: 'いる途中' }, isFinal: false, length: 1 }] });
+  clock += 25000; await stuck.tick(1000);
+  assert.equal(stuck.sessions.length, 2, 'not while words are being put together');
+  // A session that ended while the window was hidden starts again when it comes back.
+  const hidden = page(); await hidden.toggle();
+  hidden.context.setTimeout = () => 0;  // the restart is held back while hidden
+  hidden.sessions[0].onend();
+  assert.equal(hidden.sessions.length, 1);
+  hidden.docEvents.visibilitychange();
+  assert.equal(hidden.sessions.length, 2, 'back in front: listening again');
+  console.log('test_listen.js ok (echo + lifecycle + midway pause + microphone + stall)');
 }
 lifecycle().catch(error => { console.error(error); process.exitCode = 1; });
