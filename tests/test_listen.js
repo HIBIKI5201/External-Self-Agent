@@ -48,6 +48,13 @@ assert.equal(found.length, 1, JSON.stringify(found));
 assert.ok(found[0].from >= 2900 && found[0].from <= 3100 && found[0].to >= 3900 && found[0].to <= 4100, JSON.stringify(found));
 feed(-38, 2); feed(-56, 20);  // a click shorter than 150 ms
 assert.equal(found.length, 1, 'a short click is not speech');
+// Music playing for minutes is background, not one endless stretch; speech over it is still found.
+const music = makeVad(); const heardOver = []; let mt = 0;
+const play = (db, n) => { for (let i = 0; i < n; i++) { mt += 50; const out = music.feed(db, mt); if (out) heardOver.push(out); } };
+play(-56, 60); play(-30, 600);   // 30 s of BGM
+assert.equal(heardOver.length, 0, 'BGM is not speech');
+play(-12, 20); play(-30, 20);    // a sentence over the music
+assert.equal(heardOver.length, 1, JSON.stringify(heardOver));
 
 // Run the actual page code with browser events and a deterministic clock.
 const vm = require('node:vm');

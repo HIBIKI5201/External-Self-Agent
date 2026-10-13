@@ -78,6 +78,7 @@
 
 // Speech in the microphone's level (#168): above the room's noise for 150 ms starts a stretch, 600 ms
   // below ends it. feed(db, now) returns the stretch {from, to, peak, floor} when it ends, else null.
+  const LONGEST = 12000;  // ms; speech stretches are shorter
   function makeVad() {
     let floor = -60, loud = 0, still = 0, from = 0, peak = -100;
     return {
@@ -86,6 +87,8 @@
         if (!from) floor = Math.min(-20, 0.98 * floor + 0.02 * db);  // the room's level while nobody speaks
         if (speaking) { loud++; still = 0; peak = Math.max(peak, db); } else { still++; if (!from) loud = 0; }
         if (!from && loud >= 3) from = now - 150;
+        // Music from the speakers (BGM) is not speech: a stretch longer than this becomes the room's level.
+        if (from && now - from > LONGEST) { floor = Math.min(-20, db - 3); from = 0; loud = 0; still = 0; peak = -100; return null; }
         if (from && still >= 12) {
           const out = { from: Math.round(from), to: Math.round(now - 600), peak: Math.round(peak), floor: Math.round(floor) };
           from = 0; loud = 0; peak = -100;
