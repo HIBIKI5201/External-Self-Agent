@@ -1,4 +1,5 @@
 """E.S. Agent (External Self Agent) local server: chat UI + JSON API on 127.0.0.1. Started at logon by Task Scheduler."""
+import datetime as dt
 import html
 import json
 import logging
@@ -34,6 +35,8 @@ import youtube  # noqa: E402
 import choices  # noqa: E402
 import task_context  # noqa: E402
 import utterances  # noqa: E402
+import calendar_view  # noqa: E402
+import gapi  # noqa: E402
 import feedback  # noqa: E402
 import voice  # noqa: E402
 import runtime_log
@@ -159,6 +162,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, jobs.status(request_id, revision))
             except (ValueError, LookupError) as e:
                 return self._send(404, {"error": str(e)})
+        if path == "/api/calendar":  # the calendar screen: chosen calendars and their events (#157)
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                first = dt.date.fromisoformat(q.get("from", [""])[0])
+                last = dt.date.fromisoformat(q.get("to", [""])[0])
+            except ValueError:
+                first = dt.date.today().replace(day=1)
+                last = first + dt.timedelta(days=41)
+            last = min(last, first + dt.timedelta(days=62))
+            return self._send(200, {**calendar_view.state(), "events": calendar_view.events(first, last)})
         if path == "/api/health":
             return self._send(200, {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION})
         if path == "/api/state":
@@ -202,6 +215,7 @@ class Handler(BaseHTTPRequestHandler):
             purpose = gauth.finish(q.get("state", [""])[0], q.get("code", [""])[0])
             page = CALLBACK_PAGE.format(title="Google に接続しました",
                                         detail="E.S. Agent のYouTube欄からプレイリストを開けます。" if purpose == "youtube"
+                                        else "E.S. Agent のカレンダー欄で、表示するカレンダーを選んでください。" if purpose == "calendar"
                                         else "E.S. Agent がタスクの同期を始めます。")
             gsync.request()
         except (gauth.AuthError, gauth.OfflineError) as e:
@@ -249,11 +263,18 @@ class Handler(BaseHTTPRequestHandler):
     def _post_result(self, path, body):
         try:
             result = self._route(path, body)
-            if not path.startswith(("/api/youtube/", "/api/voice")):
+            if not path.startswith(("/api/youtube/", "/api/voice", "/api/calendar")):
                 gsync.request()  # mutations should reach Google; YouTube and voice calls do not trigger sync
             return 200, result
         except youtube.YouTubeError as e:
             return e.code, {"error": str(e), **({"link": e.link} if e.link else {})}
+        except calendar_view.CalendarError as e:
+            return 400, {"error": str(e)}
+        except (gauth.AuthError, gauth.OfflineError, gapi.SyncError) as e:
+            if path.startswith("/api/calendar"):  # Google refused or was unreachable (#157)
+                log.info("calendar: %s", e)
+                return 503, {"error": "Google カレンダーにつながりませんでした。接続と許可を確認して、もう一度試してください。"}
+            raise
         except LookupError as e:
             return 404, {"error": str(e)}
         except ValueError as e:  # bad input from the screen
@@ -263,6 +284,24 @@ class Handler(BaseHTTPRequestHandler):
             return 500, {"error": "処理結果を確認できません。履歴やタスクを確認してください。"}
 
     def _route(self, path, body):
+        if path == "/api/calendar/connect":  # the user grants it in their own browser (#157)
+            try:
+                url = gauth.begin(redirect_uri(), calendar=True)
+            except (gauth.AuthError, gauth.OfflineError):
+                raise calendar_view.CalendarError("Google 接続の設定（OAuth クライアント）が必要です。") from None
+            if body.get("open", True):
+                os.startfile(url)
+            return {"ok": True, "url": url}
+        if path == "/api/calendar/select":
+            ids = calendar_view.select(body.get("ids") or [])
+            threading.Thread(target=lambda: _quiet(calendar_view.sync), daemon=True).start()
+            return {"selected": ids}
+        if path == "/api/calendar/sync":
+            return {"count": calendar_view.sync()}
+        if path == "/api/calendar/add":
+            return calendar_view.add(str(body.get("calendar") or ""), str(body.get("title") or ""),
+                                     str(body.get("date") or ""), str(body.get("start") or ""),
+                                     str(body.get("end") or ""), CFG)
         if path == "/api/youtube/connect":
             try:
                 url = gauth.begin(redirect_uri(), youtube=True)
@@ -490,6 +529,13 @@ def _log_loop():
         traffic.checkpoint()
 
 
+def _quiet(fn):
+    try:
+        fn()
+    except Exception as e:  # a background refresh; the screen shows the last error
+        log.info("calendar: %s", e)
+
+
 def main():
     os.makedirs(db.DATA_DIR, exist_ok=True)
     handler = runtime_log.handler(db.DATA_DIR, CFG)
@@ -506,6 +552,7 @@ def main():
     traffic.since = time.monotonic()
     threading.Thread(target=_log_loop, name="log-checkpoint", daemon=True).start()
     gsync.start(CFG)
+    calendar_view.start()
     linked_todos.start(CFG)
     threading.Thread(target=_recurring_loop, name="recurring", daemon=True).start()
     threading.Thread(target=_pomo_loop, name="pomodoro", daemon=True).start()

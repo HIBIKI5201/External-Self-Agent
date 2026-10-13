@@ -21,6 +21,10 @@ TOKEN_PATH = os.path.join(SECRETS_DIR, "google_token.json")
 TASKS_SCOPE = "https://www.googleapis.com/auth/tasks"
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.app.created"
 YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+# The user's own calendars (#157): read the list, read and add events. Asked for separately, like YouTube.
+CALENDAR_VIEW_SCOPES = ["https://www.googleapis.com/auth/calendar.events",
+                        "https://www.googleapis.com/auth/calendar.calendarlist.readonly"]
+EXTRA = {"youtube": [YOUTUBE_SCOPE], "calendar": CALENDAR_VIEW_SCOPES}
 SCOPES = [TASKS_SCOPE, CALENDAR_SCOPE]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -65,7 +69,8 @@ def status():
     tok = _load_token()
     granted = (tok or {}).get("scope", "").split()
     return {"client": _client() is not None, "connected": bool(tok and tok.get("refresh_token")),
-            "calendar": CALENDAR_SCOPE in granted, "youtube": YOUTUBE_SCOPE in granted}
+            "calendar": CALENDAR_SCOPE in granted, "youtube": YOUTUBE_SCOPE in granted,
+            "calendar_view": set(CALENDAR_VIEW_SCOPES).issubset(granted)}
 
 
 def _post_form(url, fields):
@@ -84,16 +89,17 @@ def _post_form(url, fields):
         raise OfflineError(str(e))
 
 
-def begin(redirect_uri, youtube=False):
+def begin(redirect_uri, youtube=False, calendar=False):
     client = _client()
     if not client:
         raise AuthError(f"{CLIENT_PATH} がありません。Google Cloud で作った OAuth クライアントの JSON を置いてください。")
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     state = secrets.token_urlsafe(24)
-    scopes = SCOPES + ([YOUTUBE_SCOPE] if youtube else [])
+    purpose = "youtube" if youtube else "calendar" if calendar else "tasks"
+    scopes = SCOPES + EXTRA.get(purpose, [])
     with _lock:
-        _pending[state] = (verifier, redirect_uri, time.time(), youtube)
+        _pending[state] = (verifier, redirect_uri, time.time(), purpose)
     return AUTH_URL + "?" + urllib.parse.urlencode({
         "client_id": client["client_id"],
         "redirect_uri": redirect_uri,
@@ -113,7 +119,7 @@ def finish(state, code):
         entry = _pending.pop(state, None)
     if not entry or time.time() - entry[2] > 600:
         raise AuthError("認証リクエストが無効か期限切れです。もう一度「接続」を押してください。")
-    verifier, redirect_uri, _, youtube = entry
+    verifier, redirect_uri, _, purpose = entry
     client = _client()
     tok = _post_form(TOKEN_URL, {
         "client_id": client["client_id"],
@@ -123,14 +129,14 @@ def finish(state, code):
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
     })
-    if youtube and not set(SCOPES + [YOUTUBE_SCOPE]).issubset(tok.get("scope", "").split()):
+    if purpose in EXTRA and not set(SCOPES + EXTRA[purpose]).issubset(tok.get("scope", "").split()):
         raise AuthError("必要なGoogle連携の権限が許可されませんでした。以前の接続はそのままです。")
     if not tok.get("refresh_token"):
         raise AuthError("接続を保存できませんでした。もう一度接続してください。以前の接続はそのままです。")
     tok["expires_at"] = time.time() + tok.get("expires_in", 3600) - 60
     with _lock:  # don't let a concurrent refresh overwrite newly granted scopes
         _save_token(tok)
-    return "youtube" if youtube else "tasks"
+    return purpose
 
 
 def access_token():

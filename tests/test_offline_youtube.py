@@ -56,7 +56,8 @@ def test_oauth_keeps_existing_connection_on_partial_grant_or_failure():
             state = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["state"][0]
             with patch.object(gauth, "_post_form", return_value=result):
                 assert gauth.finish(state, "fake-code") == "youtube"
-            assert gauth.status() == {"client": True, "connected": True, "calendar": True, "youtube": True}
+            assert gauth.status() == {"client": True, "connected": True, "calendar": True, "youtube": True,
+                                      "calendar_view": False}
             with patch.object(gauth, "_post_form", return_value={"access_token": "renewed", "expires_in": 3600}):
                 saved = gauth._load_token(); saved["expires_at"] = 0; gauth._save_token(saved)
                 assert gauth.access_token() == "renewed"
