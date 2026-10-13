@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -291,7 +292,18 @@ class Pet:
             self.say("E.S. Agent のサーバーに届かなかった…", secs=3, voice=False)
 
     def _done(self, task_id):
-        self._safe(lambda: api(f"/api/tasks/{task_id}", {"status": "done"}))
+        try:
+            api(f"/api/tasks/{task_id}", {"status": "done"})
+        except urllib.error.HTTPError as e:  # e.g. a read-only task (#182): say why instead of cheering
+            try:
+                reason = json.load(e)["error"]
+            except Exception:
+                reason = "完了にできなかった…"
+            self.say(reason, secs=6, voice=False)
+            return
+        except Exception:
+            self.say("E.S. Agent のサーバーに届かなかった…", secs=3, voice=False)
+            return
         self.flash("happy"); self.say("やったね！えらい。", secs=3)
 
     def _start(self):

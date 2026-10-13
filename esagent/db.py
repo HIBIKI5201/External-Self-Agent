@@ -129,7 +129,9 @@ MIGRATIONS = {
                  ("intent", "TEXT")],
     "tasks": [("gtask_id", "TEXT"), ("glist_id", "TEXT"), ("g_updated", "TEXT"), ("synced_at", "TEXT"),
               ("rev", "INTEGER NOT NULL DEFAULT 1"), ("synced_rev", "INTEGER NOT NULL DEFAULT 0"),
-              ("repeat", "TEXT"), ("last_reset", "TEXT")],
+              ("repeat", "TEXT"), ("last_reset", "TEXT"),
+              # Read from a file another tool owns (#182, linked_todos): only that file completes it.
+              ("read_only", "INTEGER NOT NULL DEFAULT 0")],
 }
 
 TASK_SELECT = """
@@ -215,6 +217,9 @@ def init():
                     if table == "tasks" and name == "synced_rev":
                         con.execute("UPDATE tasks SET synced_rev = rev WHERE gtask_id IS NOT NULL "
                                     "AND synced_at IS NOT NULL AND updated_at = synced_at")
+                    if table == "tasks" and name == "read_only":
+                        con.execute("UPDATE tasks SET read_only = 1 WHERE id IN "
+                                    "(SELECT task_id FROM linked_items WHERE task_id IS NOT NULL)")
         con.execute("CREATE INDEX IF NOT EXISTS messages_event_key ON messages(event_key)")
 
 
@@ -333,6 +338,11 @@ def _task(con, task_id):
     return dict(row) if row else None
 
 
+def set_read_only(task_id, read_only=True):
+    with connect() as con:
+        con.execute("UPDATE tasks SET read_only = ? WHERE id = ?", (int(read_only), task_id))
+
+
 def get_task(task_id):
     with connect() as con:
         return _task(con, task_id)
@@ -360,23 +370,44 @@ def recently_done(limit=8):
         return [dict(r) for r in con.execute(sql, (limit,))]
 
 
-def add_task(title, project=None, due=None, notes="", status="todo"):
+def add_task(title, project=None, due=None, notes="", status="todo", read_only=False):
     with connect() as con:
         p = find_project(con, project)
         ts = now()
         cur = con.execute(
-            "INSERT INTO tasks(title, project_id, status, due, notes, created_at, updated_at) "
-            "VALUES(?, ?, ?, ?, ?, ?, ?)",
-            (title.strip(), p["id"] if p else None, status, valid_date(due), notes or "", ts, ts))
+            "INSERT INTO tasks(title, project_id, status, due, notes, created_at, updated_at, read_only) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            (title.strip(), p["id"] if p else None, status, valid_date(due), notes or "", ts, ts, int(read_only)))
         return _task(con, cur.lastrowid)
 
 
-def update_task(task_id, title=None, status=None, due=None, project=None, notes_append=None, notes=None):
-    """None means "leave unchanged"; due="" clears the due date; notes replaces, notes_append appends."""
+READ_ONLY_REPLY = "「{title}」はリポジトリのファイルから読み取ったタスクだから、ここでは完了や未完了に変えられないよ。元のファイルの done を書き換えてね。"
+
+
+def read_only_reply(task):
+    return READ_ONLY_REPLY.format(title=task["title"])
+
+
+class ReadOnlyTask(ValueError):
+    """A read-only task (#182) is completed or reopened only by the file it was read from.
+    A ValueError, so the screen (400) and MCP (isError) show the message as it is."""
+
+    def __init__(self, task):
+        super().__init__(read_only_reply(task))
+        self.task = task
+
+
+def update_task(task_id, title=None, status=None, due=None, project=None, notes_append=None, notes=None,
+                source=None):
+    """None means "leave unchanged"; due="" clears the due date; notes replaces, notes_append appends.
+    A read-only task's status cannot move to or from done unless source="linked" (raises ReadOnlyTask)."""
     with connect() as con:
         task = _task(con, task_id)
         if not task:
             return None
+        if (task.get("read_only") and source != "linked" and status in STATUSES and status != task["status"]
+                and "done" in (status, task["status"])):
+            raise ReadOnlyTask(task)
         sets, args = [], []
         if title:
             sets.append("title = ?"); args.append(title.strip())
@@ -547,6 +578,9 @@ def complete_handoff(handoff_id, summary, task_done=True):
     if not h:
         return None
     set_handoff(handoff_id, status="done", result=summary)
-    update_task(h["task_id"], status="done" if task_done else "doing",
-                notes_append=f"Claude Code (handoff #{handoff_id}): {summary}")
+    note = f"Claude Code (handoff #{handoff_id}): {summary}"
+    try:
+        update_task(h["task_id"], status="done" if task_done else "doing", notes_append=note)
+    except ReadOnlyTask:  # the work is reported; the task itself is completed in its file
+        update_task(h["task_id"], notes_append=note)
     return get_handoff(handoff_id)

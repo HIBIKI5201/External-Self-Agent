@@ -323,7 +323,8 @@ function render() {
   const t0 = today();
   const row = (t) => `
     <div class="task ${t.status === "done" ? "done" : ""}">
-      <input type="checkbox" ${t.status === "done" ? "checked" : ""} data-toggle="${t.id}" title="完了">
+      <input type="checkbox" ${t.status === "done" ? "checked" : ""} data-toggle="${t.id}" ${t.read_only
+        ? `disabled title="リポジトリのファイルから読み取ったタスク。完了は元のファイルで付ける"` : `title="完了"`}>
       <div><div class="title" data-expand="${t.id}" title="クリックでメモを開く">#${t.id} ${esc(t.title)}</div>
         ${t.notes && !openTasks.has(t.id) ? `<div class="peek">${esc(t.notes.split("\n").pop())}</div>` : ""}
         <div class="meta">${t.repeat ? `<span class="rep" title="${esc(t.repeat)}">🔁 ${esc(repText(t.repeat))}</span> ・ ` : ""}${t.due ? `<span class="${t.due < t0 ? "over" : "due"}">〆 ${esc(t.due)}</span> ・ ` : ""}${{ todo: "未着手", doing: "進行中", delegated: "Claude Codeに委任", done: "完了" }[t.status] || esc(t.status)}</div></div>
@@ -710,7 +711,7 @@ document.addEventListener("click", async (e) => {
 
 document.addEventListener("change", async (e) => {
   const id = e.target.dataset.toggle;
-  if (!id) return;
+  if (!id || e.target.disabled) return;
   await api(`/api/tasks/${id}`, { status: e.target.checked ? "done" : "todo" });
   refresh();
 });

@@ -142,6 +142,8 @@ def run_action(action, args, cfg):
             reply = "使い方: /done 番号 または /done タスク名"
         elif not task:
             reply = _not_found(args, cands)
+        elif task["read_only"] and task["status"] != "done":
+            reply = db.read_only_reply(task)
         else:
             db.update_task(task["id"], status="done")
             nxt = brain._next_suggestion(task["project_id"], task["id"])

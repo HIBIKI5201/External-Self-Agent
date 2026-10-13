@@ -614,6 +614,10 @@ def _apply_current(actions, cfg, user_text="", context_text=""):
         if kind in ("add_task", "delegate") and not task_id and not guard.allows(None, "add"):
             events.append(f"・ 「{title or ''}」は登録しないよう言われたので追加しませんでした")
             continue
+        if kind == "complete_task" and task_id in known_ids and db.get_task(task_id)["read_only"]:
+            t = db.get_task(task_id)  # #182: only the file it was read from completes it
+            events.append(f"・ #{t['id']} {t['title']} はリポジトリのファイルから読み取ったタスクなので完了にしていません（元のファイルで done にしてね）")
+            continue
         if kind == "complete_task" and not guard.allows(task_id, "complete"):
             events.append(f"・ #{task_id} {db.get_task(task_id)['title']} は完了にしないよう言われたので変えていません")
             continue
@@ -1940,6 +1944,8 @@ def _guarded_write_flow(text, annotated, history):
         other = "\nほかの変更はまだしていないよ。続けて教えてね。" if re.search(r"締め?切|期限|名前|タイトル|メモ|詳細", rest) else ""
         if task["status"] != "done":
             return f"「{task['title']}」はもう未完了だよ。" + NO_TARGET_NOTE + other, []
+        if task["read_only"]:
+            return db.read_only_reply(task) + other, []
         t = db.update_task(task["id"], status="todo")
         return f"「{t['title']}」を未完了に戻したよ。{other}", [f"↺ #{t['id']} {t['title']} を未完了に戻しました"]
     renamed = _explicit_rename(text, guard)
@@ -2216,6 +2222,8 @@ def _es_reply_flow(text, message_id):
     if _DONE_REPLY_RE.search(said):
         if task["status"] == "done":
             return f"「{task['title']}」はもう完了になってるよ。おつかれさま！", []
+        if task["read_only"]:
+            return "おつかれさま！" + db.read_only_reply(task), []
         task = db.update_task(task["id"], status="done")
         return (f"やったね！「{task['title']}」を完了にしたよ。",
                 [f"✔ #{task['id']} {task['title']} を完了にしました"])

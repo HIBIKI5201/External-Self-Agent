@@ -106,13 +106,18 @@ def test_user_changes_are_kept_until_the_file_changes_that_item():
         path = _source(sb)
         linked_todos.run_once(sb.cfg)
         narin, afentis = _linked("Narin")[0], _linked("Afentis Prime")[0]
-        db.update_task(narin["id"], status="done")  # finished in E.S. Agent, not in the file
+        try:  # read only (#182): only the file completes it
+            db.update_task(narin["id"], status="done")
+            raise AssertionError("a linked task was completed in E.S. Agent")
+        except db.ReadOnlyTask:
+            pass
+        db.update_task(narin["id"], status="doing")
         db.update_task(afentis["id"], notes_append="ボイド亀裂で集める")
 
         _write(path, bp="true")
         r = linked_todos.run_once(sb.cfg)["WarframeDocument 装備"]
         assert r == {"state": "ok", "added": 0, "done": 0, "reopened": 0, "updated": 0}, r
-        assert db.get_task(narin["id"])["status"] == "done"  # not reopened behind the user's back
+        assert db.get_task(narin["id"])["status"] == "doing"
         assert "ボイド亀裂で集める" in db.get_task(afentis["id"])["notes"]  # the user's note survives
 
 

@@ -264,6 +264,8 @@ class _Run:
         t = db.get_task(int(task_id))
         if not t:
             return self._reject("そのタスクはありません。一覧から番号を選んでください")
+        if t["read_only"] and t["status"] != "done":
+            return self._reject("このタスクは読み取り専用です。完了にせず、元のファイルで done にするよう利用者に伝えてください")
         db.update_task(t["id"], status="done")
         self.events.append(f"✔ #{t['id']} {t['title']} を完了にしました")
         return "完了にしました"
