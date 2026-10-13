@@ -9,6 +9,7 @@
   let timing = { silence: 1200, incomplete: 3000 };
   const ECHO_SECS = 8;       // Es's lines this recent can come back through the mic
   const MAX_FAILS = 3;       // give up after this many network errors in a row
+  const STALL_MS = 20000;    // a session with no result, end or error for this long is reopened (#168)
 
   // ---- pure helpers (tests/test_listen.js) --------------------------------------------
   const norm = (s) => String(s || "").normalize("NFKC").toLowerCase()
@@ -75,7 +76,30 @@
     return out.replace(ES_NAME, (m, before) => `${before}Es`);
   }
 
-  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor, fixHeard }; return; }
+// Speech in the microphone's level (#168): above the room's noise for 150 ms starts a stretch, 600 ms
+  // below ends it. feed(db, now) returns the stretch {from, to, peak, floor} when it ends, else null.
+  const LONGEST = 12000;  // ms; speech stretches are shorter
+  function makeVad() {
+    let floor = -60, loud = 0, still = 0, from = 0, peak = -100;
+    return {
+      feed(db, now) {
+        const speaking = db > floor + 12 && db > -55;
+        if (!from) floor = Math.min(-20, 0.98 * floor + 0.02 * db);  // the room's level while nobody speaks
+        if (speaking) { loud++; still = 0; peak = Math.max(peak, db); } else { still++; if (!from) loud = 0; }
+        if (!from && loud >= 3) from = now - 150;
+        // Music from the speakers (BGM) is not speech: a stretch longer than this becomes the room's level.
+        if (from && now - from > LONGEST) { floor = Math.min(-20, db - 3); from = 0; loud = 0; still = 0; peak = -100; return null; }
+        if (from && still >= 12) {
+          const out = { from: Math.round(from), to: Math.round(now - 600), peak: Math.round(peak), floor: Math.round(floor) };
+          from = 0; loud = 0; peak = -100;
+          return out;
+        }
+        return null;
+      },
+    };
+  }
+
+  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor, fixHeard, makeVad }; return; }
 
   // ---- the page -----------------------------------------------------------------------
   const $ = (s) => document.querySelector(s);
@@ -86,6 +110,9 @@
   // The microphone Edge listens with (#93): the Windows default input device, named by the track the
   // permission check opened. Shown only on this screen; never stored or sent.
   let mic = "", lastHeard = 0, quiet = null;
+  // Edge's recognition sometimes goes silent without ending (#168): the screen kept saying 「聞いています…」
+  // and nothing was sent. lastSign is the last sign of life of the current session.
+  let lastSign = 0, stallWatch = null;
   const QUIET_MS = 20000;  // nothing recognised for this long: point at the Windows input device
 
   async function post(path, body) {
@@ -120,6 +147,75 @@
     }, QUIET_MS);
   }
 
+  // What the recogniser did (start, end, error kind, reopen), without any words, to the server log, so a
+  // stop can be explained afterwards (#168).
+  function note(event, detail = "") {
+    post("/api/listen/log", { event, detail }).catch(() => {});
+    dlog("note", { event: event + (detail ? ":" + detail : "") });
+  }
+
+  // The ear (#168): Edge's recogniser sometimes stops hearing without ending or reporting an error; in a
+  // test 8 sentences in a row got no result. The page also reads the same microphone's level with Web
+  // Audio, locally; when speech was heard and the recogniser gave nothing for it, the session is reopened.
+  // No audio and no words are kept or sent. With ?listen-diag the times are logged (data/listen-diag.jsonl).
+  const DIAG = typeof location !== "undefined" && /[?&]listen-diag\b/.test(location.search || "");
+  const DEAF_MS = 2500;  // after a stretch of speech ends, this long without a result means a deaf session
+  let ear = null;
+  function dlog(kind, extra = {}) {
+    if (!DIAG) return;
+    post("/api/listen/diag", { kind, t: Math.round(performance.now()), ...extra }).catch(() => {});
+  }
+  async function startEar(turn) {
+    if (ear || !window.AudioContext || !navigator.mediaDevices?.getUserMedia) return;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!on || turn !== epoch) { stream.getTracks().forEach((t) => t.stop()); return; }
+    const ctx = new AudioContext();
+    const an = ctx.createAnalyser();
+    an.fftSize = 2048;
+    ctx.createMediaStreamSource(stream).connect(an);
+    const buf = new Float32Array(an.fftSize), vad = makeVad();
+    ear = { stream, ctx, timer: setInterval(() => {
+      an.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      const stretch = vad.feed(10 * Math.log10(sum / buf.length + 1e-12), performance.now());
+      if (!stretch) return;
+      dlog("voice", stretch);
+      const since = Date.now() - (performance.now() - stretch.from);  // the stretch's start on Date's clock
+      setTimeout(() => {
+        if (!on || turn !== epoch || !rec || heard || timer || lastHeard >= since) return;
+        note("deaf");
+        const r = rec; rec = null;
+        r.onend = r.onresult = r.onerror = null;
+        try { r.abort(); } catch {}
+        start(true);
+      }, DEAF_MS);
+    }, 50) };
+  }
+  function stopEar() {
+    if (!ear) return;
+    clearInterval(ear.timer);
+    ear.stream.getTracks().forEach((t) => t.stop());
+    ear.ctx.close?.().catch?.(() => {});
+    ear = null;
+  }
+
+  function watchStall(turn) {
+    clearTimeout(stallWatch);
+    stallWatch = setTimeout(() => {
+      if (!on || turn !== epoch) return;
+      // Not while words are being put together: only an idle session that stopped answering.
+      if (rec && !heard && !timer && Date.now() - lastSign >= STALL_MS) {
+        note("stall");
+        const r = rec; rec = null;
+        r.onend = r.onresult = r.onerror = null;
+        try { r.abort(); } catch {}
+        start(true);
+      }
+      watchStall(turn);
+    }, STALL_MS);
+  }
+
   let warmedAt = 0;
   async function heardSome(text) {
     // Speech has started: load the model now, before the sentence ends (#119).
@@ -147,7 +243,8 @@
     const turn = epoch;
     const echo = isEcho(text, await esLines());
     if (!on || turn !== epoch) return;
-    if (echo) return show("聞いています…（Es の声は送りません）");
+    if (echo) { dlog("echo", { chars: text.length }); return show("聞いています…（Es の声は送りません）"); }
+    dlog("sent", { chars: text.length });
     const fixed = fixHeard(text);
     show("送信：", fixed === text ? text : `${fixed}（聞き取り「${text}」を直しました）`);
     window.EsHooks?.send?.(fixed, null, { via: "voice" });
@@ -159,11 +256,11 @@
     const turn = epoch;
     restart = setTimeout(() => {
       restart = null;
-      if (on && turn === epoch) start();
+      if (on && turn === epoch) { note("restart", fails ? "after-errors" : ""); start(); }
     }, fails ? 1000 * fails : 250);
   }
 
-  function start() {
+  function start(quietly = false) {  // quietly: a stalled session reopened in the background (#168)
     if (!Rec) {
       on = false;
       return show("この画面では音声認識を使えません（Edge で開いてください）");
@@ -179,8 +276,9 @@
     r.onresult = (e) => {
       if (!current()) return;
       fails = 0;
-      lastHeard = Date.now();
+      lastHeard = lastSign = Date.now();
       const w = words(e.results, done);
+      dlog("result", { final: !!w.final, chars: (w.final + w.interim).length });
       for (let i = done; i < e.results.length; i++) if (e.results[i].isFinal) done = i + 1;
       heard += w.final;
       const now = (heard + w.interim).trim();
@@ -191,7 +289,10 @@
       timer = setTimeout(finish, silenceFor(now));
     };
     r.onerror = (e) => {
+      dlog("error", { error: e.error });
       if (!current()) return;
+      lastSign = Date.now();
+      if (e.error !== "no-speech") note("error", e.error);
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         stop(); return show("マイクが許可されていません。Edge の設定（Cookie とサイトのアクセス許可 → マイク）で 127.0.0.1 を許可してください");
       }
@@ -200,12 +301,15 @@
       if (!["no-speech", "aborted", "network"].includes(e.error)) show(`音声認識のエラー（${e.error}）`);
     };
     r.onend = () => {  // Every restart gets a fresh session and result cursor.
+      dlog("end");
       if (!current()) return;
       rec = null;
       retry();
     };
-    try { r.start(); } catch { return startFailed(); }
-    if (current()) show("聞いています…");
+    lastSign = Date.now();
+    dlog("start");
+    try { r.start(); } catch { note("start-failed"); return startFailed(); }
+    if (current() && !quietly) show("聞いています…");
   }
 
   function startFailed() {
@@ -221,6 +325,8 @@
     clearTimeout(restart); restart = null;
     clearTimeout(timer); timer = null; heard = "";
     clearTimeout(quiet); quiet = null;
+    clearTimeout(stallWatch); stallWatch = null;
+    stopEar();
     barged = false; checking = false;
     if (rec) { const r = rec; rec = null; r.onend = null; try { r.abort(); } catch {} }
     show("");
@@ -256,11 +362,19 @@
     if (!on || turn !== epoch) return;  // turned off or restarted while permission was pending
     if (problem) { stop(); return show(problem); }
     lastHeard = Date.now();
+    note("on");
+    startEar(turn).catch((e) => dlog("diag-error", { error: String(e.name || e) }));
     watchQuiet(turn);
+    watchStall(turn);
     start();
   }
 
-  channel && (channel.onmessage = (e) => { if (e.data === "on" && on) stop(); });
+  channel && (channel.onmessage = (e) => { if (e.data === "on" && on) { note("off", "other-window"); stop(); } });
+  // Back in front with the mode on but no session (a restart was held back while hidden): start again.
+  document.addEventListener?.("visibilitychange", () => {
+    // A restart timer held back while hidden is replaced by starting now.
+    if (document.visibilityState === "visible" && on && !rec) { clearTimeout(restart); restart = null; note("restart", "visible"); start(); }
+  });
   window.EsListen = {
     init() {
       $("#listen").onclick = toggle;
