@@ -100,11 +100,15 @@ def _apply(src, items):
         linked_ids = {r["task_id"] for r in con.execute("SELECT task_id FROM linked_items WHERE task_id IS NOT NULL")}
     db.ensure_project(project)
 
+    with db.connect() as con:  # rows saved before #184, or a source moved to another file
+        con.execute("UPDATE linked_items SET file = ? WHERE source = ? AND file IS NOT ?", (src["file"], name, src["file"]))
+
     def save(item, task_id, done, notes):
         with db.connect() as con:
-            con.execute("INSERT INTO linked_items(source, item, task_id, done, notes) VALUES(?, ?, ?, ?, ?) "
+            con.execute("INSERT INTO linked_items(source, item, task_id, done, notes, file) VALUES(?, ?, ?, ?, ?, ?) "
                         "ON CONFLICT(source, item) DO UPDATE SET task_id = excluded.task_id, done = excluded.done, "
-                        "notes = excluded.notes", (name, item, task_id, int(done), notes))
+                        "notes = excluded.notes, file = excluded.file", (name, item, task_id, int(done), notes,
+                                                                         src["file"]))
 
     for item in items:
         notes = _notes(label, item)
@@ -151,6 +155,102 @@ def _apply(src, items):
             stats["updated"] += 1
             save(item["name"], task["id"], False, notes)
     return stats
+
+
+# ---- README in the source's directory (#184) --------------------------------
+# An agent working in the other repository cannot see from there that E.S. Agent reads the file,
+# nor how to complete a task. Only a directory named .es-agent gets one: it is E.S. Agent's own,
+# kept out of git; other directories (WarframeDocument's TODO/data) belong to the repository.
+
+README = "README.md"
+README_DIR = ".es-agent"
+BEGIN = "<!-- es-agent:begin -->"
+END = "<!-- es-agent:end -->"
+README_BODY = """\
+> この印の間は E.S. Agent が自動で書き換えます。書き足すときは印の外に書いてください。
+
+# .es-agent: E.S. Agent が読み取る TODO
+
+このディレクトリの TOML ファイルは、E.S. Agent が約 60 秒ごとに読み取り、タスクとして取り込んでいます。
+**ファイルが正本**で、E.S. Agent からは書き換えません。
+
+| ファイル | ソース名 | 取り込み先のプロジェクト |
+|---|---|---|
+{rows}
+
+## 完了のつけ方
+
+- 該当する `[[items]]` の `done` を `true` に書き換えて保存する。約 60 秒でタスクが完了になる（E.S. Agent の `/sync` ならすぐ）。
+- `false` に戻すとタスクは再開する。
+- E.S. Agent の画面・チャット・MCP の `update_task`・Google ToDo からは完了にできない（読み取り専用のタスク）。
+
+## 項目の形式
+
+```toml
+[[items]]
+name = "設計を決める"  # 必須。ファイルの中で一意。タスクとの対応に使うので、変えると別の項目になる
+done = false           # 完了なら true
+note = "補足"          # 任意。タスクのメモに入る
+source = "入手場所"    # 任意。タスクのメモに入る
+parts = [{{ name = "設計図", done = false, source = "入手場所" }}]  # 任意。部品ごとの進み具合
+```
+
+- ファイルが TOML として壊れている、`[[items]]` がない、`name` がない・重複している、知らない形のときは、**タスクを何も変えず**、E.S. Agent の画面に理由を出す。
+- ファイルから消した項目のタスクは消えない（完了にもならない）。
+
+## 注意
+
+- このディレクトリは E.S. Agent 用のローカルな資料。**コミットしない**（`.git/info/exclude` などで追跡外にする）。
+"""
+
+
+def _cell(text):
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def readme_block(srcs):
+    rows = "\n".join(f"| `{_cell(os.path.basename(s['file']))}` | {_cell(s.get('label') or s['name'])} "
+                     f"| {_cell(s['project'])} |" for s in srcs)
+    return BEGIN + "\n" + README_BODY.format(rows=rows) + END
+
+
+def merged_readme(old, block):
+    """The README with our block replaced; what the user wrote outside the marks stays as it is."""
+    if old is None:
+        return block + "\n"
+    i = old.find(BEGIN)
+    j = old.find(END, i) if i >= 0 else -1
+    if j >= 0:
+        return old[:i] + block + old[j + len(END):]
+    return block + "\n\n" + old  # a README of the user's own: ours goes on top
+
+
+def update_readmes(cfg):
+    """Write the README of each .es-agent directory with sources, only when its text changes. Returns paths written."""
+    dirs = {}
+    for s in sources(cfg):
+        d = os.path.dirname(os.path.abspath(s["file"]))
+        if os.path.basename(d).lower() == README_DIR:
+            dirs.setdefault(d, []).append(s)
+    written = []
+    for d, srcs in dirs.items():
+        if not os.path.isdir(d):
+            continue
+        path = os.path.join(d, README)
+        try:
+            try:
+                with open(path, encoding="utf-8", newline="") as f:
+                    old = f.read()
+            except FileNotFoundError:
+                old = None
+            new = merged_readme(old, readme_block(srcs))
+            if new != old:
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    f.write(new)
+                written.append(path)
+        except (OSError, UnicodeDecodeError) as e:  # never let the README stop the tasks
+            log.warning("linked todo README %s: %s", path, e)
+    return written
 
 
 # ---- running ----------------------------------------------------------------
@@ -213,6 +313,7 @@ def run_once(cfg, force=False):
                 r = {"state": "error", "error": str(e)}
             if r is not None:
                 results[src["name"]] = r
+        update_readmes(cfg)
     if any(r.get(k) for r in results.values() for k in ("added", "done", "reopened", "updated")):
         import gsync
         gsync.request()
