@@ -87,6 +87,9 @@ name refers to (a place, enemy, item, product) unless the user told you. Your ow
 in the records; never talk about tasks or work as if you had done them yourself. If the answer
 is not there (for example a word, code or number the user never told you), say honestly that you do not
 know or do not remember it. Never invent one.
+You cannot see what is happening outside this PC now (sales, news, weather, prices, releases, events, outages):
+never agree that something is happening there; say you cannot check it. Do not explain how to set up or use
+services, APIs or products you were not told about; offer 「/claude 調べて …」 instead.
 Never claim you did something that is not listed under "What just happened"."""
 _lock = threading.Lock()
 
@@ -288,7 +291,10 @@ def _voice_state():
 _ASKS = r"(?:[？?]|の[？?]?|かな|か[？?]?|って[？?]?)?[。！!\s]*$"
 _SPEAK_Q_RE = re.compile(r"(?:喋れる|しゃべれる|喋れるように|しゃべれるように|声(?:を|が)?出せる|声で話せる|声で話して(?:る|くれる)|"
                          r"読み上げ(?:られる|できる|て(?:る|くれる)))[^。！!\n]{0,8}" + _ASKS)
-_HEAR_Q_RE = re.compile(r"(?:聞こえる|聴こえる|聞こえて(?:る)?|聞き取れる|マイク(?:は|って)?(?:使える|で話せる))[^。！!\n]{0,8}" + _ASKS)
+_HEAR_Q_RE = re.compile(r"(?:聞こえる|聴こえる|聞こえて(?:る)?|聞き取れる|マイク(?:は|って)?(?:使える|で話せる))[^。！!\n]{0,8}" + _ASKS +
+                        # 「マイクの音声読み取り使ってるよね？」「どうやって聞いてるの？」 (#207)
+                        r"|(?:音声認識|音声読み取り|マイク(?:の)?音声|どうやって(?:聞|聴)いて|どうやって声を)[^。！!\n]{0,20}"
+                        r"[？?][。！!\s]*$")
 
 
 def _ability_flow(text, cfg):
@@ -307,9 +313,12 @@ def _ability_flow(text, cfg):
         note = f"ただ、いまは{trouble[st['engine']]}、声が出せていないかも。" if st.get("engine") in trouble else ""
         return f"うん、話せるよ。返事を VOICEVOX の{who}の声で読み上げてるよ。{note}"
     if _HEAR_Q_RE.search(said):
-        music = re.search(r"音楽|曲|BGM|動画|音", said)
+        music = re.search(r"音楽|曲|BGM|動画|音(?!声)", said)
+        # The model told the user to make a Google Cloud project and an API key for it (#207, #208).
+        how = re.search(r"どうやって|API|キー|仕組み|何(?:を)?使", said, re.I)
         return ("会話モードをオンにすると、マイクで話してくれた言葉を Edge の音声認識で文字にして受け取れるよ。"
-                "音楽や動画の音そのものは聞こえないんだ。"
+                + ("ブラウザに入っている機能を使うから、API キーや Google Cloud の設定は要らないんだ。" if how else "")
+                + "音楽や動画の音そのものは聞こえないんだ。"
                 + ("アプリ内の YouTube なら、タイトルと再生しているかどうかだけは分かるよ。" if music else ""))
     return None
 
@@ -821,6 +830,25 @@ def _meaning_flow(cfg, text):
     word = (f"「{term}」は英語だと「{gloss[:30]}」という意味の言葉だよ。" if meaningful
             else f"「{term}」は、言葉としての意味もうまく訳せなかった。")
     return (word + "ただ、それがゲームや作品の中で何を指すのかは、調べていないから私にはわからないんだ。"
+            "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
+
+
+# 「プライムセールやってんの？今。」 -- the model answered 「うん、プライムセールやってるね～」 (#208).
+# Es cannot look outside the PC, so what is happening out there now is not hers to confirm.
+_OUTSIDE_TOPIC_RE = re.compile(r"(?P<topic>[^\s、。！!？?]{0,12}(?:セール|キャンペーン|ニュース|天気|株価|値段|価格|"
+                               r"発売|リリース|メンテ(?:ナンス)?|障害|配信|ライブ|開催))")
+_OUTSIDE_ASK_RE = re.compile(r"(?:やって(?:る|ん|い)|始まって|終わって|開催|ある|出て(?:る|ん)|いくら|どう(?:なって|だった)|"
+                             r"いつ(?:から|まで)?|晴れ|雨|降)[^。！!？?\n]{0,8}(?:[？?]|の[。\s]|$)")
+
+
+def _outside_fact_flow(text):
+    """「セールやってる？」「明日の天気は？」: Es cannot check the outside world, so she says so (#208)."""
+    said = text.strip()
+    topic = _OUTSIDE_TOPIC_RE.search(said)
+    if not topic or len(said) > 50 or _ACTION_HINT_RE.search(said) or not _OUTSIDE_ASK_RE.search(said):
+        return None
+    name = re.sub(r"^(?:今|いま|もう|明日の|今日の|ええ。?|え、?)", "", topic.group("topic")) or topic.group("topic")
+    return (f"ごめんね、私はネットを見られないから、{name}のことは確かめられないの。"
             "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
 
 
@@ -1421,6 +1449,9 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     reply = clean_model_reply(reply, events)
     reply, offered = strip_model_offers(reply)
     reply, promised = strip_promises(reply)
+    reply, alarmed = strip_alarm_promises(reply)
+    if alarmed:  # no alarm exists; say so instead of the promise (#205)
+        reply = _alarm_flow(text) or (reply + "\n" + ALARM_REPLY.format(when="")).strip()
     if not reply and promised:
         reply = "うん、そうなんだね。"
     if promised == "behavior" or behavior_wish(text):
@@ -1442,6 +1473,12 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
 # Es cannot hear (#109). Such sentences are dropped when the reply has something else to say.
 _GENERIC_CLOSER_RE = re.compile(r"(?:何でも|なんでも|いつでも|気軽に|遠慮なく|好きなだけ)[^。！!？?\n]{0,15}"
                                 r"(?:話|聞|言|相談|教え|声をかけ)|聞かせて(?:ね|ください|ほしい|欲しい)?(?:な)?[。！!〜ー♪\s]*$")
+# 「E.S. Agent は音声を直接聞くことはできないから、文字に変換して話してね」 is never true: the user's speech
+# arrives through 会話モード (#207). Unlike music, there is no question in which it is the right answer.
+_VOICE_LIMIT_RE = re.compile(r"(?:音声|声|言葉|話)(?:は|が|を)?[^。！!？?\n]{0,8}"
+                             r"(?:聞く(?:こと)?(?:は|が)?(?:でき|出来)(?:ない|ません)|直接聞(?:け|か)(?:ない|ません|ず)|"
+                             r"扱え(?:ない|ません)|受け取れ(?:ない|ません))|"
+                             r"文字に(?:変換|直)して(?:話|送|入力|書)")
 _SELF_LIMIT_RE = re.compile(r"(?:音|声|曲|音楽|BGM)(?:は|が|を)?[^。！!？?\n]{0,8}(?:聞こえ|聴こえ|聞け|聴け|出せ)(?:ない|ません)|"
                             r"画面(?:は|が|を)?[^。！!？?\n]{0,6}見(?:え|れ)(?:ない|ません)|私は(?:AI|プログラム)だから")
 _ABILITY_ASK_RE = re.compile(r"聞こえ|聴こえ|喋れ|しゃべれ|話せる|声|音|見える|見えて|できる[？?]|できるの|機能")
@@ -1465,7 +1502,7 @@ def tidy_chat_reply(reply, text, history):
         # 「何でも話してね」 is generic even next to the user's words; 「〇〇を聞かせて」 is not.
         if closer and (not closer[0].startswith("聞かせ") or not any(w in s for w in words)):
             return True
-        if _SELF_LIMIT_RE.search(s) and not _ABILITY_ASK_RE.search(text):
+        if _SELF_LIMIT_RE.search(s) and not _ABILITY_ASK_RE.search(text) or _VOICE_LIMIT_RE.search(s):
             return True
         n = _norm(s)
         return len(n) >= 6 and any(n == e or (len(_bigrams(n)) > 3 and _similarity(n, e) >= 0.8) for e in earlier)
@@ -1530,6 +1567,42 @@ def strip_promises(reply):
 def behavior_wish(text):
     """「次からは分類が分からない時は聞いてね」: a wish about how Es should behave from now on."""
     return any(_FUTURE_WISH_RE.search(c) for c in re.split(r"[。！!\n]", text) if c.strip())
+
+
+# 「7時半に起こして」「10分後に教えて」: there is no alarm or reminder, so a promise to wake or notify
+# the user at a time could make them oversleep (#205). Code answers; the model may not promise it.
+_TIME_RE = r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})(?:時(?:半|\d{1,2}分)?|分後|時間後)"
+_ALARM_ASK_RE = re.compile(
+    _TIME_RE + r"(?:頃|ごろ|くらい|ぐらい)?(?:に|には|になったら)[、\s]*(?:(?:私|俺|僕|わたし|ぼく|おれ)を)?"
+    r"(?:起こし|知らせ|教え|声(?:を)?かけ|呼ん|通知し|鳴らし|リマインドし)(?:て|てね|てほしい|てくれ|てください|てくれる|てもらえる)|"
+    r"(?:アラーム|目覚まし|リマインダー)(?:を)?(?:かけ|セットし|設定し|仕掛け)(?:て|てね|てほしい|てくれ|てください|てくれる)")
+_ALARM_PROMISE_RE = re.compile(
+    r"起こして(?:あげる|あげます|あげるね|おく|おくね)|起こす(?:ね|よ|から)|起こします|" +
+    _TIME_RE +r"[^。！!？?\n]{0,12}(?:お知らせ|知らせ|教え|声をかけ|呼び|呼ぶ|通知)(?:する|るね|ますね|ます|てあげる|ね)|"
+    r"アラーム(?:を)?(?:設定|セット)(?:しました|したよ|しておく|しておきます|する|します)")
+ALARM_REPLY = ("ごめんね、決まった時刻に起こしたり知らせたりする機能は、まだ私にはないの。"
+               "{when}確実に気づけるように、スマホや時計のアラームを使ってね。")
+
+
+def alarm_request(text):
+    return bool(_ALARM_ASK_RE.search(text or ""))
+
+
+def _alarm_flow(text):
+    m = _ALARM_ASK_RE.search(text or "")
+    if not m:
+        return None
+    when = re.match(_TIME_RE, m.group(0))
+    return ALARM_REPLY.format(when=f"{when.group(0)}に" if when and "後" not in when.group(0) else "")
+
+
+def strip_alarm_promises(reply):
+    """Remove sentences promising to wake or notify the user at a time. Returns (reply, removed)."""
+    sentences = re.split(r"(?<=[。！!？?\n])", reply)
+    kept = [s for s in sentences if not _ALARM_PROMISE_RE.search(s)]
+    if len(kept) == len(sentences):
+        return reply, False
+    return "".join(kept).strip(), True
 
 
 def strip_model_offers(reply):
@@ -2370,6 +2443,10 @@ def _chat(text, cfg, message_id=None):
             reply, ui = offer
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "ui": ui, "intent": "offer"}
+        alarm = _alarm_flow(text)
+        if alarm:  # 「7時半に起こして」: no alarm exists, answered by code (#205)
+            db.add_message("assistant", alarm)
+            return {"reply": alarm, "events": [], "handoffs": [], "intent": "alarm"}
         forget = _forget_flow(text)
         if forget:
             db.add_message("assistant", forget)
@@ -2412,6 +2489,10 @@ def _chat(text, cfg, message_id=None):
         if repeat:
             db.add_message("assistant", repeat)
             return {"reply": repeat, "events": [], "handoffs": [], "intent": "repeat"}
+        outside = _outside_fact_flow(text)
+        if outside:  # 「セールやってるの？」: not something Es can check (#208)
+            db.add_message("assistant", outside)
+            return {"reply": outside, "events": [], "handoffs": [], "intent": "outside"}
         activity = _activity_flow(text)
         if activity:
             db.add_message("assistant", activity)

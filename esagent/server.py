@@ -206,6 +206,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"projects": db.list_projects()})
         if path == "/oauth/callback":
             return self._oauth_callback()
+        if path == "/favicon.ico":  # the browser asks on every page load; there is no icon (#209)
+            return self._send(204, body=b"")
         self._send(404, {"error": "not found"})
 
     def _oauth_callback(self):
