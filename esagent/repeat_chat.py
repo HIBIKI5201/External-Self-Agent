@@ -7,6 +7,12 @@ import recurring
 _SAME = re.compile(r'と(?:同じ|同様の)(?:周期|ペース|タイミング|繰り返し|リセット)')
 _TOPIC = re.compile(r'繰り?返し|リピート|定期|リセット|毎週|毎日|毎月|隔週|同じ周期')
 _REQUEST = re.compile(r'(?:リセットして|設定して|設定にして|にする|にして|追加して|登録して|解除して|やめて|停止して)(?:おいて|ほしい|ください|くれる)?[。！!？?\s]*$')
+# 「シンジケートミッションのリセット時間を1時に変更して」 (#188): changing an existing repeat's time.
+_CHANGE = re.compile(r'(?:変更(?:して|する|お願い)|変えて|変える|ずらして)(?:おいて|ほしい|ください|くれる)?[。！!？?\s]*$')
+# A bare time without 毎日/毎週: 「1時」「1時半」「午後1時30分」「13:30」.
+_TIME = re.compile(r'(?P<ampm>午前|午後)?\s*(?P<h>\d{1,2})\s*(?:時\s*(?:(?P<m>\d{1,2})\s*分|(?P<half>半))?|:(?P<m2>\d{2}))')
+# The name before 「のリセット時間」「の時刻」「を1時に」 when it is only part of the title: 「シンジケート」.
+_PART = re.compile(r'^\s*(?P<name>[^、。\s]{2,}?)\s*(?:の(?:リセット|繰り?返し|時刻|時間|周期)|を(?:午前|午後)?\s*\d)')
 _ADD = re.compile(r'タスク(?:に|を|として)?(?:追加|登録|して)|(?:追加|登録)して')
 _STOP = re.compile(r'繰り?返し(?:を|は)?(?:解除|やめ|止め|なし)|(?:解除|やめて|停止して)')
 # Quotes around a task name: 「」『』 and double quotes, half-width or not (#87).
@@ -37,6 +43,74 @@ def _find(ref):
     hits = [t for t in tasks if t['title'] in ref]
     # A short task name inside a longer exact name is not a second target.
     return [t for t in hits if not any(t['title'] != other['title'] and t['title'] in other['title'] for other in hits)]
+
+
+def _time(text):
+    """A bare time as (hour, minute); (None, None) when absent; False when out of range."""
+    m = _TIME.search(text)
+    if not m:
+        return None, None
+    hour, minute = int(m['h']), 30 if m['half'] else int(m['m'] or m['m2'] or 0)
+    if m['ampm'] == '午後' and hour < 12:
+        hour += 12
+    return (hour, minute) if hour < 24 and minute < 60 else (False, False)
+
+
+def _with_time(rule, hour, minute):
+    """Keep the rule's period (daily / weekday) and replace its time."""
+    return ' '.join(rule.split()[:-1] + [f'{hour:02d}:{minute:02d}'])
+
+
+def _find_change_target(text):
+    """The task of a time change: by number or full name, else a unique recurring task containing the
+    name fragment (「シンジケート」 for 「シンジケートミッション」)."""
+    tasks = _find(text)
+    if tasks:
+        return tasks
+    m = _PART.search(re.sub(_QUOTED, lambda q: q[0][1:-1], text))
+    if not m:
+        return []
+    name = _clean_ref(m['name'])
+    return [t for t in db.list_tasks(include_done=True) if name and name in t['title']
+            and recurring.valid_rule(t.get('repeat'))]
+
+
+def _change_time(text, history):
+    """「〇〇のリセット時間を1時に変更して」: the time (or period) of an existing repeat. Returns None when
+    the message is not such a request."""
+    unchanged = 'タスクは変更していないよ。'
+    changing = _CHANGE.search(text)
+    if _SAME.search(text) or _ADD.search(text) or _STOP.search(text) or re.search(r'締切|期限|期日|予定', text):
+        return None  # a due date is not the reset time (#53)
+    if not (changing or (_TOPIC.search(text) and _REQUEST.search(text))):
+        return None
+    hour, minute = _time(text)
+    if recurring._RULE_RE.search(text):
+        return None  # 「毎日1時に変更して」: the usual handling with a full rule
+    tasks = _find_change_target(text)
+    recurring_tasks = [t for t in tasks if recurring.valid_rule(t.get('repeat'))]
+    if not _TOPIC.search(text) and not (changing and hour is not None and len(recurring_tasks) == 1 and len(tasks) == 1):
+        return None  # 「〇〇を3時に変更して」 for a task without a repeat is not about repeating
+    if hour is None and not changing:
+        return None  # 「それを繰り返し設定にして」 keeps its own handling
+    if hour is False:
+        return '時刻を読み取れなかったよ。0〜23時・0〜59分で指定してね。' + unchanged, []
+    when = (f'{hour}時' + (f'{minute}分' if minute else '')) if hour is not None else None
+    if len(tasks) != 1:
+        return (f'どの繰り返しタスクのリセットを{when or "何時"}にするか分からなかったよ。番号か正確なタスク名を教えてね。'
+                + unchanged), []
+    task = tasks[0]
+    if not recurring.valid_rule(task.get('repeat')):
+        when = when or '9時'
+        return (f'「{task["title"]}」にはまだ繰り返しがないよ。「毎日{when}」や「毎週月曜{when}」のように周期も教えてね。'
+                + unchanged), []
+    if hour is None:
+        return (f'「{task["title"]}」（今は{recurring.describe(task["repeat"])}）を何時にリセットするか教えてね。'
+                + unchanged), []
+    task = recurring.set_rule(task['id'], _with_time(task['repeat'], hour, minute))
+    description = recurring.describe(task['repeat'])
+    reply = f'「{task["title"]}」を{description}にリセットする設定にしたよ（次の締切 {task["due"]}）。\n{recurring.GOOGLE_NOTE}'
+    return reply, [f'✎ #{task["id"]} {task["title"]}（🔁{description} / {task["due"]}）']
 
 
 def _recent_target(history):
@@ -78,7 +152,10 @@ def _new_title(fragment):
 
 
 def handle(text, history):
-    if not (_TOPIC.search(text) and _REQUEST.search(text)):
+    changed = _change_time(text, history)
+    if changed:
+        return changed
+    if not (_TOPIC.search(text) and (_REQUEST.search(text) or _CHANGE.search(text))):
         return None
     unchanged = 'タスクは変更していないよ。'
     adding, stopping = bool(_ADD.search(text)), bool(_STOP.search(text))
