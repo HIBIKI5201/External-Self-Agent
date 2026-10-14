@@ -142,7 +142,9 @@ def run_action(action, args, cfg):
             reply = "使い方: /done 番号 または /done タスク名"
         elif not task:
             reply = _not_found(args, cands)
-        elif task["read_only"] and task["status"] != "done":
+        elif task["status"] == "done":  # nothing to change: do not claim it was done now (#200)
+            reply = f"#{task['id']} {task['title']} はもう完了になってるよ。"
+        elif task["read_only"]:
             reply = db.read_only_reply(task)
         else:
             db.update_task(task["id"], status="done")

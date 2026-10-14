@@ -20,7 +20,7 @@
       "pathPattern": "(^|/)(tests/test_chat_choices\\.py|spec/test/chat-choices-45\\.md)$"
     },
     {
-      "pathPattern": "(^|/)tests/test_skill_permissions\\.py$"
+      "pathPattern": "(^|/)(tests/test_skill_permissions\\.py|tests/test_done_again\\.py)$"
     }
   ],
   "source": "manual",
