@@ -59,6 +59,22 @@ _START_RE = re.compile(
 _USER_FIRST = ("俺", "おれ", "私", "わたし", "僕", "ぼく", "自分")
 
 
+_END_RE = re.compile(r"(?:しりとり(?:を|は)?)?(?:もう)?(?:終了|終わり|終わろう|終わりにしよう|やめて|やめよう|やめよ|やめる|"
+                     r"やめた|やめ|おしまい|もういい|飽きた)(?:よ|ね|か|かな|ー|〜|～)*[。！!？?\s]*")
+# Saying what one is about to do next ends the game instead of being taken as a wrong word (#156).
+_LEAVE_RE = re.compile(r"^(?:今から|いまから|これから)|"
+                       r"(?:してくる|してきます|しに行く|やってくる|行ってくる|いってくる|寝る|寝ます|落ちる|"
+                       r"するね|するよ|やるね|やるよ|します|始めるね|始めるよ)[。！!\s]*$")
+
+
+def end_on_cancel():
+    """「やめて」 during a game is sent as a cancel of the last request; it also ends the game (#156)."""
+    if not state():
+        return False
+    save({})
+    return True
+
+
 def start(text):
     """The game's first state for a start request, or None."""
     m = _START_RE.match(text)
@@ -83,7 +99,7 @@ def handle(text):
         return f"しりとり始めよう！あなたからだね。{head}どうぞ。"
     if not value:
         return None
-    if re.fullmatch(r"(?:しりとりを|しりとりは)?(?:終了|終わり|やめて|やめよう|おしまい)[。！!\s]*", text):
+    if _END_RE.fullmatch(text):
         save({})
         return "しりとりは終了だよ。"
     if re.search(r"(?:クイズ|雑談|作業モード|雑談モード|別の話)(?:に|へ)(?:切り替|変え|戻)", text):
@@ -97,6 +113,10 @@ def handle(text):
     literal = text.strip("「」『』。！! ")
     match = re.fullmatch(r"(.{1,30})[（(](?:読み[は:：]?)?([ぁ-ゖァ-ヺー]+)[）)]", literal)
     word, sound = (match[1], reading(match[2])) if match else (literal, reading(literal))
+    if not sound and _LEAVE_RE.search(text):
+        # 「今からWarframeするよ」: the user moved on; the usual conversation answers it (#156).
+        save({})
+        return None
     if not sound:
         return "しりとり中だよ。一語だけ答えてね。漢字の言葉は「漢字（よみ）」の形で読みも教えて。終了するなら「しりとりをやめて」と言ってね。"
     if value["next"] and sound[0] != value["next"]:

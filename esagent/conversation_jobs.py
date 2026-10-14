@@ -176,9 +176,15 @@ def accept(body, cfg, operation):
                 db.add_message("assistant", note)
                 return {"jobId": target, "revision": expected, "state": "cancelled", "result": {"reply": note, "events": [], "handoffs": []}}
             if mode == "cancel":
-                note = "依頼の残りの処理と読み上げを取り消したよ。"
-                if previous["committed"]:
-                    note += "既に反映した操作は元に戻していないので、履歴とタスクを確認してね。"
+                import conversation_game
+                in_flight = previous["state"] in ("queued", "running")
+                ended = conversation_game.end_on_cancel()
+                if ended and not in_flight:
+                    note = "しりとりは終了だよ。"  # nothing left to cancel: the game is what to stop (#156)
+                else:
+                    note = "依頼の残りの処理と読み上げを取り消したよ。" + ("しりとりも終了したよ。" if ended else "")
+                    if previous["committed"]:
+                        note += "既に反映した操作は元に戻していないので、履歴とタスクを確認してね。"
                 result = {"reply": note, "events": [], "handoffs": [], "cancelled": True}
                 with db.connect() as con:
                     con.execute("UPDATE conversation_jobs SET state='cancelled', result=? WHERE id=?",
