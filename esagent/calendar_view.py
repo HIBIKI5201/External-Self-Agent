@@ -24,19 +24,6 @@ LONG_DAYS = 366         # all-day and multi-day events this far ahead
 SYNC_MINUTES = 15
 WRITABLE = ("owner", "writer")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS calendar_events(
-    cal_id TEXT NOT NULL,
-    event_id TEXT NOT NULL,
-    cal_name TEXT NOT NULL DEFAULT '',
-    title TEXT NOT NULL DEFAULT '',
-    start TEXT NOT NULL,
-    end TEXT NOT NULL,
-    all_day INTEGER NOT NULL DEFAULT 0,
-    location TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY(cal_id, event_id)
-);
-"""
 _lock = threading.Lock()
 
 
@@ -50,10 +37,6 @@ def _req(method, path, params=None, body=None):
 
 def _quote(value):
     return urllib.parse.quote(value, safe="")
-
-
-def _init(con):
-    con.executescript(SCHEMA)
 
 
 def ready():
@@ -102,7 +85,6 @@ def select(ids):
     ids = [i for i in ids if isinstance(i, str) and i in known]
     db.set_setting("calendar_selected", json.dumps(ids))
     with db.connect() as con:
-        _init(con)
         if ids:
             con.execute(f"DELETE FROM calendar_events WHERE cal_id NOT IN ({','.join('?' * len(ids))})", ids)
         else:
@@ -152,7 +134,6 @@ def sync():
                 if not token:
                     break
         with db.connect() as con:
-            _init(con)
             con.execute("DELETE FROM calendar_events")
             con.executemany("INSERT OR REPLACE INTO calendar_events VALUES(?, ?, ?, ?, ?, ?, ?, ?)", rows)
         db.set_setting("calendar_sync", json.dumps({"at": db.now(), "error": "", "count": len(rows)}))
@@ -162,7 +143,6 @@ def sync():
 def events(first, last):
     """Kept events that touch the days first..last (dates), in order."""
     with db.connect() as con:
-        _init(con)
         rows = con.execute("SELECT * FROM calendar_events WHERE substr(start, 1, 10) <= ? AND end >= ? "
                            "ORDER BY start, title", (last.isoformat(), first.isoformat())).fetchall()
     out = []
@@ -203,7 +183,6 @@ def add(cal_id, title, date, start_time="", end_time="", cfg=None):
                dt.date.today())
     if row and cal["selected"]:
         with db.connect() as con:
-            _init(con)
             con.execute("INSERT OR REPLACE INTO calendar_events VALUES(?, ?, ?, ?, ?, ?, ?, ?)", row)
     return {"id": ev.get("id"), "calendar": cal["name"], "title": title}
 

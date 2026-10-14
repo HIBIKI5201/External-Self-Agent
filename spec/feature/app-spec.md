@@ -28,6 +28,7 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 - **実装:** サーバー起動時にデスクトップの黒猫（AS-12）も起動する。黒猫はタスクスケジューラのジョブから外して起動する（`CREATE_BREAKAWAY_FROM_JOB`）。
 - **意図:** 黒猫がタスクのジョブに残ると、サーバーが落ちてもタスクが「実行中」のままになり、再起動できなくなるため。
 - **実装:** データは `data/`（SQLite `esagent.db`、ログ `esagent.log`、引き継ぎ文 `handoffs/`、黒猫の位置 `pet.json`）、秘密情報は `secrets/`、設定は `config.json`（いずれも Git の管理外。共有用の雛形は `config.example.json`）。
+- **実装（#239）:** DB のテーブル定義と移行は `esagent/db.py` だけに置き、`PRAGMA user_version` の版で順に適用する（`VERSIONS`。1 = 版を持つ前のスキーマ一式と足りない列、2 = `chat_requests.created_at`）。`db.init()` が起動時に 1 度だけ、`BEGIN IMMEDIATE` の中で適用するので、チャットサーバーと MCP サーバーが同時に起動しても二重に適用しない。WAL の設定も `init()` の 1 回だけ。続けて、7 日（`KEEP_DAYS`）を過ぎた完了済みの `chat_requests`（結果が残っている行）と `conversation_jobs`（done / failed / cancelled）を消し、削除した記憶の元発言のハッシュは、まだ残っている発言の分だけにする。
 - **実装:** バックグラウンド処理 — Google 同期（3分ごと＋変更時）、繰り返しタスクのリセット判定（60秒ごと）、集中タイマー（1秒ごと）、返事待ちメッセージの処理（5秒ごと）。
 
 ## AS-02 モデルと判断の流れ
