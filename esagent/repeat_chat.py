@@ -147,8 +147,9 @@ def handle(text, history):
 # Es does not pick the day or time; it asks, with the project's own period as a candidate.
 _PERIOD_WORD = re.compile(r'ウィークリー|デイリー|週課|日課|毎週|毎日')
 _KINDS = (('weekly', re.compile(r'ウィークリー|週課|毎週')), ('daily', re.compile(r'デイリー|日課|毎日')))
-_ADD_VERB = re.compile(r'(?:追加|登録)(?:して|しといて|しておいて|お願い|頼む|する)|入れて|入れといて')
-_UNQUOTED = re.compile(r'(?:ウィークリー|デイリー|週課|日課)(?:の?タスク)?(?:に|へ|として)\s*(?P<name>[^、。「」『』]+?)\s*を?'
+# 「して」がなくても依頼: 「Warframeウィークリーに X を追加」 (#177).
+_ADD_VERB = re.compile(r'(?:追加|登録)(?:して|しといて|しておいて|お願い|頼む|する|[。！!\s]*$)|入れて|入れといて')
+_UNQUOTED = re.compile(r'(?:ウィークリー|デイリー|週課|日課)(?:の?タスク)?(?:に|へ|で|として)\s*(?P<name>[^、。「」『』]+?)\s*を?'
                        r'(?:追加|登録|入れ)')
 _PLAIN = re.compile(r'繰り?返し(?:は)?(?:なし|無し|いらない)|普通に追加|そのまま追加|周期なし')
 
@@ -156,6 +157,45 @@ _PLAIN = re.compile(r'繰り?返し(?:は)?(?:なし|無し|いらない)|普通
 def _project(text):
     names = [p['name'] for p in db.list_projects() if p['name'] and p['name'] in text]
     return max(names, key=len) if names else None
+
+
+# 「デイリーは朝九時にリセット」 kept with /remember: a candidate period for a new daily task (#177).
+_KANJI_NUM = {c: i for i, c in enumerate('〇一二三四五六七八九', 0)}
+_MEMORY_TIME = re.compile(r'(?P<ampm>朝|午前|午後|夜|夕方)?\s*(?P<h>\d{1,2}|十[一二三]?|[一二三四五六七八九]|二十[一二三]?)\s*時'
+                          r'\s*(?:(?P<half>半)|(?P<m>\d{1,2})\s*分)?')
+_WEEKDAY_RE = re.compile(r'([月火水木金土日])曜')
+
+
+def _hour(word):
+    if word.isdigit():
+        return int(word)
+    tens = 10 * (2 if word.startswith('二十') else 1) if '十' in word else 0
+    rest = word.split('十')[-1]
+    return tens + (_KANJI_NUM[rest] if rest else 0)
+
+
+def _remembered_rule(kind, project):
+    """(rule, memory text) from the one stored memory that gives this kind's reset time, else None."""
+    words = _KINDS[0][1] if kind == 'weekly' else _KINDS[1][1]
+    found = set()
+    for memory in db.list_memories():
+        text = memory['content']
+        other = _project(text)
+        if not words.search(text) or not re.search(r'リセット|更新|切り替', text) or (project and other and other != project):
+            continue
+        rule = recurring.parse(text)
+        m = _MEMORY_TIME.search(text)
+        if not rule and m:
+            hour = _hour(m['h']) + (12 if m['ampm'] in ('午後', '夜', '夕方') and _hour(m['h']) < 12 else 0)
+            minute = 30 if m['half'] else int(m['m'] or 0)
+            day = _WEEKDAY_RE.search(text)
+            if kind == 'daily':
+                rule = f'daily {hour:02d}:{minute:02d}'
+            elif day:
+                rule = f'weekly {recurring.WEEKDAYS.index(day[1])} {hour:02d}:{minute:02d}'
+        if recurring.valid_rule(rule) and rule.startswith(kind):
+            found.add((rule, text))
+    return min(found) if len({rule for rule, _ in found}) == 1 else None
 
 
 def periodic_add(text, history):
@@ -195,10 +235,14 @@ def periodic_add(text, history):
     rules = {t['repeat'] for t in db.list_tasks(include_done=True, project=project)
              if project and recurring.valid_rule(t.get('repeat')) and t['repeat'].startswith(kind)}
     candidate = rules.pop() if len(rules) == 1 else None
+    remembered = None if candidate else _remembered_rule(kind, project)
     example = '毎週月曜4時' if kind == 'weekly' else '毎日5時'
     reply = f'「{name}」をいつリセットする？「{example}」のように教えてね。'
     if candidate:
         reply += f'{project}のほかの繰り返しと同じ{recurring.describe(candidate)}でよければ「うん」でいいよ。'
+    elif remembered:
+        candidate, memo = remembered
+        reply += f'覚えている「{memo}」のとおり{recurring.describe(candidate)}でよければ「うん」でいいよ。'
     reply += '繰り返しなしで普通に追加することもできるよ。まだ何も追加していないよ。'
     offer = {'title': name, 'project': project, 'rule': candidate}
     return reply, [], offer
@@ -210,11 +254,14 @@ _BULK_UNSET = re.compile(r'(?:未設定|設定され(?:て)?(?:い)?ない|さ�
 _BULK_ASK = re.compile(r'(?:設定|そろえ|揃え|合わせ)(?:て|して|る)|にして')
 
 
-def bulk_repeat(text):
-    """Returns (reply, offer payload or None), or None when the message is not such a request."""
+def bulk_repeat(text, history=()):
+    """Returns (reply, offer payload or None), or None when the message is not such a request.
+
+    「さっき入れたのが繰り返しになってないように見える」 is answered here too (#177): the tasks'
+    actual settings, and this offer when they have none."""
     if not (re.search(r'繰り?返し|毎週|毎日|周期|ウィークリー|デイリー|リセット', text) and _BULK_UNSET.search(text)
             and _BULK_ASK.search(text)):
-        return None
+        return _repeat_check(text, history)
     project = _project(text)
     if not project:
         return 'どのプロジェクトのタスクにそろえるか教えてね（例: 「Warframe のタスクで…」）。タスクは変更していないよ。', None
@@ -232,10 +279,62 @@ def bulk_repeat(text):
             return (f'{project}には{why}ので、周期を決められなかったよ。「毎週月曜9時」のように周期も教えてね。'
                     'タスクは変更していないよ。'), None
         rule = rules.pop()
+    return _bulk_offer(project, rule, targets)
+
+
+def _bulk_offer(project, rule, targets):
     names = '\n'.join(f'・#{t["id"]} {t["title"]}' for t in targets[:10]) + (f'\n…ほか {len(targets) - 10} 件' if len(targets) > 10 else '')
     reply = (f'{project}の繰り返しが未設定のタスク {len(targets)} 件を、{recurring.describe(rule)}にリセットする設定にする？\n'
              f'{names}\n承認するまで何も変えないよ。')
     return reply, {'project': project, 'rule': rule, 'ids': [t['id'] for t in targets]}
+
+
+# 「さっき入れたのが繰り返しになってないように見える」「週課Aって毎週リセットされる？」 (#177).
+_CHECK_TOPIC = re.compile(r'繰り?返し|リセット|ウィークリー|デイリー|毎週|毎日|周期')
+_CHECK_ASK = re.compile(r'(?:になって|が?(?:つい|付い)て|設定されて|され(?:て)?)(?:ない|る|ます)'
+                        r'(?:よう|みたい|気が|けど|かな|か|の|[？?]|[。！!\s]*$)|(?:され|なって)(?:ない|る)[？?]')
+_LATEST = re.compile(r'さっき|今|いま|直前|入れた|追加した|登録した')
+
+
+def _latest_added(history):
+    """The tasks of the latest add record (＋ #id) among the recent messages."""
+    for m in reversed(list(history)[-8:]):
+        if m['role'] == 'notice':
+            ids = re.findall(r'^＋\s+#(\d+)\b', m['content'], re.M)
+            if ids:
+                return [t for t in (db.get_task(int(i)) for i in ids) if t]
+    return []
+
+
+def _repeat_check(text, history):
+    if not (_CHECK_TOPIC.search(text) and _CHECK_ASK.search(text)) or _REQUEST.search(text) or _BULK_ASK.search(text):
+        return None
+    tasks = _find(text)
+    if not tasks and _LATEST.search(text):
+        tasks = _latest_added(history)
+    if not tasks:
+        return None  # not about a task Es can name: the conversation answers
+    lines = [f'・#{t["id"]} {t["title"]}: ' + (f'{recurring.describe(t["repeat"])}にリセット（次の締切 {t["due"]}）'
+                                              if recurring.valid_rule(t.get('repeat')) else '繰り返しなし')
+             for t in tasks[:10]]
+    reply = '今の設定はこうなっているよ。\n' + '\n'.join(lines)
+    unset = [t for t in tasks if not recurring.valid_rule(t.get('repeat'))]
+    if not unset:
+        return reply, None
+    projects = {t['project'] for t in unset}
+    project = projects.pop() if len(projects) == 1 else None
+    rules = {t['repeat'] for t in db.list_tasks(include_done=True, project=project)
+             if project and recurring.valid_rule(t.get('repeat'))}
+    rule = rules.pop() if len(rules) == 1 else None
+    if not rule and project:
+        kinds = {kind for kind, pattern in _KINDS if pattern.search(text) or any(pattern.search(t['title']) for t in unset)}
+        remembered = _remembered_rule(kinds.pop(), project) if len(kinds) == 1 else None
+        rule = remembered[0] if remembered else None
+    if not project or not rule:
+        return reply + '\n周期を「〇〇を毎週月曜9時にリセットして」のように教えてくれれば設定するよ。タスクは変更していないよ。', None
+    targets = [t for t in db.list_tasks(project=project) if not recurring.valid_rule(t.get('repeat'))]
+    offer_reply, offer = _bulk_offer(project, rule, targets)
+    return reply + '\n' + offer_reply, offer
 
 
 def finish_bulk(payload):
