@@ -28,6 +28,8 @@ jobs:
         run: node tests/test_listen.js
       - name: Calendar pane tests
         run: node tests/test_calendar_pane.js
+      - name: Calendar day tests
+        run: node tests/test_calendar_days.js
       - name: JSON files
         shell: bash
         run: for f in config.example.json spec/domains/*.json .claude/settings.json; do python -m json.tool "$f" > /dev/null || exit 1; done
