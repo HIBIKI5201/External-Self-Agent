@@ -287,9 +287,10 @@ def sync_projects(cfg):
 
 
 def ensure_project(name, kind="general"):
-    """Create a project unless one of the same name exists. Returns True if it was created."""
+    """Create a project unless an existing one matches the name the way find_project does (so
+    「Sinfonia」 finds 「Sinfonia Studio」, #197). Returns True if it was created."""
     with connect() as con:
-        if find_project(con, name, exact=True):
+        if find_project(con, name):
             return False
         con.execute("INSERT INTO projects(name, kind) VALUES(?, ?)", (name.strip(), kind))
         return True
@@ -325,7 +326,7 @@ def _project_key(name):
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", name or "")).lower()
 
 
-def find_project(con, name, exact=False):
+def find_project(con, name):
     """The project a name means (#197): the same name (case, spaces and width ignored) first.
 
     Otherwise a shortened name ("Sinfonia" for "Sinfonia Studio") is accepted only when it is two
@@ -340,7 +341,7 @@ def find_project(con, name, exact=False):
             if _project_key(r["name"]) == k:
                 return r
     key = _PROJECT_SUFFIX.sub("", key) or key
-    if exact or len(key) < 2:
+    if len(key) < 2:
         return None
     hits = [r for r in rows if key in _project_key(r["name"]) and len(key) * 2 > len(_project_key(r["name"]))]
     return hits[0] if len(hits) == 1 else None

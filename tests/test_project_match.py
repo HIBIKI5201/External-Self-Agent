@@ -25,6 +25,17 @@ def test_a_name_containing_an_existing_project_is_a_new_project():
         assert t['project'] == 'Warframeウィークリー'
 
 
+def test_ensure_project_reuses_the_project_a_short_name_means():
+    """Review on #221: brain calls ensure_project before add_task, so it must match like find_project."""
+    with Sandbox(copy_real=False):
+        _setup()
+        before = [p['name'] for p in db.list_projects()]
+        assert db.ensure_project('Sinfonia') is False
+        assert db.ensure_project('sinfonia studio') is False
+        assert [p['name'] for p in db.list_projects()] == before
+        assert db.add_task('譜面の確認', project='Sinfonia')['project'] == 'Sinfonia Studio'
+
+
 def test_exact_match_ignores_case_spaces_width_and_category_words():
     with Sandbox(copy_real=False):
         _setup()
