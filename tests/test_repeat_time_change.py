@@ -67,3 +67,18 @@ def test_due_time_or_plain_task_change_is_not_a_repeat_change():
         assert repeat_chat.handle('シンジケートミッションの締切を3時に変更して', []) is None
         assert repeat_chat.handle('原稿を3時に変更して', []) is None
         assert repeat_chat.handle('繰り返し設定のバグを直して', []) is None
+
+
+def test_time_in_the_task_name_is_not_the_new_time():
+    with Sandbox(copy_real=False) as sb, _no_model():
+        task = recurring.set_rule(db.add_task('9時の朝会')['id'], 'daily 09:00')
+        r = sb.chat('9時の朝会のリセットを10時に変えて')
+        assert db.get_task(task['id'])['repeat'] == 'daily 10:00', r['reply']
+
+
+def test_due_change_of_a_task_named_with_a_repeat_word_is_left_to_the_router():
+    import repeat_chat
+    with Sandbox(copy_real=False):
+        db.add_task('定期券の購入')
+        for text in ['定期券の購入を明日に変更して', '定期券の購入を金曜に変えて', '定期券の購入を3時に変更して']:
+            assert repeat_chat.handle(text, []) is None, text

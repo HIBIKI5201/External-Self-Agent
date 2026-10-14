@@ -62,17 +62,18 @@ def _with_time(rule, hour, minute):
 
 
 def _find_change_target(text):
-    """The task of a time change: by number or full name, else a unique recurring task containing the
-    name fragment (「シンジケート」 for 「シンジケートミッション」)."""
+    """The task of a time change and the names to leave out of the text: by number or full name, else
+    a unique recurring task containing the name fragment (「シンジケート」 for 「シンジケートミッション」)."""
     tasks = _find(text)
     if tasks:
-        return tasks
+        return tasks, [t['title'] for t in tasks]
     m = _PART.search(re.sub(_QUOTED, lambda q: q[0][1:-1], text))
     if not m:
-        return []
+        return [], []
     name = _clean_ref(m['name'])
-    return [t for t in db.list_tasks(include_done=True) if name and name in t['title']
-            and recurring.valid_rule(t.get('repeat'))]
+    tasks = [t for t in db.list_tasks(include_done=True) if name and name in t['title']
+             and recurring.valid_rule(t.get('repeat'))]
+    return tasks, [name] if tasks else []
 
 
 def _change_time(text, history):
@@ -84,13 +85,21 @@ def _change_time(text, history):
         return None  # a due date is not the reset time (#53)
     if not (changing or (_TOPIC.search(text) and _REQUEST.search(text))):
         return None
-    hour, minute = _time(text)
-    if recurring._RULE_RE.search(text):
+    if recurring.parse(text):
         return None  # 「毎日1時に変更して」: the usual handling with a full rule
-    tasks = _find_change_target(text)
+    tasks, names = _find_change_target(text)
+    # The time and the topic are read without the task's own name: 「9時の朝会」 is not 9:00 and
+    # 「定期券の購入」 is not about repeating (review of #188).
+    rest = text
+    for name in sorted(names, key=len, reverse=True):
+        rest = rest.replace(name, ' ')
+    hour, minute = _time(rest)
+    topic = _TOPIC.search(rest)
     recurring_tasks = [t for t in tasks if recurring.valid_rule(t.get('repeat'))]
-    if not _TOPIC.search(text) and not (changing and hour is not None and len(recurring_tasks) == 1 and len(tasks) == 1):
+    if not topic and not (changing and hour is not None and len(recurring_tasks) == 1 and len(tasks) == 1):
         return None  # 「〇〇を3時に変更して」 for a task without a repeat is not about repeating
+    if len(tasks) == 1 and not recurring_tasks and hour is None:
+        return None  # 「定期の点検を明日に変更して」: a due date change for a task without a repeat
     if hour is None and not changing:
         return None  # 「それを繰り返し設定にして」 keeps its own handling
     if hour is False:
@@ -101,7 +110,6 @@ def _change_time(text, history):
                 + unchanged), []
     task = tasks[0]
     if not recurring.valid_rule(task.get('repeat')):
-        when = when or '9時'
         return (f'「{task["title"]}」にはまだ繰り返しがないよ。「毎日{when}」や「毎週月曜{when}」のように周期も教えてね。'
                 + unchanged), []
     if hour is None:
@@ -155,7 +163,7 @@ def handle(text, history):
     changed = _change_time(text, history)
     if changed:
         return changed
-    if not (_TOPIC.search(text) and (_REQUEST.search(text) or _CHANGE.search(text))):
+    if not (_TOPIC.search(text) and (_REQUEST.search(text) or (_CHANGE.search(text) and recurring.parse(text)))):
         return None
     unchanged = 'タスクは変更していないよ。'
     adding, stopping = bool(_ADD.search(text)), bool(_STOP.search(text))
