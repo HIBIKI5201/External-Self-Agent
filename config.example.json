@@ -10,6 +10,7 @@
     "reply": {"model": null, "timeout_seconds": 30},
     "tools": {"model": null, "timeout_seconds": 30}
   },
+  "natural_action_replies": true,
   "llm_log": true,
   "server_log_max_bytes": 1000000,
   "server_log_backups": 7,
