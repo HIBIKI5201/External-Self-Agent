@@ -4,6 +4,8 @@ import json
 import socket
 import threading
 import time
+import urllib.error
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import brain
@@ -137,3 +139,16 @@ def test_loading_the_model_is_not_counted_in_the_async_time_limit():
     finally:
         server.shutdown()
         llm._WARM.update(saved)
+
+
+def test_timeout_while_connecting_is_a_connection_failure():
+    """Windows lets a connect to a closed port time out instead of refusing it (#198 CI)."""
+    def connect_timed_out(*a, **k):
+        raise urllib.error.URLError(TimeoutError("timed out"))
+    with patch.object(llm.urllib.request, "urlopen", connect_timed_out):
+        try:
+            llm.chat(_cfg(1), [{"role": "user", "content": "やあ"}], timeout=2)
+            raise AssertionError("no error")
+        except llm.LLMError as e:
+            assert not isinstance(e, llm.LLMTimeout) and str(e) == llm.CONNECT_ERROR, e
+    llm.LAST_ERROR.clear()

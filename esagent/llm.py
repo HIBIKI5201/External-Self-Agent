@@ -29,9 +29,10 @@ LAST_ERROR = {}
 
 
 def _failed(e, timeout):
-    """LLMTimeout for a timeout, else the connection error. urllib wraps a connect timeout in URLError."""
-    reason = getattr(e, "reason", e)
-    if isinstance(e, TimeoutError) or isinstance(reason, TimeoutError):
+    """LLMTimeout when Ollama took the request but answered nothing in time, else the connection error.
+    urllib wraps errors while connecting and sending in URLError; a timeout there means Ollama could not
+    be reached (on Windows a closed port times out instead of refusing), so it is a connection error."""
+    if isinstance(e, TimeoutError):
         LAST_ERROR.update(kind="timeout", at=time.time(), seconds=timeout)
         return LLMTimeout(timeout)
     LAST_ERROR.update(kind="connect", at=time.time(), seconds=None)
