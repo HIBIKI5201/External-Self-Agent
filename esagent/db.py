@@ -445,11 +445,18 @@ def update_task(task_id, title=None, status=None, due=None, project=None, notes_
 
 # ---- messages ---------------------------------------------------------------
 
+# /clear empties the table, and SQLite would then number messages from 1 again, so ratings that keep a
+# message id would land on a different reply (#232). New ids continue after the highest one ever used.
+NEW_MESSAGE_ID = ("(SELECT MAX(COALESCE((SELECT MAX(id) FROM messages), 0), COALESCE((SELECT CAST(value AS INTEGER) "
+                  "FROM settings WHERE key = 'messages_last_id'), 0)) + 1)")
+
+
 def add_message(role, content, status=None):
     with connect() as con:
         import conversation_jobs as jobs
         request_id, revision = jobs.message_metadata()
-        cur = con.execute("INSERT INTO messages(role, content, created_at, status, request_id, request_revision) VALUES(?, ?, ?, ?, ?, ?)",
+        cur = con.execute(f"INSERT INTO messages(id, role, content, created_at, status, request_id, request_revision) "
+                          f"VALUES({NEW_MESSAGE_ID}, ?, ?, ?, ?, ?, ?)",
                           (role, content, now(), status, request_id, revision))
         return cur.lastrowid
 
@@ -509,6 +516,8 @@ def clear_messages():
     import conversation_jobs as jobs
     jobs.clear_pending()
     with connect() as con:
+        con.execute(f"INSERT INTO settings(key, value) VALUES('messages_last_id', {NEW_MESSAGE_ID} - 1) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         con.execute("DELETE FROM messages")
         con.execute("DELETE FROM settings WHERE key = 'conversation_game'")
 

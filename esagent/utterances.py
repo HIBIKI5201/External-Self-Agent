@@ -36,8 +36,8 @@ def record(text, source="pet", kind="notice", key=None, ref=None):
         if key and con.execute("SELECT 1 FROM messages WHERE event_key = ?", (key,)).fetchone():
             return None
         cur = con.execute(
-            "INSERT INTO messages(role, content, created_at, source, kind, event_key, shown, ref) "
-            "VALUES('es', ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO messages(id, role, content, created_at, source, kind, event_key, shown, ref) "
+            f"VALUES({db.NEW_MESSAGE_ID}, 'es', ?, ?, ?, ?, ?, ?, ?)",
             (text, db.now(), source, kind, key, 0 if kind in HIDDEN else 1,
              json.dumps(ref, ensure_ascii=False) if ref else None))
         return cur.lastrowid
