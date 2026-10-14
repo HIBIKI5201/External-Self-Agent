@@ -64,8 +64,8 @@ def select(history, budget):
         elif role == "es":  # what Es said by herself (#139): a reference note, never a reply (#175)
             if message.get("kind") == "murmur":
                 continue  # meows and one-word reactions add nothing but lines to copy
-            if groups and "es_lines" in groups[-1][0]:
-                groups[-1][0]["es_lines"].append(message)
+            if groups and "es_lines" in groups[-1][-1]:  # only lines with nothing said in between
+                groups[-1][-1]["es_lines"].append(message)
             else:
                 groups.append([{"role": "system", "es_lines": [message]}])
         elif role == "notice" and groups and groups[-1][-1]["role"] == "assistant":

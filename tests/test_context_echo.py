@@ -41,6 +41,17 @@ def test_context_notes_are_system_lines_without_meows_or_repeats():
         assert not any("（Es が自分から言ったこと" in m["content"] for m in picked)
 
 
+def test_a_line_after_a_reply_is_not_merged_into_an_earlier_note():
+    rows = [{"role": "user", "content": "資料やるね"},
+            {"role": "es", "source": "timer", "kind": "notice", "content": "集中タイマー開始"},
+            {"role": "assistant", "content": "がんばってね"},
+            {"role": "es", "source": "timer", "kind": "question", "content": "資料、終わった？"}]
+    picked = conversation_context.select(rows, 2000)
+    assert [m["role"] for m in picked] == ["user", "system", "assistant", "system"], picked
+    assert "集中タイマー開始" in picked[1]["content"] and "終わった？" not in picked[1]["content"], picked
+    assert "資料、終わった？" in picked[-1]["content"], picked
+
+
 def test_restart_greetings_are_recorded_once_per_slot():
     with Sandbox(copy_real=False):
         for _ in range(5):  # the server and the cat restarted five times tonight
