@@ -94,6 +94,23 @@ def test_slow_reply_is_a_time_limit_and_not_a_connection_failure():
         llm.LAST_ERROR.clear()
 
 
+def test_streamed_reply_that_sends_nothing_in_time_is_a_time_limit():
+    """#190's 2026-10-14 11:00 case: the model was running, the streamed reply sent nothing for
+    30 seconds and the log said "Ollama に接続できません"."""
+    server = _server()
+    try:
+        SlowOllama.loaded, SlowOllama.load_seconds, SlowOllama.reply_seconds = True, 0.0, 2.0
+        try:
+            _as_job(lambda: llm.chat(_cfg(server.server_port), [{"role": "user", "content": "ありがとう"}],
+                                     on_text=lambda text: None))
+            raise AssertionError("no timeout")
+        except llm.LLMTimeout as e:
+            assert "接続できません" not in str(e), e
+    finally:
+        server.shutdown()
+        llm.LAST_ERROR.clear()
+
+
 def test_connection_refused_is_still_a_connection_failure():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
