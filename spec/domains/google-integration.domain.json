@@ -20,7 +20,7 @@
       "pathPattern": "(^|/)esagent/gcal\\.py$"
     },
     {
-      "pathPattern": "(^|/)(esagent/calendar_view\\.py|esagent/static/calendar\\.js|tests/test_calendar_view\\.py|spec/test/calendar-view-157\\.md)$"
+      "pathPattern": "(^|/)(esagent/calendar_view\\.py|esagent/static/calendar\\.js|tests/test_calendar_pane\\.js|tests/test_calendar_view\\.py|spec/test/calendar-view-157\\.md)$"
     },
     {
       "pathPattern": "(^|/)esagent/youtube\\.py$"

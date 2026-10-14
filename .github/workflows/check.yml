@@ -26,6 +26,8 @@ jobs:
         run: node tests/test_chat_queue.js
       - name: Voice chat echo tests
         run: node tests/test_listen.js
+      - name: Calendar pane tests
+        run: node tests/test_calendar_pane.js
       - name: JSON files
         shell: bash
         run: for f in config.example.json spec/domains/*.json .claude/settings.json; do python -m json.tool "$f" > /dev/null || exit 1; done
