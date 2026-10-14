@@ -1,16 +1,17 @@
-"""Turns a chat message into a reply plus task-list actions using Phi-4-mini.
+"""Turns a chat message into a reply plus task-list actions.
 
-The model only proposes actions as JSON; this module validates and executes them,
-and reports what actually happened, so a wrong guess never corrupts the data.
+The model only proposes actions as JSON; the code validates and executes them, and reports what
+actually happened, so a wrong guess never corrupts the data. This module runs one conversation turn:
+the router, the fixed replies that need no model, and the reply. The parts it uses live in their own
+modules (#237): dates (relative dates), task_targets (which task is meant), task_apply (checking and
+applying operations), reply_filters (cleaning the model's reply), status_question (questions about the
+wait) and conversation_state (the lock and the progress of the running turn).
 """
 import datetime as dt
 import json
 import re
-import threading
-import time
 
 import db
-import handoff
 import llm
 import projects
 import recurring
@@ -20,12 +21,28 @@ import task_context
 import write_guard
 import conversation_context
 import conversation_game
+import conversation_state
 import playback
 import conversation_jobs as jobs
 import utterances
 import calendar_view
+# Moved out of this module (#237). Imported here under the same names, so `brain.<name>` keeps
+# working for the callers and tests that use it.
+from dates import WEEKDAYS, _calendar, annotate_dates  # noqa: F401
+from reply_filters import (ALARM_REPLY, NO_CHANGE_NOTE, NO_PROMISE_NOTE, _CLAIM_RE, _FUTURE_WISH_RE,
+                           _GENERIC_CLOSER_RE, _PROMISE_RE, _RECORD_RE, _SELF_LIMIT_RE, _alarm_flow,
+                           alarm_request, behavior_wish, clean_model_reply, drop_false_claims,
+                           strip_alarm_promises, strip_model_offers, strip_promises, tidy_chat_reply,
+                           visible_partial)  # noqa: F401
+from status_question import (_STATUS_RE, _TASK_REF_RE, _WAIT_WORDS, _mentions_task, _status_answer,
+                             is_status_question, status_lines)  # noqa: F401
+from task_apply import (_ACTION_HINT_RE, _COMPANY_RE, _DUE_HINT_RE, _EXPLICIT_ADD_RE, _PRONOUN_RE,
+                        _REFERENCE_RE, _action_errors, _apply, _intended_update, delegate)  # noqa: F401
+from task_targets import (_WORD_RE, _ambiguous_targets, _by_project, _duplicate_of, _missing_target,
+                          _named_tasks, _resolve_task, _similarity, _word_hit)  # noqa: F401
 
-WEEKDAYS = "月火水木金土日"
+progress = conversation_state.snapshot  # what Es is doing now, for the chat window
+
 
 ACTION_TYPES = ["add_task", "update_task", "complete_task", "delegate"]
 INTENTS = ["chat", "advise", "add", "update", "complete", "delegate"]
@@ -87,56 +104,6 @@ You cannot see what is happening outside this PC now (sales, news, weather, pric
 never agree that something is happening there; say you cannot check it. Do not explain how to set up or use
 services, APIs or products you were not told about; offer 「/claude 調べて …」 instead.
 Never claim you did something that is not listed under "What just happened"."""
-_lock = threading.Lock()
-
-
-_WEEKDAY_RE = re.compile(r"(今週|来週|再来週)?の?([月火水木金土日])曜日?")
-_MONTH_DAY_RE = re.compile(r"(\d{1,2})\s*(?:月|/)\s*(\d{1,2})日?")
-_DAYS_LATER_RE = re.compile(r"(\d{1,3})\s*日後")
-_FIXED_WORDS = {"今日": 0, "きょう": 0, "明日": 1, "あした": 1, "明後日": 2, "あさって": 2}
-
-
-def annotate_dates(text, today):
-    """Append the absolute date to relative date words, e.g. 金曜 -> 金曜(=2026-10-09).
-
-    A 3.8B model gets weekday arithmetic wrong even with a calendar in the prompt,
-    so the dates are resolved here and the model only has to copy them.
-    """
-    def tag(m, d):
-        return f"{m.group(0)}(={d.isoformat()})"
-
-    def weekday(m):
-        wd = WEEKDAYS.index(m.group(2))
-        if m.group(1):
-            monday = today - dt.timedelta(days=today.weekday())
-            weeks = {"今週": 0, "来週": 1, "再来週": 2}[m.group(1)]
-            return tag(m, monday + dt.timedelta(days=7 * weeks + wd))
-        return tag(m, today + dt.timedelta(days=(wd - today.weekday()) % 7))
-
-    def month_day(m):
-        try:
-            d = dt.date(today.year, int(m.group(1)), int(m.group(2)))
-        except ValueError:
-            return m.group(0)
-        if (today - d).days > 60:  # "1月10日" said in November means next year
-            d = d.replace(year=today.year + 1)
-        return tag(m, d)
-
-    text = _WEEKDAY_RE.sub(weekday, text)
-    text = _MONTH_DAY_RE.sub(month_day, text)
-    text = _DAYS_LATER_RE.sub(lambda m: tag(m, today + dt.timedelta(days=int(m.group(1)))), text)
-    for word, offset in sorted(_FIXED_WORDS.items(), key=lambda kv: -len(kv[0])):
-        text = re.sub(rf"{word}(?!\(=)", lambda m, o=offset: tag(m, today + dt.timedelta(days=o)), text)
-    return text
-
-
-def _calendar(today, days=14):
-    lines = []
-    for i in range(days):
-        d = today + dt.timedelta(days=i)
-        tag = " = today" if i == 0 else " = tomorrow" if i == 1 else ""
-        lines.append(f"{d.isoformat()} ({WEEKDAYS[d.weekday()]}){tag}")
-    return "\n".join(lines)
 
 
 def _task_line(t, notes=False):
@@ -376,131 +343,6 @@ longer than 3 items, no task ids or [brackets]. Never use stock phrases such as 
 Never tell the user to delete tasks."""
 
 
-def _clean(value):
-    value = (value or "").strip()
-    return value or None
-
-
-def _bigrams(s):
-    s = re.sub(r"\s+", "", s.lower())
-    return {s[i:i + 2] for i in range(len(s) - 1)}
-
-
-def _similarity(hint, title):
-    tb = _bigrams(title)
-    return len(_bigrams(hint) & tb) / max(1, len(tb))
-
-
-def _named_tasks(text, tasks):
-    """Tasks whose full title appears in the text; 「資料の修正案」 hides the shorter 「資料の修正」."""
-    hits = [t for t in tasks if t["title"] and t["title"] in text]
-    return [t for t in hits if not any(t["title"] != o["title"] and t["title"] in o["title"] for o in hits)]
-
-
-def _by_project(cands, text):
-    """Same-titled tasks (レビュー in two projects) need the project named to pick one (#72)."""
-    if len(cands) > 1 and len({t["title"] for t in cands}) == 1:
-        cands = [t for t in cands if t["project"] and t["project"] in text] or cands
-    return cands
-
-
-def _missing_target(text):
-    """「提出用チェック」: a quoted name that is no task while no real task is named (#72)."""
-    tasks = db.list_tasks(include_done=True)
-    if _named_tasks(text, tasks) or re.search(r"#\d+", text):
-        return None
-    for name in re.findall(r"[「『]([^」』]{2,40})[」』]", text):
-        if not any(_similarity(name, t["title"]) >= 0.5 or _similarity(t["title"], name) >= 0.5 for t in tasks):
-            return name
-    return None
-
-
-def _word_hit(hint, task, tasks):
-    """A content word of the message names this task and no other one (ES -> 「A社のES提出」)."""
-    words = {w for w in _WORD_RE.findall(hint) if w in task["title"]}
-    return any(not any(w in o["title"] for o in tasks if o["id"] != task["id"]) for w in words)
-
-
-def _resolve_task(task_id, hint, known_ids, context="", include_done=False):
-    """Pick the task an update/complete refers to (#72).
-
-    Small models copy ids from the prompt's examples or guess, and an existing id is not proof that
-    the user meant that task. The user's own words must point at it: its #id, its full title (with the
-    project when titles repeat), or a clear title match. Pronouns use the recent conversation (context)
-    and stay unresolved when it names more than one task.
-    """
-    tasks = db.list_tasks(include_done=include_done)
-    if task_id in known_ids and f"#{task_id}" in hint:
-        return task_id
-    for source in (hint, context):
-        named = _by_project(_named_tasks(source, tasks), f"{hint} {context}") if source else []
-        if named:
-            if len(named) > 1 and len({t["title"] for t in named}) == 1:
-                return None  # two tasks share the name and nothing says which
-            if source is context and len(named) > 1 and not _PLURAL_RE.search(hint):
-                return None  # 「それ」 after two tasks were discussed: ask which one
-            if any(t["id"] == task_id for t in named):
-                return task_id
-            return named[0]["id"] if len(named) == 1 else None
-    scored = sorted(((_similarity(hint, t["title"]), t["id"]) for t in tasks), reverse=True)
-    best = None
-    if scored and scored[0][0] >= 0.5 and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.2):
-        best = scored[0][1]
-    given = db.get_task(task_id) if task_id in known_ids else None
-    if given and (given["status"] != "done" or include_done):
-        score = _similarity(hint, given["title"])
-        if best and best != task_id and score < 0.2:
-            return best
-        if score >= 0.3 or _word_hit(hint, given, tasks):
-            return task_id
-        if not context and [t["id"] for t in db.list_tasks()] == [task_id]:
-            return task_id  # the only open task, with no conversation pointing elsewhere
-    return best
-
-
-_PLURAL_RE = re.compile(r"それぞれ|全部|全て|すべて|両方|どちらも|どっちも|二つ|2つ|ふたつ|これら|それら|上記")
-
-
-def _ambiguous_targets(hint, context):
-    """「それを終わったことにして」 after talking about two tasks: the titles to ask about."""
-    if _named_tasks(hint, db.list_tasks()) or not context or _PLURAL_RE.search(hint):
-        return []
-    named = _named_tasks(context, db.list_tasks())
-    return [t["title"] for t in named] if len(named) > 1 else []
-
-
-def _duplicate_of(title):
-    """An open task whose title is nearly the same (Jaccard over character bigrams)."""
-    tb = _bigrams(title)
-    for t in db.list_tasks():
-        ob = _bigrams(t["title"])
-        if tb and ob and len(tb & ob) / len(tb | ob) >= 0.6:
-            return t
-    return None
-
-
-_WORD_RE = re.compile(r"[ァ-ヶー]{2,}|[一-龥]{2,}|[A-Za-z0-9]{2,}")
-
-
-def _narrow_bulk_updates(actions, user_text):
-    """For "それぞれ〜" requests the model sometimes sweeps in every task of the project.
-    If a word from the message (e.g. ノート) names only some of the targeted tasks,
-    keep just those."""
-    updates = [a for a in actions if a.get("type") == "update_task"]
-    if len(updates) < 2:
-        return actions
-    titles = {}
-    for a in updates:
-        t = db.get_task(a.get("task_id") or 0)
-        titles[id(a)] = t["title"] if t else ""
-    for word in _WORD_RE.findall(user_text):
-        hit = [a for a in updates if word in titles[id(a)]]
-        if 2 <= len(hit) < len(updates):
-            keep = {id(a) for a in hit}
-            return [a for a in actions if a.get("type") != "update_task" or id(a) in keep]
-    return actions
-
-
 UNSORTED_RE = re.compile(r"未分類|分類(?:は)?(?:なし|いらない|しない)")
 
 
@@ -565,187 +407,6 @@ def _finish_project_add(payload, value, cfg):
     events, _, touched = _apply([{**action, "type": "add_task", "project": project}], cfg,
                                 user_text=payload.get("user_text") or "", context_text=payload.get("context_text") or "")
     return _template_reply("add", events, touched), events
-
-
-def _apply(actions, cfg, user_text="", context_text=""):
-    with jobs.boundary():
-        return _apply_current(actions, cfg, user_text, context_text)
-
-
-def _apply_current(actions, cfg, user_text="", context_text=""):
-    """Execute validated actions. Returns (event lines, handoffs created, last task touched)."""
-    events, handoffs, touched = [], [], {}
-    known_ids = {t["id"] for t in db.list_tasks(include_done=True)}
-    guard = write_guard.analyze(user_text, db.list_tasks(include_done=True))
-    if guard.hold and actions:
-        # Permission comes from the words, not from a well-formed proposal (#67).
-        return [f"・ 「{guard.hold}」とあったので、タスクは変更していません"], [], {}
-    actions = _narrow_bulk_updates(actions, user_text)
-    # The model sometimes repeats the same operation; run it once (#80).
-    actions = list({json.dumps(a, sort_keys=True, ensure_ascii=False): a for a in actions}.values())
-    for a in actions:
-        kind = a.get("type")
-        task_id = a.get("task_id") or 0
-        title, project = _clean(a.get("title")), _clean(a.get("project"))
-        due, notes = _clean(a.get("due")), _clean(a.get("notes"))
-        if due and not db.valid_date(due):
-            due = None
-        if due and due < dt.date.today().isoformat():
-            events.append(f"・ 締切 {due} は過去の日付なので設定しませんでした")
-            due = None
-        if due and not write_guard.due_grounded(due, f"{user_text} {context_text}"):
-            events.append(f"・ 締切 {due} は発言から日付が決まらないので設定しませんでした")  # #74
-            due = None
-        explicit = _EXPLICIT_ADD_RE.search(user_text)  # "〜をタスクにして": trust the model's wording
-        if kind in ("add_task", "delegate") and not task_id and title \
-                and ((not explicit and max(_similarity(user_text, title), _similarity(context_text, title)) < 0.35)
-                     or _META_TITLE_RE.search(title)):
-            # Small models invent plausible tasks ("履歴書の作成") from vague requests.
-            events.append(f"・ 「{title}」はあなたの発言から読み取れないので追加しませんでした")
-            continue
-
-        if kind in ("update_task", "complete_task"):
-            task_id = _resolve_task(task_id, user_text, known_ids, context=context_text)
-            if not task_id:
-                which = _ambiguous_targets(user_text, context_text)
-                if which:
-                    events.append("⚠ " + "".join(f"「{w}」" for w in which)
-                                  + f"のどれのことか分からなかったため「{kind}」を実行しませんでした")
-                else:
-                    events.append(f"⚠ どのタスクのことか特定できなかったため「{kind}」を実行しませんでした")
-                continue
-        if kind in ("add_task", "delegate") and not task_id and not guard.allows(None, "add"):
-            events.append(f"・ 「{title or ''}」は登録しないよう言われたので追加しませんでした")
-            continue
-        if kind == "complete_task" and task_id in known_ids and db.get_task(task_id)["read_only"]:
-            t = db.get_task(task_id)  # #182: only the file it was read from completes it
-            events.append(f"・ #{t['id']} {t['title']} はリポジトリのファイルから読み取ったタスクなので完了にしていません（元のファイルで done にしてね）")
-            continue
-        if kind == "complete_task" and not guard.allows(task_id, "complete"):
-            events.append(f"・ #{task_id} {db.get_task(task_id)['title']} は完了にしないよう言われたので変えていません")
-            continue
-        if kind == "complete_task" and not _COMPLETE_HINT_RE.search(f"{user_text} {context_text}"):
-            events.append(f"・ #{task_id} {db.get_task(task_id)['title']} を完了にする依頼が見当たらないので、変えていません")
-            continue
-
-        if kind == "add_task":
-            if not title:
-                continue
-            company = _COMPANY_RE.search(user_text)
-            if company and company.group(0) not in title:
-                title = f"{company.group(0)} {title}"  # the model tends to drop "D社" from 就活 tasks
-            dup = _duplicate_of(title)
-            if dup:
-                events.append(f"・ #{dup['id']} {dup['title']} は登録済みなので追加しませんでした")
-                missing = []
-                if due and due != dup['due']:
-                    missing.append('締切')
-                if project and project != dup['project']:
-                    missing.append('プロジェクト')
-                if notes and notes not in (dup['notes'] or ''):
-                    missing.append('メモ')
-                rule = recurring.parse(user_text) or recurring.parse(context_text)
-                if rule and rule != dup.get('repeat'):
-                    missing.append('繰り返し')
-                if missing:
-                    events.append(f"⚠ #{dup['id']} {dup['title']} の指定された{'・'.join(missing)}は既存の内容と異なるため反映していません。既存タスクは変更していません")
-                continue
-            if project and project.lower() in user_text.lower() and db.ensure_project(project):
-                events.append(f"・ プロジェクト「{project}」を作りました")
-            t = db.add_task(title, project=project, due=due, notes=notes or "")
-            rule = recurring.parse(user_text) or recurring.parse(context_text)
-            if rule:
-                t = recurring.set_rule(t["id"], rule)
-            known_ids.add(t["id"])
-            touched = t
-            events.append(f"＋ #{t['id']} {t['title']}"
-                          f"（{t['project'] or '未分類'}{' / ' + t['due'] if t['due'] else ''}"
-                          f"{' / 🔁' + recurring.describe(t['repeat']) if t.get('repeat') else ''}）")
-        elif kind == "update_task":
-            change = _intended_update(db.get_task(task_id), title, due, project, notes, f"{user_text} {context_text}",
-                                      own=user_text)
-            kept = [k for k in change if not guard.allows(task_id, _FIELD_OF.get(k, k))]
-            for k in kept:
-                change.pop(k)
-            if kept:
-                cur = db.get_task(task_id)
-                labels = "・".join(_FIELD_LABELS[_FIELD_OF.get(k, k)] for k in kept)
-                events.append(f"・ #{cur['id']} {cur['title']} の{labels}は変更しないよう言われたので変えていません")
-                if not change:
-                    continue
-            if not change:
-                cur = db.get_task(task_id)
-                events.append(f"・ #{cur['id']} {cur['title']} は変えていません（何を変えるのか読み取れなかったため）")
-                continue
-            old = db.get_task(task_id)
-            t = touched = db.update_task(task_id, **change)
-            # The record names every changed field, so a later 「何を変えた？」 can be answered from it (#70).
-            parts = ([f"タイトル: {old['title']} → {t['title']}"] if "title" in change else []) + \
-                    ([f"締切 {t['due']}"] if "due" in change else []) + \
-                    ([f"プロジェクト: {t['project']}"] if "project" in change else []) + \
-                    ([f"メモ追記: {change['notes_append']}"] if "notes_append" in change else [])
-            events.append(f"✎ #{t['id']} {t['title']} を更新しました（{' / '.join(parts)}）")
-        elif kind == "complete_task":
-            t = touched = db.update_task(task_id, status="done")
-            events.append(f"✔ #{t['id']} {t['title']} を完了にしました")
-        elif kind == "delegate":
-            dup = _duplicate_of(title) if title else None
-            if task_id in known_ids:
-                t = db.update_task(task_id, notes_append=notes)
-            elif dup:
-                t = dup
-            elif title:
-                t = db.add_task(title, project=project, due=due, notes=notes or "")
-                known_ids.add(t["id"])
-            else:
-                continue
-            if any(h["task_id"] == t["id"] for h in db.list_handoffs()):
-                events.append(f"・ #{t['id']} {t['title']} は引き継ぎ準備済みです")
-                continue
-            h = delegate(t["id"], cfg)
-            touched = t
-            handoffs.append(h)
-            events.append(f"→ #{t['id']} {t['title']} を Claude Code 用に準備しました（handoff #{h['id']}）")
-    return events, handoffs, touched
-
-
-def _intended_update(task, title, due, project, notes, said, own=None):
-    """The fields of an update_task the user actually asked to change (#20).
-
-    The model fills update_task for anything that sounds related to a task, e.g. a wish about how
-    Es should talk becomes the new title of a bug-fix task. Each change needs a sign in the words:
-    a rename needs 名前/タスク名/「…」に変えて or the new name said before にして, and the name
-    itself in the conversation (#88); a due date a date word, notes a メモ-like word or the task
-    named in the message, a project move the project's name. `said` is the message with the earlier
-    messages it refers to; `own` the message alone."""
-    own = said if own is None else own
-    change = {}
-    if title and title != task["title"] and (_RENAME_RE.search(said) or _renamed_to(title, said)) \
-            and _name_grounded(title, own, said):
-        change["title"] = title
-    if due and due != task["due"] and _DUE_HINT_RE.search(said):
-        change["due"] = due
-    if project and project != task["project"] and project.lower() in said.lower():
-        change["project"] = project
-    named = f"#{task['id']}" in said or _similarity(said, task["title"]) >= 0.3
-    # A memo must carry the user's content: 「完了」「未完了に戻す」「変更しないで保留中」 only echo
-    # the operation and once stood in for a status change the model could not express (#67, #73).
-    echo = re.fullmatch(r"[\s。、!！]*(?:(?:未)?完了|済み?|未完了に戻[すしたま]*|変更しない.*|保留.*|そのまま.*|今のまま.*)[\s。、!！]*",
-                        notes or "")
-    # The model copies the instruction around the content: 「メモに図を一枚追加と書いて」 (#80).
-    notes = re.sub(r"^(?:メモ|詳細|補足)(?:に|へ|として|[:：])\s*", "", notes or "").strip()
-    notes = re.sub(r"\s*(?:と|って)(?:書いて|書く|追記して|残して|メモして)[。\s]*$", "", notes).strip()
-    # The task's own name as its memo is an echo too: 「#1のタスクを週課の交換にして」 became a memo
-    # 「週課交換」 instead of a rename (#88).
-    echo = echo or re.sub(r"\s+", "", notes) == re.sub(r"\s+", "", task["title"] or "")
-    if notes and not echo and (_NOTE_HINT_RE.search(said) or (named and _similarity(said, notes) >= 0.5)) \
-            and not (task["notes"] or "").rstrip().endswith(notes):
-        change["notes_append"] = notes
-    return change
-
-
-_FIELD_OF = {"notes_append": "notes"}
-_FIELD_LABELS = {"title": "タイトル", "due": "締切", "project": "プロジェクト", "notes": "メモ"}
 
 
 def _report_flow(text):
@@ -869,17 +530,10 @@ def _policy_flow(text):
     if db.get_setting("chat_mode", "work") == "talk":  # no offers of Es's own in 雑談モード (#112, #114)
         return "希望はわかったよ。" + NO_PROMISE_NOTE
     db.set_setting("pending_feature", text)
-    task_context.begin(text, _progress['message_id'])
+    task_context.begin(text, conversation_state.message_id())
     return ("希望はわかったよ。ただ、私の受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
             "私が自分で書き換えることはできないから、約束はできないんだ。\n"
             "改修のタスクとして EsAgent に登録しておく？「うん」か「登録して」で入れるよ。タスクは何も変えていないよ。")
-
-
-def delegate(task_id, cfg):
-    task = db.get_task(task_id)
-    convo = db.recent_messages(8, roles=("user", "assistant"))
-    folder = task.get("folder") or cfg["default_folder"]
-    return handoff.prepare(task, convo, folder)
 
 
 _TALK_START_RE = re.compile(r"雑談|おしゃべり|話そう|話したい|話でも|別の話|話を変え|話題を変え|"
@@ -904,11 +558,6 @@ def set_mode(mode):
 _WISH_RE = re.compile(r"欲しい|ほしい|あればいい|あったらいい|いいな$|いいなあ|できたらいい|"
                       r"あった方が|あったほうが|方がいい|ほうがいい|方が良い|ほうが良い|と思う")
 _YES_RE = re.compile(r"^(はい|うん|そうだね|そうして|お願い|おねがい|OK|ok|いいよ|それで|よろしく)")
-# Completing a task needs words that say it is done, like any other change (#20). A task named
-# for its memo or due date is not a request to complete it (#96: found with the evaluation's
-# stand-in model, which completed tasks named for other reasons).
-_COMPLETE_HINT_RE = re.compile(r"完了|終わ|おわ|済|すんだ|片付|かたづ|できた|出来た|やった|やり終|出した|提出し|"
-                               r"送った|送信した|チェック|done|Done|DONE")
 _LIST_LINE_RE = re.compile(r"^\s*(\d+[.．)]|[・\-*])\s*\S", re.M)
 _ASK_NEXT_RE = re.compile(r"何(を|から)|どれ(を|から)|おすすめ|オススメ|次は|やること|手伝って")
 # Was also named _STATUS_RE, which the wait question pattern below replaced (#134).
@@ -916,22 +565,13 @@ _PROGRESS_ASK_RE = re.compile(r"どこまで|進捗|状況|できてる|出来�
 _IDEAS_RE = re.compile(r"案を|アイデア|考えて|提案|出して")
 _FEATURE_RE = re.compile(r"表示|画面|機能|カラム|ボタン|UI|コマンド|モード|EsAgent|君の|キミの|きみの|このツール|このアプリ")
 _REGISTER_RE = re.compile(r"登録して|追加して|入れて|お願い")
-_REFERENCE_RE = re.compile(r"上記|上の|それぞれ|それら|これら|さっき|今の|前の|今言った")
 _REMEMBER_RE = re.compile(r"覚えて(おいて|て|ね|おいてね)?|忘れないで")
 _ADVICE_RE = re.compile(r"したい|やりたい|進めたい|教えて|助言|アドバイス|どう(すれば|したら)|何から|優先|整理|理解|まとめて|相談")
 _QUESTION_RE = re.compile(r"[？?]$|[？?]\s|なに$|何$")
-_ACTION_HINT_RE = re.compile(r"タスク(を|に)?(作|して|化)|作ろう|追加|登録|締め?切|〆|まで|(?<!取り)出す|提出|終わ|完了|できた|出した|書いた|変更|延期|ずれ|"
-                             r"直したい|直して|修正|実装|バグ|任せ|Claude")
 _ADD_HINT_RE = re.compile(r"追加|登録|まで|締め?切|〆|しなきゃ|しないと|しなければ|必要|予定|提出|出す|出さ|"
                           r"面接|説明会|試験|ある$|あります|やる$|やらな|入れて|メモして|"
                           r"タスク(を|に)?(作|追加|登録|して|化)|作ろう|作って")
 _SUMMARY_RE = re.compile(r"理解|まとめ|整理|一覧|全体|把握|状況")
-_EXPLICIT_ADD_RE = re.compile(r"タスク(を|に)?(作|追加|登録|して|化)|(追加|登録)して")
-_CLAIM_RE = re.compile(
-    r"(?:追加|登録|作成|更新|完了に|変更|分類|移動|設定|削除|選択|保存|開始|スタート)"
-    r"(?:しました|します(?:ね|よ)?|しておきました|しておいた(?:よ)?|した(?:よ)?(?!ら|場合|とき|時|方|ほう)|しといた|済み)"
-    r"|始め(?:ます(?:ね|よ)?|ました|ておきました|ておいた(?:よ)?)")
-_RECORD_RE = re.compile(r"(?:記録\s*[:：]|(?:^|\n)\s*[＋+✎✔→↺・]\s*#\d+)")
 _FORGET_RE = re.compile(r"忘れて|後回し|今はいい|いったん置|一旦置|触れないで|出さないで")
 # A report that work has started, as a whole sentence: not 「やってるような感じ」 (#113).
 _ACK_RE = re.compile(r"(?:もう(?:動いて|始めて|やって|始まって)(?:る|います)?|始めた|やってる|動いてる)"
@@ -949,30 +589,8 @@ def _said_just_before(reply, history):
     """The same fixed reply twice in a row reads like a machine; the second time the model answers (#113)."""
     last = next((m["content"] for m in reversed(history) if m["role"] == "assistant"), "")
     return last.strip() == reply.strip()
-_COMPANY_RE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9一-龥ァ-ヶー]{1,12}社")
-# What an update_task may change: each field needs its own sign in what the user said (#20).
-_RENAME_RE = re.compile(r"名前|タイトル|名称|タスク名|件名|改名|リネーム|呼び方|」(に|へ)(変え|変更|直|し)")
 
 
-def _name_grounded(title, own, context=""):
-    """The new name comes from the conversation, never from the model alone (#88): from the user's
-    own words, or for 「そうして」 from earlier messages that offer that one name and no other."""
-    flat = lambda s: re.sub(r"\s+", "", s or "")
-    if flat(title) in flat(own):
-        return True
-    if flat(title) not in flat(context):
-        return False
-    titles = {t["title"] for t in db.list_tasks(include_done=True)}
-    offered = set(re.findall(r"[「『]([^」』\n]{1,60})[」』]", context)) - titles
-    return offered <= {title}
-
-
-def _renamed_to(title, said):
-    """「#1のタスクを週課の交換にして」: the new name itself, said right before に/へ + a change verb (#88)."""
-    return bool(title) and re.search(re.escape(title) + r"[」』\"”\s]*(?:に|へ)\s*(?:して|変え|変更|直し|直す|する)", said) is not None
-_DUE_HINT_RE = re.compile(r"\(=\d{4}-\d{2}-\d{2}\)|\d{4}-\d{2}-\d{2}|\d{1,2}[/月]\d|締め?切|期限|期日|〆|延期|前倒し|"
-                          r"ずら|延ば|早め|遅ら|それぞれ|ずつ|週|日")
-_NOTE_HINT_RE = re.compile(r"メモ|詳細|補足|追記|書き足|書いて|残して|付け加え|足して|加えて|内容")
 # Requests about how Es itself should behave ("曖昧なら質問してからタスクにしてほしい").
 _POLICY_WISH_RE = re.compile(r"(して|するように|しないで|やめて)(ほしい|欲しい|ください|くれ|ね$)|ようにして|しないで$|やめて$")
 _POLICY_RE = re.compile(r"(質問|確認|聞い|聞き返)(して)?から|聞き返して|勝手に|曖昧な|あいまいな|返事は|返答は|答え方|話し方|口調|"
@@ -987,7 +605,6 @@ _ASKED_RE = re.compile(r"(もう|既に|すでに|さっき)[^。\n]{0,15}(依�
 _DELEGATE_ASK_RE = re.compile(r"(任せ|お願い|依頼)(たい|して|します|する|しよう)|頼(む|みたい|んで|める)|"
                               r"やって(ほしい|欲しい|くれ|おいて)|準備して|用意して")
 _DATE_WORD_RE = re.compile(r"まで|締め?切|期限|〆|\(=\d{4}-")
-_META_TITLE_RE = re.compile(r"関連タスク|タスクの開始|タスク$|内容(の)?(取り出し|取得|取り込)|取ってく")
 
 
 def estimate_tokens(text):
@@ -1010,104 +627,12 @@ def _budget(cfg):
     return cfg.get("history_tokens", 2000)
 
 
-def _literal_add_title(text):
-    # 「〇〇を追加して」 too: the model once made the name 「〇〇を追加」 (#115).
-    match = re.fullmatch(r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?(?:をタスクに(?:追加して|登録して|して|入れて)|'
-                         r'を(?:追加して|登録して))(?:おいて|ください|ね)?[。！!\s]*', text)
-    if not match:
-        deadline = re.fullmatch(r"\s*(?P<date>[^。、\n]{1,60}?)までに(?P<title>[^。、\n]{1,100}?)[。！!\s]*", text)
-        if not deadline or not (annotate_dates(deadline["date"], dt.date.today()) != deadline["date"] or re.search(r"\d{4}-\d{2}-\d{2}", deadline["date"])):
-            return None
-        match = deadline
-    title = match["title"].strip()
-    for p in sorted((p["name"] for p in db.list_projects() if p["name"]), key=len, reverse=True):
-        if title.startswith(p) and re.match(r"(?:に|へ|として|で)", title[len(p):]):
-            title = re.sub(r"^(?:に|へ|として|で)\s*", "", title[len(p):])  # 「就活にB社の説明会」
-            break
-    if not title or _PRONOUN_RE.search(title) or re.search(r"と|、|,|および|締め?切|期限|期日|メモ|詳細", title) or annotate_dates(title, dt.date.today()) != title:
-        return None
-    return title
-
-
-def _add_title_grounded(title, text, context=""):
-    # Permit spacing/particles, never add a verb or a new concept from the model.
-    flat = lambda value: re.sub(r'[\s「」『』"、。]|(?<=[一-龥ぁ-んァ-ヶ])(?:を|の)(?=[一-龥ぁ-んァ-ヶ])', "", value or "").lower()
-    name = flat(title)
-    source = text + (context if _PRONOUN_RE.search(text) or _REFERENCE_RE.search(text) else "")
-    return bool(name) and name in flat(source)
-
-
-def _action_errors(actions, text, context=''):
-    """Check a proposal without writes: a rejected batch must never partly execute.
-
-    text is the user's message, context the earlier messages a reference word points at."""
-    errors = []
-    known = {t['id'] for t in db.list_tasks(include_done=True)}
-    if not isinstance(actions, list):
-        return ['actions は配列にしてください']
-    guard = write_guard.analyze(text, db.list_tasks(include_done=True))
-    missing = _missing_target(text)
-    for a in actions:
-        if not isinstance(a, dict):
-            errors.append('操作はオブジェクトにしてください')
-            continue
-        kind = a.get('type')
-        tid = a.get('task_id') if a.get('task_id') is not None else 0
-        if kind not in ('add_task', 'update_task', 'complete_task', 'delegate'):
-            errors.append('一覧にある操作だけを指定してください')
-            continue
-        if not isinstance(tid, int) or isinstance(tid, bool):
-            errors.append('task_id は整数にしてください')
-            continue
-        if any(a.get(k) is not None and not isinstance(a[k], str)
-               for k in ('title', 'due', 'project', 'notes')):
-            errors.append('title/due/project/notes は文字列にしてください')
-            continue
-        title, due = _clean(a.get('title')), _clean(a.get('due'))
-        literal = _literal_add_title(text) if kind == 'add_task' and not tid else None
-        if literal:
-            a['title'] = title = literal
-        if tid and tid not in known:
-            errors.append(f'#{tid} は一覧にありません。一覧から選んでください')
-        elif kind in ('update_task', 'complete_task') and missing:
-            errors.append(f'「{missing}」は一覧にないタスクです。別のタスクに置き換えず、actions を [] にしてください')
-        elif kind in ('update_task', 'complete_task') and not _resolve_task(tid, text, known, context=context):
-            errors.append(f'#{tid} は利用者が指定したタスクではありません。発言で名前が出たタスクだけを対象にし、'
-                          '特定できなければ actions を [] にしてください')
-        elif kind == 'complete_task' and not guard.allows(tid, 'complete'):
-            errors.append(f'#{tid} は完了にしないよう言われています。この操作は出さないでください')
-        elif kind == 'complete_task' and not _COMPLETE_HINT_RE.search(f'{text} {context}'):
-            errors.append(f'#{tid} を完了にする依頼は発言にありません。依頼された項目だけを変更してください')
-        if due and (not db.valid_date(due) or due < dt.date.today().isoformat()):
-            errors.append(f'締切 {due} は不正または過去の日付です。今日以降にしてください')
-        elif due and not write_guard.due_grounded(due, f'{text} {context}'):
-            errors.append(f'締切 {due} は発言から決まりません。具体的な日付がなければ due は "" にしてください')
-        if kind in ('add_task', 'delegate') and not tid:
-            if not title:
-                errors.append('追加するタイトルがありません')
-            elif kind == 'add_task' and not _add_title_grounded(title, text, context):
-                errors.append(f'「{title}」には発言にない言葉があります。名前は利用者の発言から取ってください')
-            elif _META_TITLE_RE.search(title) or (not _EXPLICIT_ADD_RE.search(text)
-                                                  and _similarity(f'{text} {context}', title) < .35):
-                errors.append(f'「{title}」は発言から読み取れません。利用者の内容だけを使ってください')
-        if kind == 'update_task' and tid in known and not _intended_update(
-                db.get_task(tid), title, due, _clean(a.get('project')), _clean(a.get('notes')), f'{text} {context}', own=text):
-            errors.append('何を変更する依頼か読み取れません。依頼のある項目だけを指定してください')
-        elif kind == 'update_task' and tid in known:
-            change = _intended_update(db.get_task(tid), title, due, _clean(a.get('project')),
-                                      _clean(a.get('notes')), f'{text} {context}', own=text)
-            kept = [_FIELD_LABELS[_FIELD_OF.get(k, k)] for k in change if not guard.allows(tid, _FIELD_OF.get(k, k))]
-            if kept:
-                errors.append(f'#{tid} の{"・".join(kept)}は変更しないよう言われています。その項目は空にしてください')
-    return errors
-
-
 def _route(cfg, text, today, history):
     feedback = []
     context = _reference_context(text, history)
     for attempt in range(3):
         if attempt:
-            _progress['detail'] = '確認して書き直し中'
+            conversation_state.set_detail('確認して書き直し中')
         with llm.validation_attempt('router', attempt):
             try:
                 result = _route_once(cfg, text, today, history, feedback)
@@ -1124,9 +649,6 @@ def _route(cfg, text, today, history):
                      + '依頼された操作がない・対象が一覧にない場合は actions を [] にしてください。'
                      + f'\n元の依頼: {text}\n現在のタスク一覧（この番号だけを使う）:\n{available}'}]
     return 'update', '', []  # the operation template honestly reports that nothing was applied
-
-
-_PRONOUN_RE = re.compile(r"それ|これ|あれ|その|この|そっち|こっち|そう(?:して|する|しよう|で|にして)")
 
 
 def _reference_context(text, history):
@@ -1287,7 +809,7 @@ Memo: {memo or '(none)'}"""
     source = f"{text} {task['title']} {memo} {about}".lower()
     for attempt in range(3):
         if attempt:
-            _progress['detail'] = '確認して書き直し中'
+            conversation_state.set_detail('確認して書き直し中')
         with llm.validation_attempt('first_step', attempt):
             step = llm.chat(cfg, messages, options={"temperature": 0.4, "num_predict": 120}).strip()
         errors = _step_errors(step, source)
@@ -1412,7 +934,7 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     for q, a in _STYLE_EXAMPLES[intent]:
         messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
     messages += conversation_context.augment(messages, text, cfg, history, _budget(cfg))
-    line = utterances.answered_line(_progress["message_id"]) if _progress.get("message_id") else None
+    line = utterances.answered_line(conversation_state.message_id()) if conversation_state.message_id() else None
     if line:  # 「大丈夫だよ」 right after 「夜ふかし？無理しないでね」 answers that line (#139)
         messages.append({"role": "system", "content":
                          f"利用者の今の発言は、直前に Es が自分から言った「{line['content']}」への返事の可能性が高い。"
@@ -1444,69 +966,18 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
             and (_WISH_RE.search(text) or behavior_wish(text)):
         # The model offered to register the wish; make it a real, approvable offer (#112).
         db.set_setting("pending_feature", text)
-        task_context.begin(text, _progress["message_id"])
+        task_context.begin(text, conversation_state.message_id())
         reply += "\n" + FEATURE_OFFER
     elif intent == "chat" and not evidence:
         reply = tidy_chat_reply(reply, text, history)
     return reply
 
 
-# Small talk kept ending in the same 「何でも話してね」, repeating earlier lines and explaining what
-# Es cannot hear (#109). Such sentences are dropped when the reply has something else to say.
-_GENERIC_CLOSER_RE = re.compile(r"(?:何でも|なんでも|いつでも|気軽に|遠慮なく|好きなだけ)[^。！!？?\n]{0,15}"
-                                r"(?:話|聞|言|相談|教え|声をかけ)|聞かせて(?:ね|ください|ほしい|欲しい)?(?:な)?[。！!〜ー♪\s]*$")
-_SELF_LIMIT_RE = re.compile(r"(?:音|声|曲|音楽|BGM)(?:は|が|を)?[^。！!？?\n]{0,8}(?:聞こえ|聴こえ|聞け|聴け|出せ)(?:ない|ません)|"
-                            r"画面(?:は|が|を)?[^。！!？?\n]{0,6}見(?:え|れ)(?:ない|ません)|私は(?:AI|プログラム)だから")
-_ABILITY_ASK_RE = re.compile(r"聞こえ|聴こえ|喋れ|しゃべれ|話せる|声|音|見える|見えて|できる[？?]|できるの|機能")
-
-
-def _norm(sentence):
-    return re.sub(r"[\s。、！!？?〜ー♪…「」]", "", sentence)
-
-
-def tidy_chat_reply(reply, text, history):
-    """Drop a generic closing line, a line repeated from the last replies, and an unasked self-limit."""
-    sentences = [s for s in re.split(r"(?<=[。！!？?\n])", reply) if s.strip()]
-    if len(sentences) < 2:
-        return reply
-    earlier = [_norm(s) for m in history[-6:] if m["role"] == "assistant"
-               for s in re.split(r"(?<=[。！!？?\n])", m["content"]) if len(_norm(s)) >= 6]
-    words = set(_WORD_RE.findall(text))
-
-    def drop(s):
-        closer = _GENERIC_CLOSER_RE.search(s)
-        # 「何でも話してね」 is generic even next to the user's words; 「〇〇を聞かせて」 is not.
-        if closer and (not closer[0].startswith("聞かせ") or not any(w in s for w in words)):
-            return True
-        if _SELF_LIMIT_RE.search(s) and not _ABILITY_ASK_RE.search(text):
-            return True
-        n = _norm(s)
-        return len(n) >= 6 and any(n == e or (len(_bigrams(n)) > 3 and _similarity(n, e) >= 0.8) for e in earlier)
-    kept = [s for s in sentences if not drop(s)]
-    return "".join(kept).strip() if kept else reply
-
-
-# 「その機能をタスクとして追加する？『うん』か『追加する』でOKだよ」 written by the model had nothing
-# behind it, so a yes failed (#112). Only code makes offers: such sentences are removed.
-_MODEL_OFFER_RE = re.compile(
-    r"(?:タスク|EsAgent|改修|機能|要望|アイデア|ToDo)[^。！!\n]{0,25}(?:追加|登録|入れ)(?:する|しよう|しておく|しとく|しようか|して(?:おく|おこう|みる)?)?"
-    r"(?:か|かな|ね)?[？?]|"
-    r"[「『]?(?:うん|はい|追加する|追加して|登録する|登録して)[」』]?(?:か|と|で|って)[^。！!\n]{0,25}(?:追加|登録|入れ|OK|オッケー|ok)")
+# A wish about Es itself gets the code's own offer to register it, which a yes can approve (#112);
+# the model's own offers are removed (reply_filters.strip_model_offers).
 _WISH_ABOUT_ES_RE = re.compile(r"(?:君|きみ|キミ|Es|エス|アシスタント|EsAgent|このアプリ|このツール|仕組み|返事|返し方|"
                                r"話し方|口調|文脈|分類)|" + _FEATURE_RE.pattern)
 FEATURE_OFFER = "改修のタスクとして EsAgent に登録しておく？下のボタンか「うん」で入れるよ。まだ登録していないよ。"
-
-
-# 「分かった、今後は〜するね」「覚えておくね」: promises about Es's own behaviour that nothing
-# carries out (#114). The model may not make them; code says what can and cannot be done.
-_PROMISE_RE = re.compile(r"(?:今後は|これからは|次からは|次回から|今度から)[^。！!\n]{0,40}"
-                         r"(?:する|します|るね|ようにする|ようにします|気をつけ|心がけ|意識する)|"
-                         r"(?:ように|形で|感じで)(?:する|進める|やっていく|していく)ね|"
-                         r"覚えて(?:おく|おきます|とく)(?:ね|よ|から)?[。！!]?$")
-_FUTURE_WISH_RE = re.compile(r"(?:これからは|今後は|次からは|次回から|今度から)[^。！!\n]{0,40}"
-                             r"(?:て|で|ように)(?:ほしい|欲しい|ください|くれ|ね|ほしいな)?[。！!\s]*$")
-NO_PROMISE_NOTE = ("ただ、私の受け答えの決まりはプログラムで決まっていて、今の私が自分で変えることはできないから、"
-                   "約束はできないんだ。")
 
 
 def _answer_behavior_wish(text, result):
@@ -1520,7 +991,7 @@ def _answer_behavior_wish(text, result):
     if db.get_setting("chat_mode", "work") != "talk" and not db.get_setting("pending_feature"):
         wish = next(c for c in re.split(r"[。！!\n]", text) if c.strip() and _FUTURE_WISH_RE.search(c))
         db.set_setting("pending_feature", wish.strip())
-        task_context.begin(wish.strip(), _progress["message_id"])
+        task_context.begin(wish.strip(), conversation_state.message_id())
         note += "\n" + FEATURE_OFFER
     result["reply"] = (reply + "\n" + note).strip()
     with db.connect() as con:
@@ -1528,129 +999,14 @@ def _answer_behavior_wish(text, result):
                     (result["reply"],))
 
 
-def strip_promises(reply):
-    """Remove sentences promising future behaviour or to remember something.
-    Returns (reply, removed): removed is "behavior", "memory" (only 「覚えておくね」) or ""."""
-    sentences = re.split(r"(?<=[。！!？?\n])", reply)
-    dropped = [s for s in sentences if _PROMISE_RE.search(s.strip())]
-    if not dropped:
-        return reply, ""
-    kept = "".join(s for s in sentences if s not in dropped).strip()
-    memory_only = all(re.search(r"覚えて(?:おく|おきます|とく)", s) for s in dropped)
-    return kept, "memory" if memory_only else "behavior"
-
-
-def behavior_wish(text):
-    """「次からは分類が分からない時は聞いてね」: a wish about how Es should behave from now on."""
-    return any(_FUTURE_WISH_RE.search(c) for c in re.split(r"[。！!\n]", text) if c.strip())
-
-
-# 「7時半に起こして」「10分後に教えて」: there is no alarm or reminder, so a promise to wake or notify
-# the user at a time could make them oversleep (#205). Code answers; the model may not promise it.
-_TIME_RE = r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})(?:時(?:半|\d{1,2}分)?|分後|時間後)"
-_ALARM_ASK_RE = re.compile(
-    _TIME_RE + r"(?:頃|ごろ|くらい|ぐらい)?(?:に|には|になったら)[、\s]*(?:(?:私|俺|僕|わたし|ぼく|おれ)を)?"
-    r"(?:起こし|知らせ|教え|声(?:を)?かけ|呼ん|通知し|鳴らし|リマインドし)(?:て|てね|てほしい|てくれ|てください|てくれる|てもらえる)|"
-    r"(?:アラーム|目覚まし|リマインダー)(?:を)?(?:かけ|セットし|設定し|仕掛け)(?:て|てね|てほしい|てくれ|てください|てくれる)")
-_ALARM_PROMISE_RE = re.compile(
-    r"起こして(?:あげる|あげます|あげるね|おく|おくね)|起こす(?:ね|よ|から)|起こします|" +
-    _TIME_RE +r"[^。！!？?\n]{0,12}(?:お知らせ|知らせ|教え|声をかけ|呼び|呼ぶ|通知)(?:する|るね|ますね|ます|てあげる|ね)|"
-    r"アラーム(?:を)?(?:設定|セット)(?:しました|したよ|しておく|しておきます|する|します)")
-ALARM_REPLY = ("ごめんね、決まった時刻に起こしたり知らせたりする機能は、まだ私にはないの。"
-               "{when}確実に気づけるように、スマホや時計のアラームを使ってね。")
-
-
-def alarm_request(text):
-    return bool(_ALARM_ASK_RE.search(text or ""))
-
-
-def _alarm_flow(text):
-    m = _ALARM_ASK_RE.search(text or "")
-    if not m:
-        return None
-    when = re.match(_TIME_RE, m.group(0))
-    return ALARM_REPLY.format(when=f"{when.group(0)}に" if when and "後" not in when.group(0) else "")
-
-
-def strip_alarm_promises(reply):
-    """Remove sentences promising to wake or notify the user at a time. Returns (reply, removed)."""
-    sentences = re.split(r"(?<=[。！!？?\n])", reply)
-    kept = [s for s in sentences if not _ALARM_PROMISE_RE.search(s)]
-    if len(kept) == len(sentences):
-        return reply, False
-    return "".join(kept).strip(), True
-
-
-def strip_model_offers(reply):
-    """Remove the model's own offers to add or register something. Returns (reply, removed)."""
-    sentences = re.split(r"(?<=[。！!？?\n])", reply)
-    kept = [s for s in sentences if not _MODEL_OFFER_RE.search(s)]
-    if len(kept) == len(sentences):
-        return reply, False
-    return "".join(kept).strip() or "うん、そう思うんだね。", True
-
-
-NO_CHANGE_NOTE = "まだ何も登録・変更していないよ。登録するなら「〇〇をタスクに追加して」と言ってね。"
-
-
-def strip_model_records(reply):
-    """Only code writes operation records, including parenthesized inline records."""
-    reply = re.sub(r"[（(]記録\s*[:：][^）)\n]*[）)]", "", reply)
-    return "\n".join(line for line in reply.splitlines()
-                     if not re.match(r"\s*(?:記録\s*[:：]|[＋+✎✔→↺]\s*|・\s*#\d+)", line)).strip()
-
-
-def clean_model_reply(reply, events=()):
-    """Replace model operation claims with independently generated operation records."""
-    original = reply
-    reply = strip_model_records(reply)
-    sentences = re.split(r"(?<=[。！!？?\n])", reply)
-    kept = "".join(s for s in sentences if not _CLAIM_RE.search(s)).strip()
-    removed = kept != original.strip()
-    kept = re.sub(r"#\d+\s*", "", kept).strip()
-    if removed:
-        note = "実行した操作は下の記録を確認してね。" if events else NO_CHANGE_NOTE
-        return f"{kept}\n{note}" if kept else note
-    return kept
-
-
-def drop_false_claims(reply):
-    return clean_model_reply(reply)
-
-
-_progress = {"stage": None, "since": None, "detail": "", "partial": "", "text": "", "message_id": None}
-
 _INTENT_LABELS = {"chat": "雑談・質問として受け取りました", "advise": "次にやることを考えます",
                   "summary": "全体をまとめます", "add": "タスクを追加します", "update": "タスクを更新します",
                   "complete": "完了の報告ですね", "delegate": "Claude Code に任せる準備をします"}
 
 
-def _stage(name):
-    token = jobs.CURRENT.get()
-    _progress["requestId"] = token["request_id"] if token and name else None
-    _progress["revision"] = token["revision"] if token and name else None
-    _progress["stage"] = name
-    if name is None:
-        _progress.update(since=None, detail="", partial="")
-    elif _progress["since"] is None:
-        _progress["since"] = time.time()
-
-
 def _partial(text):
     jobs.check()
-    safe = strip_model_records(text)
-    safe = re.sub(r"[（(]記録\s*[:：].*$", "", safe)
-    _progress["partial"] = "".join(part for part in re.split(r"(?<=[。！!？?\n])", safe)
-                                    if not _CLAIM_RE.search(part) and not _MODEL_OFFER_RE.search(part)
-                                    and not _PROMISE_RE.search(part.strip()))
-
-
-def progress():
-    """What Es is doing right now, for the UI's live thinking display."""
-    since = _progress["since"]
-    return {"busy": since is not None, "stage": _progress["stage"], "detail": _progress["detail"],
-            "partial": _progress["partial"] if jobs.valid({"key": (db.DB_PATH, _progress.get("requestId")), "revision": _progress.get("revision")}) or not _progress.get("requestId") else "",
-            "requestId": _progress.get("requestId"), "revision": _progress.get("revision"), "elapsed": round(time.time() - since, 1) if since else 0}
+    conversation_state.set_partial(visible_partial(text))
 
 
 def _describe(intent, focus, actions):
@@ -2032,7 +1388,7 @@ def _feature_flow(cfg, text):
     pending = db.get_setting("pending_feature") or ""
     if pending and (_YES_RE.search(text.strip()) or _REGISTER_RE.search(text)):
         db.set_setting("pending_feature", "")
-        _stage("タスクを作成中")
+        conversation_state.stage("タスクを作成中")
         db.ensure_project("EsAgent")
         t = db.add_task(_feature_title(cfg, pending), project="EsAgent", notes=pending)
         return ("EsAgent のタスクに入れておいたよ。Claude Code に任せるなら、右のタスクの「→ Claude」からどうぞ。",
@@ -2043,7 +1399,7 @@ def _feature_flow(cfg, text):
     if _WISH_RE.search(text) and _FEATURE_RE.search(text) and not _REFERENCE_RE.search(text) \
             and not _REGISTER_RE.search(text) and db.get_setting("chat_mode", "work") != "talk":
         db.set_setting("pending_feature", text)
-        task_context.begin(text, _progress['message_id'])
+        task_context.begin(text, conversation_state.message_id())
         return ("いいね、それ。でも私は自分の画面やプログラムを直せないんだ。\n"
                 "EsAgent のタスクとして登録しておく？「うん」か「登録して」で入れるよ。", [])
     return None
@@ -2064,7 +1420,7 @@ def _register_feature(cfg, wish, statements):
 
 def _choice_reply(selected, cfg, message_id=None):
     mid = message_id or db.add_message('user', selected['label'])
-    _progress['message_id'] = mid
+    conversation_state.set_message_id(mid)
     reply, events, ui = '', [], {}
     kind, value, payload = selected['kind'], selected['value'], selected['payload']
     if kind == 'stale':
@@ -2118,11 +1474,11 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
     queued_at = db.normalize_datetime(queued_at)
     if selection is None and message_id is None and is_status_question(text):
         return _status_answer(text, queued_at, received)
-    with choices.lock, _lock:
+    with choices.lock, conversation_state.lock:
         conversation_context.STATS.set({})
         started = db.now()
-        _stage("判断中")
-        _progress.update(text=text, message_id=message_id)
+        conversation_state.stage("判断中")
+        conversation_state.begin_message(text, message_id)
         result = None
         try:
             selected = choices.before(text, selection)
@@ -2138,116 +1494,14 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
             choices.expose(result)
             return result
         finally:
-            mid = _progress.get("message_id")
+            mid = conversation_state.message_id()
             if mid:
                 done = None if result is None or result.get("pending") else db.now()
                 with jobs.detached():
                     db.set_message_timing(mid, queued_at=queued_at, received_at=received, started_at=started,
                                           finished_at=done)
-            _progress.update(text="", message_id=None)
-            _stage(None)
-
-
-# "考えるの長くない？" / "何が起きてたの？" / "まだ？" -- about the wait, not about a task (#23).
-# The chat window sends these right away instead of queueing them (GET /api/chat/bypass).
-_STATUS_RE = re.compile(r"(考え|返事|返信|返答|処理|反応)[^。\n]{0,8}(長|遅|かか)|遅(い|かった|すぎ|くない)|"
-                        r"まだ[？?]|まだかな|どうなって|何(が|か)(起き|あっ)|止まって|固まって|フリーズ|待たされ|"
-                        r"時間が?かか")
-
-
-# 「そのタスクって今どうなってる？」 asks about a task, not about the wait (#134). The chat window
-# also gets this pattern so it does not send such a question past the queue.
-_TASK_REF_RE = re.compile(r"タスク|ToDo|TODO|todo|やること|#\d+|\d+\s*番(?!目)")
-_WAIT_WORDS = {"返事", "返信", "返答", "処理", "反応", "時間", "モデル", "考え"}
-
-
-def _mentions_task(text):
-    """The message names a task: タスク/#12/12番, a task's title, its project, or a word only one
-    open task's title has (「資料って今どうなってる？」)."""
-    if _TASK_REF_RE.search(text):
-        return True
-    every = db.list_tasks(include_done=True)
-    if _named_tasks(text, every) or any(t["project"] and t["project"] in text for t in every):
-        return True
-    words = set(_WORD_RE.findall(text)) - _WAIT_WORDS
-    return bool(words) and any(_word_hit(" ".join(words), t, db.list_tasks()) for t in db.list_tasks())
-
-
-def is_status_question(text):
-    m = _STATUS_RE.search(text)
-    if m and m[0] == "どうなって" and set(_WORD_RE.findall(text)) - _WAIT_WORDS:
-        return False  # 「記憶の仕組みはどうなってるの？」 asks about something else (#113)
-    return (bool(m) and not _ACTION_HINT_RE.search(text) and len(text) <= 60
-            and not _mentions_task(text))
-
-
-def _ago(stamp, now):
-    secs = max(0, int((now - dt.datetime.fromisoformat(stamp)).total_seconds()))
-    return _span(secs)
-
-
-def _span(secs):
-    secs = int(secs)
-    if secs < 60:
-        return f"{secs}秒"
-    if secs < 3600:
-        return f"{secs // 60}分{secs % 60:02d}秒" if secs < 600 else f"{secs // 60}分"
-    return f"{secs // 3600}時間{secs % 3600 // 60}分"
-
-
-def status_lines(now=None):
-    """What is going on, from measurements only. Unknown causes are said to be unknown."""
-    now = now or dt.datetime.now()
-    lines = []
-    if _progress["since"] is not None:
-        what = f"「{_progress.get('text', '')[:20]}」の" if _progress.get("text") else ""
-        lines.append(f"いま{what}返事を作っているところ（{_progress['stage'] or '処理中'}、"
-                     f"{_span(time.time() - _progress['since'])}経過）。")
-    waiting = db.pending_messages()
-    if waiting:
-        lines.append(f"モデルの準備ができていないので、返事を保留しているメッセージが {len(waiting)} 件あるよ"
-                     f"（いちばん古いのは {_ago(waiting[0]['created_at'], now)}前）。準備ができたら古い順に返事するね。")
-    last = db.last_timed_message()
-    if last:
-        sent = last.get("queued_at") or last["created_at"]
-        t = {k: dt.datetime.fromisoformat(last[k]) for k in ("received_at", "started_at", "finished_at") if last.get(k)}
-        t0 = dt.datetime.fromisoformat(sent)
-        total = (t["finished_at"] - t0).total_seconds()
-        parts = []
-        if last.get("wait_reason") == "model":
-            parts.append(f"モデルの準備待ちで {_span((t['started_at'] - t0).total_seconds())}")
-        else:
-            client = (t["received_at"] - t0).total_seconds() if "received_at" in t else 0
-            lock = (t["started_at"] - t["received_at"]).total_seconds() if "received_at" in t else 0
-            if client >= 5:
-                parts.append(f"画面で前のメッセージの返事を待っていて {_span(client)}")
-            if lock >= 5:
-                parts.append(f"前のメッセージの処理が終わるのを待って {_span(lock)}")
-        parts.append(f"返事を作るのに {_span((t['finished_at'] - t['started_at']).total_seconds())}")
-        head = f"直前の「{last['content'][:20]}」は、送ってから返事まで {_span(total)} かかったよ"
-        lines.append(head + "（" + "、".join(parts) + "）。" + ("待たせてごめんね。" if total >= 60 else ""))
-    elif not lines:
-        lines.append("時間を測った記録がまだないので、何に時間がかかったのかはわからないんだ。")
-    st = llm.status(_status_cfg) if _status_cfg else {}
-    if st and not st.get("ollama"):
-        lines.append("いまモデル（Ollama）に接続できていないよ。")
-    elif st and not st.get("model"):
-        lines.append(f"いまモデル（{st.get('name')}）が見つからないよ。")
-    return lines
-
-
-_status_cfg = {}
-
-
-def _status_answer(text, queued_at, received):
-    message_id = db.add_message("user", text)
-    reply = "\n".join(status_lines())
-    db.add_message("assistant", reply)
-    db.set_message_timing(message_id, queued_at=queued_at, received_at=received, started_at=received,
-                          finished_at=db.now())
-    with db.connect() as con:
-        con.execute("UPDATE messages SET wait_reason = 'status' WHERE id = ?", (message_id,))
-    return {"reply": reply, "events": [], "handoffs": [], "intent": "status"}
+            conversation_state.end_message()
+            conversation_state.stage(None)
 
 
 PENDING_NOTE = "モデルの準備ができたら、このメッセージに返事するね（自動）。"
@@ -2303,7 +1557,7 @@ def _chat(text, cfg, message_id=None):
         message_id = db.add_message("user", text)
     else:
         db.set_message_status(message_id, None)
-    _progress["message_id"] = message_id
+    conversation_state.set_message_id(message_id)
     game_reply = conversation_game.handle(text)
     if game_reply is not None:
         task_context.clear()
@@ -2477,7 +1731,7 @@ def _chat(text, cfg, message_id=None):
                 db.add_message("notice", "\n".join(events))
             return {"reply": reply, "events": events, "handoffs": [], "intent": "feature"}
         if _REMEMBER_RE.search(text) and not _ACTION_HINT_RE.search(text):
-            _stage("覚えています")
+            conversation_state.stage("覚えています")
             reply, intent, events, handoffs = _remember(cfg, text, history), "remember", [], []
         else:
             route_text = annotated
@@ -2485,8 +1739,8 @@ def _chat(text, cfg, message_id=None):
             if _YES_RE.search(text.strip()) and _LIST_LINE_RE.search(last_reply):
                 route_text += "\n(これはあなたの直前の提案への同意です)"
             intent, focus, actions = _route(cfg, route_text, today, history)
-            _progress["detail"] = _describe(intent, focus, actions)
-            _stage("タスクを更新中" if actions else "返事を考え中")
+            conversation_state.set_detail(_describe(intent, focus, actions))
+            conversation_state.stage("タスクを更新中" if actions else "返事を考え中")
             context = _reference_context(text, history)  # "上記の四つ", "それ" point at earlier messages
             if route_text != annotated:  # agreeing to Es's own proposal
                 context += " " + last_reply
@@ -2507,7 +1761,7 @@ def _chat(text, cfg, message_id=None):
                 which = intent in ACTION_INTENTS and not events and _ambiguous_targets(annotated, context)
                 if which:  # 「それを終わったことにして」 after two tasks were discussed (#67, #72)
                     events = ["⚠ " + "".join(f"「{w}」" for w in which) + "のどれのことか分からなかったため実行しませんでした"]
-                _stage("返事を考え中")
+                conversation_state.stage("返事を考え中")
                 try:
                     reply = _respond(cfg, annotated, today, history, intent, focus, events, touched)
                 except llm.LLMError:

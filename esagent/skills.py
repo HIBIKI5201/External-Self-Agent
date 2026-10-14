@@ -28,12 +28,15 @@ import re
 
 import actions
 import brain
+import conversation_state
+import dates
 import db
 import conversation_jobs as jobs
 import llm
 import projects
 import choices
 import task_context
+import task_targets
 import write_guard
 
 SKILLS_DIR = os.path.join(db.ROOT, "skills")
@@ -244,7 +247,7 @@ class _Run:
             return self._reject(err)
         if not title.strip():
             return self._reject('タイトルが空です。具体的な内容を指定してください')
-        dup = brain._duplicate_of(title)
+        dup = task_targets._duplicate_of(title)
         if dup:
             return f"#{dup['id']}「{dup['title']}」が既にあるので追加しませんでした"
         t = db.add_task(title, project=project or None, due=due, notes=notes)
@@ -322,7 +325,7 @@ In the reply, never show task ids, # numbers, [brackets] or memo text; just the 
 
 Today is {today.isoformat()} ({brain.WEEKDAYS[today.weekday()]}), now {dt.datetime.now():%H:%M}.
 Calendar:
-{brain._calendar(today)}
+{dates._calendar(today)}
 
 Things the user asked you to remember:
 {memories}
@@ -370,7 +373,7 @@ def _steps(cfg, messages, tools, run):
                     a = json.loads(a)
                 except json.JSONDecodeError:
                     a = {'invalid_json': True}
-            brain._progress["detail"] = _TOOL_LABELS.get(name, name)
+            conversation_state.set_detail(_TOOL_LABELS.get(name, name))
             result = run.call(name, a)
             if run.error:
                 rejected.append(run.error)
@@ -383,7 +386,7 @@ def _steps(cfg, messages, tools, run):
                 if run.events:
                     reply += '\n完了した操作は下の記録を確認してください。'
                 break
-            brain._progress['detail'] = '確認して書き直し中'
+            conversation_state.set_detail('確認して書き直し中')
     else:
         # Out of steps: write the reply from what has been gathered so far rather than failing.
         messages.append({"role": "user", "content": "ここまでの結果をもとに、ユーザーへの返事を書いてください。"})
@@ -430,16 +433,13 @@ def _run(text, cfg, message_id=None, timing=None):
 
     if skill.get("action"):
         if skill["action"] == "next":  # uses the model, so share the chat's lock and progress
-            with brain._lock:
+            with conversation_state.running("次にやることを考え中"):
                 timing["started_at"] = db.now()
-                brain._stage("次にやることを考え中")
                 try:
                     reply, handoffs = actions.run_action(skill["action"], args, cfg)
                 except llm.LLMError:
                     db.set_message_status(message_id, "pending")
                     return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": brain.PENDING_NOTE}
-                finally:
-                    brain._stage(None)
         else:
             reply, handoffs = actions.run_action(skill["action"], args, cfg)
         if reply is None:
@@ -451,9 +451,8 @@ def _run(text, cfg, message_id=None, timing=None):
     if skill.get("save-args") == "memory" and args.strip():
         memo = f"{dt.date.today().isoformat()}: {args.strip()}"
         saved.append(f"・ 覚えました（#{db.add_memory(memo)}）: {memo}")
-    with brain._lock:
+    with conversation_state.running(f"/{skill['name']} を実行中"):
         timing["started_at"] = db.now()
-        brain._stage(f"/{skill['name']} を実行中")
         try:
             reply, r = _procedure(skill, args.strip(), cfg, message_id)
             r.events[:0] = saved
@@ -468,8 +467,6 @@ def _run(text, cfg, message_id=None, timing=None):
             db.add_message("notice", "\n".join(done))
             return {"reply": brain.PARTIAL_NOTE, "events": done, "handoffs": r.handoffs if r else [],
                     "ui": r.ui if r else {}, "intent": "skill", "partial": True}
-        finally:
-            brain._stage(None)
     reply = brain.clean_model_reply(reply, r.events)
     if "タイマー" in reply and not db.get_setting("pending_focus"):
         # The model often asks "集中タイマー始めよっか？" without calling offer_focus: register

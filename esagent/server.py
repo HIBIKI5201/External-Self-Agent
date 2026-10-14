@@ -16,6 +16,7 @@ sys.path.insert(0, HERE)
 
 import admin  # noqa: E402
 import brain  # noqa: E402
+import conversation_state  # noqa: E402
 import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
@@ -31,6 +32,7 @@ import pomodoro  # noqa: E402
 import projects  # noqa: E402
 import recurring  # noqa: E402
 import skills  # noqa: E402
+import status_question  # noqa: E402
 import youtube  # noqa: E402
 import choices  # noqa: E402
 import task_context  # noqa: E402
@@ -44,7 +46,7 @@ import playback
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
-brain._status_cfg = CFG
+conversation_state.configure(CFG)
 log = logging.getLogger("esagent")
 traffic = runtime_log.Traffic(log)
 
@@ -73,7 +75,7 @@ def state():
 
 def pet_state():
     """What the desktop cat should look like right now."""
-    prog = brain.progress()
+    prog = conversation_state.snapshot()
     pomo = pomodoro.state(CFG)
     llm_ok = llm.status(CFG).get("model", False)
     today = db.now()[:10]
@@ -186,9 +188,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/pet":
             return self._send(200, pet_state())
         if path == "/api/progress":
-            return self._send(200, brain.progress())
+            return self._send(200, conversation_state.snapshot())
         if path == "/api/chat/bypass":  # messages the window sends without queueing (#23)
-            return self._send(200, {"pattern": brain._STATUS_RE.pattern, "exclude": brain._TASK_REF_RE.pattern})
+            return self._send(200, {"pattern": status_question._STATUS_RE.pattern, "exclude": status_question._TASK_REF_RE.pattern})
         if path == "/api/commands":
             return self._send(200, skills.catalog())
         if path == "/api/admin/tables":

@@ -7,10 +7,12 @@ import datetime as dt
 import re
 
 import brain
+import conversation_state
 import db
 import gsync
 import linked_todos
 import recurring
+import task_targets
 
 _DATE_TAG_RE = re.compile(r"\(=(\d{4}-\d{2}-\d{2})\)$")
 
@@ -66,7 +68,7 @@ def _find_task(ref):
     ref = ref.strip().lstrip("#")
     if ref.isdigit():
         return db.get_task(int(ref)), []
-    scored = sorted(((brain._similarity(ref, t["title"]), t) for t in db.list_tasks()),
+    scored = sorted(((task_targets._similarity(ref, t["title"]), t) for t in db.list_tasks()),
                     key=lambda x: -x[0])
     if scored and scored[0][0] >= 0.5 and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.15):
         return scored[0][1], []
@@ -114,12 +116,8 @@ def run_action(action, args, cfg):
     elif name == "/summary":
         reply = brain._summary_reply(today)
     elif name == "/next":
-        with brain._lock:
-            brain._stage("次にやることを考え中")
-            try:
-                reply = brain._advice_reply(cfg, "何からやればいい？", today, args)
-            finally:
-                brain._stage(None)
+        with conversation_state.running("次にやることを考え中"):
+            reply = brain._advice_reply(cfg, "何からやればいい？", today, args)
     elif name == "/add":
         title, due, project = _split_args(args, today)
         if project in NO_PROJECT:

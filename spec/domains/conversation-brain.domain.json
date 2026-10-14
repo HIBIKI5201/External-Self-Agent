@@ -17,7 +17,7 @@
       "pathPattern": "(^|/)(tests/test_memory_intent\\.py|spec/test/memory-intent-46\\.md)$"
     },
     {
-      "pathPattern": "(^|/)esagent/brain\\.py$"
+      "pathPattern": "(^|/)esagent/(brain|conversation_state|dates|reply_filters|status_question|task_apply|task_targets)\\.py$"
     },
     {
       "pathPattern": "(^|/)(esagent/write_guard\\.py|tests/test_write_permission\\.py)$"
