@@ -228,7 +228,7 @@ def read_server(paths, since, until):
                         if http:
                             code = http[1] if http.lastindex else re.search(r'" ([1-5]\d\d) ', line)[1]
                             statuses[code] = statuses.get(code, 0) + 1
-                        summary = re.search(r" poll summary GET /api/[\w/]+ 200 count=(\d+) window_seconds=(\d+(?:\.\d+)?)$", line.strip())
+                        summary = re.search(r" poll summary (?:GET|POST) /api/[\w/]+ 200 count=(\d+) window_seconds=(\d+(?:\.\d+)?)$", line.strip())
                         if summary:
                             start = at - dt.timedelta(seconds=float(summary[2]))
                             if float(summary[2]) > 0 and (since is None or start >= since):
