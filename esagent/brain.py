@@ -1409,6 +1409,9 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     reply = clean_model_reply(reply, events)
     reply, offered = strip_model_offers(reply)
     reply, promised = strip_promises(reply)
+    reply, alarmed = strip_alarm_promises(reply)
+    if alarmed:  # no alarm exists; say so instead of the promise (#205)
+        reply = _alarm_flow(text) or (reply + "\n" + ALARM_REPLY.format(when="")).strip()
     if not reply and promised:
         reply = "うん、そうなんだね。"
     if promised == "behavior" or behavior_wish(text):
@@ -1518,6 +1521,42 @@ def strip_promises(reply):
 def behavior_wish(text):
     """「次からは分類が分からない時は聞いてね」: a wish about how Es should behave from now on."""
     return any(_FUTURE_WISH_RE.search(c) for c in re.split(r"[。！!\n]", text) if c.strip())
+
+
+# 「7時半に起こして」「10分後に教えて」: there is no alarm or reminder, so a promise to wake or notify
+# the user at a time could make them oversleep (#205). Code answers; the model may not promise it.
+_TIME_RE = r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})(?:時(?:半|\d{1,2}分)?|分後|時間後)"
+_ALARM_ASK_RE = re.compile(
+    _TIME_RE + r"(?:頃|ごろ|くらい|ぐらい)?(?:に|には|になったら)[、\s]*(?:(?:私|俺|僕|わたし|ぼく|おれ)を)?"
+    r"(?:起こし|知らせ|教え|声(?:を)?かけ|呼ん|通知し|鳴らし|リマインドし)(?:て|てね|てほしい|てくれ|てください|てくれる|てもらえる)|"
+    r"(?:アラーム|目覚まし|リマインダー)(?:を)?(?:かけ|セットし|設定し|仕掛け)(?:て|てね|てほしい|てくれ|てください|てくれる)")
+_ALARM_PROMISE_RE = re.compile(
+    r"起こして(?:あげる|あげます|あげるね|おく|おくね)|起こす(?:ね|よ|から)|起こします|" +
+    _TIME_RE +r"[^。！!？?\n]{0,12}(?:お知らせ|知らせ|教え|声をかけ|呼び|呼ぶ|通知)(?:する|るね|ますね|ます|てあげる|ね)|"
+    r"アラーム(?:を)?(?:設定|セット)(?:しました|したよ|しておく|しておきます|する|します)")
+ALARM_REPLY = ("ごめんね、決まった時刻に起こしたり知らせたりする機能は、まだ私にはないの。"
+               "{when}確実に気づけるように、スマホや時計のアラームを使ってね。")
+
+
+def alarm_request(text):
+    return bool(_ALARM_ASK_RE.search(text or ""))
+
+
+def _alarm_flow(text):
+    m = _ALARM_ASK_RE.search(text or "")
+    if not m:
+        return None
+    when = re.match(_TIME_RE, m.group(0))
+    return ALARM_REPLY.format(when=f"{when.group(0)}に" if when and "後" not in when.group(0) else "")
+
+
+def strip_alarm_promises(reply):
+    """Remove sentences promising to wake or notify the user at a time. Returns (reply, removed)."""
+    sentences = re.split(r"(?<=[。！!？?\n])", reply)
+    kept = [s for s in sentences if not _ALARM_PROMISE_RE.search(s)]
+    if len(kept) == len(sentences):
+        return reply, False
+    return "".join(kept).strip(), True
 
 
 def strip_model_offers(reply):
@@ -2341,6 +2380,10 @@ def _chat(text, cfg, message_id=None):
             reply, ui = offer
             db.add_message("assistant", reply)
             return {"reply": reply, "events": [], "handoffs": [], "ui": ui, "intent": "offer"}
+        alarm = _alarm_flow(text)
+        if alarm:  # 「7時半に起こして」: no alarm exists, answered by code (#205)
+            db.add_message("assistant", alarm)
+            return {"reply": alarm, "events": [], "handoffs": [], "intent": "alarm"}
         forget = _forget_flow(text)
         if forget:
             db.add_message("assistant", forget)
