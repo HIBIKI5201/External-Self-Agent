@@ -61,4 +61,6 @@ def test_warm_up_failure_is_logged():
 
 def test_other_stops_keep_the_generic_reply():
     assert "履歴とタスクを確認" in jobs.stopped_reply("")
-    assert "モデルの準備ができたら" in jobs.stopped_reply("Ollama がエラーを返しました (500): x")
+    # A reply cut at the time limit (#198) is said as it is, without blaming the connection.
+    cut = jobs.stopped_reply("返事に 30 秒以上かかったので打ち切りました（Ollama にはつながっています）。")
+    assert cut.startswith("返事に 30 秒以上") and "Ollama が起動したら" not in cut and "履歴とタスク" not in cut

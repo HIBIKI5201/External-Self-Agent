@@ -259,11 +259,12 @@ def _work(request_id, revision, body, cfg, operation):
 
 
 def stopped_reply(reason=""):
-    """The reply of a request that ended without one. A model error (Ollama not running, #190) is said
-    as it is: the conversation stopped before any task change, so it does not ask to check the tasks."""
+    """The reply of a request that ended without one. A model error (cannot connect, a reply cut at the
+    time limit, #190/#198) is said as it is: the conversation stopped before any task change, so it does
+    not ask to check the tasks."""
     if reason:
-        when = "Ollama が起動したら" if "接続できません" in reason else "モデルの準備ができたら"
-        return f"{reason}\nこの発言にはまだ返事できていないよ。{when}、もう一度送ってね。"
+        when = "Ollama が起動したら、" if "接続できません" in reason else ""
+        return f"{reason}\nこの発言にはまだ返事できていないよ。{when}もう一度送ってね。"
     return "処理を完了できませんでした。自動再実行はせず、履歴とタスクを確認してください。"
 
 
