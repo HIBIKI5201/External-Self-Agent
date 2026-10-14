@@ -160,22 +160,26 @@ def _project(text):
 
 
 # 「デイリーは朝九時にリセット」 kept with /remember: a candidate period for a new daily task (#177).
-_KANJI_NUM = {c: i for i, c in enumerate('〇一二三四五六七八九', 0)}
-_MEMORY_TIME = re.compile(r'(?P<ampm>朝|午前|午後|夜|夕方)?\s*(?P<h>\d{1,2}|十[一二三]?|[一二三四五六七八九]|二十[一二三]?)\s*時'
-                          r'\s*(?:(?P<half>半)|(?P<m>\d{1,2})\s*分)?')
+_KANJI_HOUR = re.compile(r'(二十[一二三]?|十[一二]?|[一二三四五六七八九])(?=\s*時)')
+_TIME_START = re.compile(r'(?:午前|午後|朝|昼|夕方|夜|深夜)?\s*\d{1,2}\s*(?:時|:)')
 _WEEKDAY_RE = re.compile(r'([月火水木金土日])曜')
 
 
-def _hour(word):
-    if word.isdigit():
-        return int(word)
-    tens = 10 * (2 if word.startswith('二十') else 1) if '十' in word else 0
-    rest = word.split('十')[-1]
-    return tens + (_KANJI_NUM[rest] if rest else 0)
+def _arabic_hours(text):
+    """「九時」 -> 「9時」, so recurring.read reads the time (#177)."""
+    def number(m):
+        word = m[1]
+        tens = (20 if word.startswith('二十') else 10) if '十' in word else 0
+        rest = word.split('十')[-1]
+        return str(tens + ('〇一二三四五六七八九'.index(rest) if rest else 0))
+    return _KANJI_HOUR.sub(number, text)
 
 
 def _remembered_rule(kind, project):
-    """(rule, memory text) from the one stored memory that gives this kind's reset time, else None."""
+    """(rule, memory text) from the stored memories that give this kind's reset time, when they agree.
+
+    The time is read by recurring.read, as in a request: 「デイリーは朝九時にリセット」 is read as
+    「毎日朝9時」. A weekly memory without a day gives nothing."""
     words = _KINDS[0][1] if kind == 'weekly' else _KINDS[1][1]
     found = set()
     for memory in db.list_memories():
@@ -183,16 +187,11 @@ def _remembered_rule(kind, project):
         other = _project(text)
         if not words.search(text) or not re.search(r'リセット|更新|切り替', text) or (project and other and other != project):
             continue
-        rule = recurring.parse(text)
-        m = _MEMORY_TIME.search(text)
-        if not rule and m:
-            hour = _hour(m['h']) + (12 if m['ampm'] in ('午後', '夜', '夕方') and _hour(m['h']) < 12 else 0)
-            minute = 30 if m['half'] else int(m['m'] or 0)
-            day = _WEEKDAY_RE.search(text)
-            if kind == 'daily':
-                rule = f'daily {hour:02d}:{minute:02d}'
-            elif day:
-                rule = f'weekly {recurring.WEEKDAYS.index(day[1])} {hour:02d}:{minute:02d}'
+        plain = _arabic_hours(text)
+        rule = recurring.read(plain)[0]
+        time, day = _TIME_START.search(plain), _WEEKDAY_RE.search(plain)
+        if not rule and time and (kind == 'daily' or day):
+            rule = recurring.read(('毎日' if kind == 'daily' else f'毎週{day[1]}曜') + plain[time.start():])[0]
         if recurring.valid_rule(rule) and rule.startswith(kind):
             found.add((rule, text))
     return min(found) if len({rule for rule, _ in found}) == 1 else None
@@ -323,16 +322,18 @@ def _repeat_check(text, history):
         return reply, None
     projects = {t['project'] for t in unset}
     project = projects.pop() if len(projects) == 1 else None
+    # Only the period of the kind asked about (週課 → weekly), and only for the tasks asked about.
+    kinds = {kind for kind, pattern in _KINDS if pattern.search(text) or any(pattern.search(t['title']) for t in unset)}
+    kind = kinds.pop() if len(kinds) == 1 else None
     rules = {t['repeat'] for t in db.list_tasks(include_done=True, project=project)
-             if project and recurring.valid_rule(t.get('repeat'))}
+             if project and kind and recurring.valid_rule(t.get('repeat')) and t['repeat'].startswith(kind)}
     rule = rules.pop() if len(rules) == 1 else None
-    if not rule and project:
-        kinds = {kind for kind, pattern in _KINDS if pattern.search(text) or any(pattern.search(t['title']) for t in unset)}
-        remembered = _remembered_rule(kinds.pop(), project) if len(kinds) == 1 else None
+    if not rule and project and kind:
+        remembered = _remembered_rule(kind, project)
         rule = remembered[0] if remembered else None
-    if not project or not rule:
+    targets = [t for t in unset if t['status'] != 'done']
+    if not project or not rule or not targets:
         return reply + '\n周期を「〇〇を毎週月曜9時にリセットして」のように教えてくれれば設定するよ。タスクは変更していないよ。', None
-    targets = [t for t in db.list_tasks(project=project) if not recurring.valid_rule(t.get('repeat'))]
     offer_reply, offer = _bulk_offer(project, rule, targets)
     return reply + '\n' + offer_reply, offer
 

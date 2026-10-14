@@ -63,6 +63,7 @@ def test_not_repeating_question_answers_the_setting_and_offers_the_period():
         a = db.add_task('週課の交換', project='Warframe')
         recurring.set_rule(a['id'], 'weekly 0 09:00')
         b = db.add_task('週課のアルコン', project='Warframe')
+        db.add_task('新フレーム作成', project='Warframe')  # not asked about: never in the offer
         db.add_message('user', '週課のアルコンを追加して')
         db.add_message('assistant', '「週課のアルコン」を追加したよ。')
         db.add_message('notice', f'＋ #{b["id"]} 週課のアルコン（Warframe）')
@@ -70,9 +71,11 @@ def test_not_repeating_question_answers_the_setting_and_offers_the_period():
         r = sb.chat('さっき入れたのが繰り返しになってないように見える')
         assert f'#{b["id"]} 週課のアルコン: 繰り返しなし' in r['reply'], r
         assert r['intent'] == 'proposal' and '毎週月 09:00にリセットする設定にする' in r['reply'], r
+        assert '新フレーム作成' not in r['reply'], r
         assert tasks()['週課のアルコン'] == ('Warframe', None)
         sb.chat('うん')
         assert tasks()['週課のアルコン'] == ('Warframe', 'weekly 0 09:00'), tasks()
+        assert tasks()['新フレーム作成'] == ('Warframe', None), tasks()
 
         r = sb.chat('週課の交換って繰り返しになってる？')
         assert '週課の交換: 毎週月 09:00にリセット' in r['reply'] and not r.get('choices'), r
@@ -86,3 +89,17 @@ def test_unknown_period_and_talk_change_nothing():
         assert tasks() == {'買い物': (None, None)}
         assert brain.repeat_chat.bulk_repeat('毎日の繰り返しって大変だよね', []) is None
         assert brain.repeat_chat.bulk_repeat('繰り返しになってないように見える', []) is None  # no task named
+
+
+def test_only_the_asked_kind_and_the_asked_tasks_are_offered():
+    with Sandbox(copy_real=False) as sb, patch.object(llm, 'chat', side_effect=AssertionError('no model')):
+        db.ensure_project('Warframe')
+        daily = db.add_task('日課の報酬', project='Warframe')
+        recurring.set_rule(daily['id'], 'daily 05:00')
+        db.add_task('週課のアルコン', project='Warframe')
+        db.add_task('新フレーム作成', project='Warframe')
+        r = sb.chat('週課のアルコンって毎週リセットされる？')
+        assert '週課のアルコン: 繰り返しなし' in r['reply'] and '毎日 05:00' not in r['reply'], r
+        assert not r.get('choices') and '新フレーム作成' not in r['reply'], r
+        sb.chat('うん')
+        assert tasks()['週課のアルコン'] == ('Warframe', None) and tasks()['新フレーム作成'] == ('Warframe', None), tasks()
