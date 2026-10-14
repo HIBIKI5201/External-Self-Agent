@@ -22,6 +22,7 @@ import conversation_context
 import conversation_game
 import playback
 import conversation_jobs as jobs
+import events
 import utterances
 import calendar_view
 
@@ -2064,7 +2065,8 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
         _progress.update(text=text, message_id=message_id)
         result = None
         try:
-            selected = choices.before(text, selection)
+            # 「うん」 right after the timer's 「次、いく？」 answers the timer, not an offer (#171).
+            selected = None if selection is None and _answers_timer_question(text) else choices.before(text, selection)
             with db.connect() as con:
                 last_id = con.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
             result = _choice_reply(selected, cfg, message_id) if selected else _chat(text, cfg, message_id)
@@ -2206,18 +2208,58 @@ _DONE_REPLY_RE = re.compile(r"^(?:うん|はい)?[、,\s]*(?:終わった|おわ
 _NOT_YET_RE = re.compile(r"まだ|途中|終わってない|終わらな|できてない|出来てない")
 
 
-def _es_reply_flow(text, message_id):
-    """A short answer to the focus timer's 「〇〇、終わった？」 that Es just asked (#139).
+# 「次、いく？」 after a break (#171): a short yes starts the next focus, a short "later" leaves the timer.
+_GO_REPLY_RE = re.compile(r"^(?:(?:うん|はい|よし|じゃあ|おっけー|オッケー|ok)[、,\s]*)*"
+                          r"(?:行こう|いこう|行こ|いこ|行く|いく|やる|やろう|やろ|続ける|続けよう|つづける|つづけよう|"
+                          r"始める|始めよう|はじめる|はじめよう|集中する|集中しよう|うん|はい|いいよ|おっけー|オッケー|ok)"
+                          r"(?:か|っか|ね|よ|ぜ|ー|〜|[!！。?？])*$", re.I)
+_LATER_RE = re.compile(r"あとで|後で|あとにする|休む|休みたい|休もう|やめとく|やめておく|今はいい|いまはいい|もうちょっと|もう少し|まだ")
 
-    「終わったよ」 completes that task, as the notice's own 「終わった」 button does; 「まだ途中」 keeps it.
-    Anything else goes on as usual, with the line in the context. Returns (reply, records) or None."""
+
+def _es_reply_flow(text, message_id, cfg=None):
+    """A short answer to a question the focus timer just asked (#139, #171).
+
+    - 「〇〇、終わった？」: 「終わったよ」 completes that task, as the notice's 「終わった」 button does;
+      「まだ途中」 keeps it.
+    - 「休憩おわり。次、いく？」: 「行こうか」 starts the next focus (same task), as 「集中する」 does;
+      「あとで」 leaves the timer alone.
+    Anything else goes on as usual, with the line in the context. Returns (reply, records) or None.
+    An answer also takes the buttons off that question in the window and on the cat."""
     line = utterances.answered_line(message_id)
     ref = (line or {}).get("ref") or {}
-    if not line or line["kind"] != "question" or ref.get("event") != "focus_end" or not ref.get("task_id"):
-        return None
-    task = db.get_task(int(ref["task_id"]))
     said = text.strip()
-    if not task or len(said) > 20 or re.search(r"[？?]", said):
+    if not line or line["kind"] != "question" or len(said) > 20:
+        return None
+    if ref.get("event") == "focus_end" and ref.get("task_id"):
+        answered = _focus_end_reply(said, int(ref["task_id"]))
+    elif ref.get("event") == "break_end":
+        answered = _break_end_reply(said, cfg)
+    else:
+        return None
+    if answered is not None and line.get("event_key"):
+        events.push("question_answered", question=line["event_key"])
+    return answered
+
+
+def _answers_timer_question(text):
+    """Whether a message not stored yet would be taken as the answer to the timer's question just before."""
+    with db.connect() as con:
+        next_id = con.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM messages").fetchone()[0]
+    line = utterances.answered_line(next_id)
+    said = text.strip()
+    if not line or line["kind"] != "question" or len(said) > 20:
+        return False
+    event = (line.get("ref") or {}).get("event")
+    if event == "focus_end":
+        return bool(_DONE_REPLY_RE.search(said) or _NOT_YET_RE.search(said)) and not re.search(r"[？?]", said)
+    if event == "break_end":
+        return bool(_GO_REPLY_RE.search(said) or (_LATER_RE.search(said) and not re.search(r"[？?]", said)))
+    return False
+
+
+def _focus_end_reply(said, task_id):
+    task = db.get_task(task_id)
+    if not task or re.search(r"[？?]", said):
         return None
     if _DONE_REPLY_RE.search(said):
         if task["status"] == "done":
@@ -2230,6 +2272,21 @@ def _es_reply_flow(text, message_id):
     if _NOT_YET_RE.search(said):
         return f"了解、「{task['title']}」はそのままにしておくね。休憩したら続きをやろう。", []
     return None
+
+
+def _break_end_reply(said, cfg):
+    import pomodoro
+    if _LATER_RE.search(said) and not re.search(r"[？?]", said):
+        return "了解、タイマーは止めたままにしておくね。始めるときは声をかけて。", []
+    if not _GO_REPLY_RE.search(said):
+        return None
+    if pomodoro.state(cfg or {})["mode"] != "idle":
+        return "もう集中タイマーは動いてるよ。", []
+    with jobs.boundary():
+        st = pomodoro.start(cfg or {})
+    title = st.get("task") or ""
+    return ("うん、集中タイマーを始めたよ。",
+            ["✎ 集中タイマーを始めました" + (f"（{title}）" if title else "")])
 
 
 def _chat(text, cfg, message_id=None):
@@ -2248,8 +2305,8 @@ def _chat(text, cfg, message_id=None):
         task_context.clear()
         db.add_message("assistant", game_reply)
         return {"reply": game_reply, "events": [], "handoffs": [], "intent": "game"}
-    answered = _es_reply_flow(text, message_id)
-    if answered is not None:  # 「終わったよ」 to the timer's 「〇〇、終わった？」 (#139)
+    answered = _es_reply_flow(text, message_id, cfg)
+    if answered is not None:  # 「終わったよ」「行こうか」 to the timer's questions (#139, #171)
         reply, records = answered
         db.add_message("assistant", reply)
         if records:
