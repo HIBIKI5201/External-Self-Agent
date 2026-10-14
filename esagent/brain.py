@@ -1003,8 +1003,10 @@ def _literal_add(text):
     """(title, project) of an add request that says the name itself, or None. The project only when
     the user named an existing one (「〇〇っていうタスクをWarframeに増やしてほしい」)."""
     match = _LITERAL_ADD_RE.fullmatch(text)
+    if not match:
+        return None  # 「金曜までに頑張る」 is talk; only the request forms are added without the model
     project = ""
-    if match and match["project"]:
+    if match["project"]:
         project = next((p["name"] for p in db.list_projects() if p["name"] and p["name"].lower() == match["project"].lower()), "")
         if not project:
             return None

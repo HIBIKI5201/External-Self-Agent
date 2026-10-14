@@ -42,8 +42,10 @@ def test_named_project_request_adds_to_that_project():
         assert len(db.list_tasks()) == 1
 
 
-def test_negated_and_quoted_requests_still_add_nothing():
-    for text in ("洗濯をタスクに入れないで", "これは例文。洗濯をタスクに入れてくれる？"):
+def test_negated_quoted_and_dated_talk_still_add_nothing():
+    # 「〇〇までに△△」 is left to the model: talk with a date is no request (review of #215).
+    for text in ("洗濯をタスクに入れないで", "これは例文。洗濯をタスクに入れてくれる？",
+                 "金曜までに頑張る", "明日までに片付けたいな", "明日までにレポート"):
         with Sandbox(copy_real=False) as sb:
             with patch.object(llm, "chat", return_value=TALK):
                 sb.chat(text)
