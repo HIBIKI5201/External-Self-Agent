@@ -681,7 +681,9 @@ $("#input").addEventListener("keydown", (e) => {
 $("#add").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  await api("/api/tasks", { title: f.get("title"), project: f.get("project"), due: f.get("due") });
+  // A failure says why and keeps what was typed (#249).
+  try { await api("/api/tasks", { title: f.get("title"), project: f.get("project"), due: f.get("due") }); }
+  catch (err) { window.Es?.say("追加できなかった… " + err.message, { ms: 6000 }); return; }
   e.target.title.value = ""; e.target.due.value = "";
   refresh();
 });
@@ -712,7 +714,9 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("change", async (e) => {
   const id = e.target.dataset.toggle;
   if (!id || e.target.disabled) return;
-  await api(`/api/tasks/${id}`, { status: e.target.checked ? "done" : "todo" });
+  // A refused change (a read-only task, #182) puts the box back and says why (#249).
+  try { await api(`/api/tasks/${id}`, { status: e.target.checked ? "done" : "todo" }); }
+  catch (err) { e.target.checked = !e.target.checked; window.Es?.say(err.message, { ms: 6000 }); }
   refresh();
 });
 
