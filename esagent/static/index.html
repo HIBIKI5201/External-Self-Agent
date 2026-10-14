@@ -483,8 +483,15 @@ function renderLive() {
   log.scrollTop = log.scrollHeight;
 }
 
+// One pump loop at a time (#179): busy is cleared while the screen refreshes between messages,
+// and a message sent during that refresh must not start a second loop over the same queue.
+let pumping = false;
 async function pump() {
-  if (busy) return;
+  if (busy || pumping) return;
+  pumping = true;
+  try { await pumpQueue(); } finally { pumping = false; }
+}
+async function pumpQueue() {
   while (queue.length) {
     busy = true;
     document.querySelectorAll("button[data-offer]").forEach(b => { b.disabled = true; });
@@ -499,8 +506,8 @@ async function pump() {
     }, 500);
     renderLive();
     let delivered = true;
+    const item = queue[0];
     try {
-      const item = queue[0];
       await submitItem(item);
       const job = await waitJob(item);
       const r = job.result || {};
@@ -509,12 +516,12 @@ async function pump() {
       }
       offline = false;
       if (r.pending) window.Es?.say(r.note, { ms: 6000, record: false });
-      else if (!queue[0].invalidated && job.state !== "superseded") window.Es?.react(r);  // a "うん" to a focus offer is started by the server
+      else if (!item.invalidated && job.state !== "superseded") window.Es?.react(r);  // a "うん" to a focus offer is started by the server
     } catch (err) {
       if (err.offline) { offline = true; delivered = false; }   // keep it and try again
       else {
         window.Es?.say("送れなかった… " + err.message, { ms: 6000 });
-        if (!$("#input").value && queue[0]?.text) $("#input").value = queue[0].text;
+        if (!$("#input").value && item?.text) $("#input").value = item.text;
       }
     }
     clearInterval(thinkTimer); clearInterval(stagePoll);
@@ -525,7 +532,8 @@ async function pump() {
       setTimeout(pump, 3000);
       return;
     }
-    queue.shift();
+    const at = queue.indexOf(item);  // the answered message, even if the queue changed meanwhile
+    if (at >= 0) queue.splice(at, 1);
     saveQueue();
     busy = false;
     await refresh();
