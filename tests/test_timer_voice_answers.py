@@ -68,7 +68,8 @@ def test_lets_go_while_the_timer_already_runs_does_not_restart_it():
 
 
 def test_other_yes_words_start_focus():
-    for said in ("うん", "やる", "続けよう", "いこっか", "よし、やろう！", "集中する"):
+    for said in ("うん", "やる", "続けよう", "いこっか", "よし、やろう！", "集中する",
+                 "まだいける", "まだやれる", "うん、まだいける", "もう少しだけ集中する"):
         with Sandbox(copy_real=False) as sb:
             finish_break(sb, db.add_task("合成の資料"))
             r = answer(sb, said)
@@ -76,7 +77,7 @@ def test_other_yes_words_start_focus():
 
 
 def test_later_leaves_the_timer_and_says_so():
-    for said in ("あとで", "もうちょっと休む", "まだいい"):
+    for said in ("あとで", "もうちょっと休む", "まだ休みたい", "もう少し待って"):
         with Sandbox(copy_real=False) as sb:
             finish_break(sb, db.add_task("合成の資料"))
             mark = events.last_id()
