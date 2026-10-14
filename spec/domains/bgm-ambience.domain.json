@@ -24,6 +24,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/playback\\.py|tests/test_playback_context\\.py|tests/test_playback_ui\\.js|spec/test/playback-context-101\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_bgm_window_url\\.py$"
     }
   ],
   "source": "manual",

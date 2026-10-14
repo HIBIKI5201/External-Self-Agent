@@ -423,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
             db.set_setting("bgm_sync", json.dumps({"mode": body.get("mode"), "focusOnly": bool(body.get("focusOnly"))}))
             return {"ok": True}
         if path == "/api/bgm/window":
-            media.open_window(CFG, body["url"])
+            media.open_window(CFG, body.get("url"))
             return {"ok": True}
         if path == "/api/media":
             action = body.get("action", "status")
@@ -431,7 +431,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("action must be status, play or pause")
             return {"sessions": media.control(action)}
         if path == "/api/bgm":  # remember a pasted BGM URL in config.json
-            url, title = (body.get("url") or "").strip(), (body.get("title") or "YouTube").strip()[:80]
+            url, title = str(body.get("url") or "").strip(), str(body.get("title") or "YouTube").strip()[:80]
+            if url:
+                url = media.youtube_url(url)  # the list goes back to /api/bgm/window as is (#234)
             if url and not any(b["url"] == url for b in CFG.setdefault("bgm", [])):
                 CFG["bgm"].append({"title": title, "url": url})
                 db.save_config(CFG)
