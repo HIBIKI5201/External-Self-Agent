@@ -84,9 +84,9 @@ def handle(text, history):
     adding, stopping = bool(_ADD.search(text)), bool(_STOP.search(text))
     source, before, tail = _source(text)
     same = _SAME.search(text)
-    rule = recurring.parse(text)
-    if recurring._RULE_RE.search(text) and not rule:
-        return '時刻を読み取れなかったよ。0〜23時・0〜59分で指定してね。' + unchanged, []
+    rule, problem = recurring.read(text)
+    if problem:  # 「毎週月曜」 without a time, or 「午後25時」: never saved as some other time (#196)
+        return problem + unchanged, []
     if same:
         if not source:
             return 'どのタスクと同じ周期にするか、一意に特定できなかったよ。参照元の番号を教えてね。' + unchanged, []
@@ -107,8 +107,8 @@ def handle(text, history):
         if same:
             title = _new_title(before) if before else _new_title(tail)
         else:
-            m = recurring._RULE_RE.search(text)
-            title = _new_title(text[:m.start()]) or _new_title(text[m.end():]) if m else None
+            plain, m = recurring._untagged(text), recurring.find(text)
+            title = _new_title(plain[:m.start()]) or _new_title(plain[m.end():]) if m else None
         if not title:
             return '追加するタスク名を「」で囲んで教えてね。' + unchanged, []
         existing = [t for t in db.list_tasks() if t['title'] == title]
@@ -168,7 +168,8 @@ def periodic_add(text, history):
         return None
     unchanged = 'タスクは変更していないよ。'
     project = _project(outside)
-    if recurring._RULE_RE.search(text):
+    rule, problem = recurring.read(text)
+    if rule or (problem and problem != recurring.ASK_TIME):
         result = handle(text, history)
         if result and project:
             reply, events = result
@@ -221,7 +222,9 @@ def bulk_repeat(text):
     targets = [t for t in tasks if not recurring.valid_rule(t.get('repeat'))]
     if not targets:
         return f'{project}の未完了のタスクは、もう全部に繰り返しが設定されているよ。タスクは変更していないよ。', None
-    rule = recurring.parse(text)
+    rule, problem = recurring.read(text)
+    if problem:
+        return problem + 'タスクは変更していないよ。', None
     if not rule:
         rules = {t['repeat'] for t in db.list_tasks(include_done=True, project=project) if recurring.valid_rule(t.get('repeat'))}
         if len(rules) != 1:

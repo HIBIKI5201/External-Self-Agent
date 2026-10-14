@@ -653,6 +653,9 @@ def _apply_current(actions, cfg, user_text="", context_text=""):
             rule = recurring.parse(user_text) or recurring.parse(context_text)
             if rule:
                 t = recurring.set_rule(t["id"], rule)
+            elif recurring.read(user_text)[1]:  # 「毎週月曜」 without a time: not saved as 0:00 (#196)
+                events.append(f"⚠ #{t['id']} {t['title']} の繰り返しは、時刻が読み取れなかったので設定していません"
+                              f"（「/repeat {t['id']} 毎週月曜9時」のように指定できます）")
             known_ids.add(t["id"])
             touched = t
             events.append(f"＋ #{t['id']} {t['title']}"
@@ -835,7 +838,7 @@ _REPEAT_ASK_RE = re.compile(r"[？?]|どう|仕組み|なって|されて|でき
 def _repeat_question_flow(text):
     if not (_REPEAT_TOPIC_RE.search(text) and _REPEAT_ASK_RE.search(text)):
         return None
-    if recurring.parse(text) or _EXPLICIT_ADD_RE.search(text) or _DELEGATE_ASK_RE.search(text):
+    if recurring.mentioned(text) or _EXPLICIT_ADD_RE.search(text) or _DELEGATE_ASK_RE.search(text):
         return None  # "〇〇を毎週月曜9時にリセットして" is a request, handled as usual
     return recurring.explain()
 
