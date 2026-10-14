@@ -30,13 +30,24 @@ def _save(p):
     db.set_setting("pomo", json.dumps(p))
 
 
+def _drop_done_task(p):
+    """A finished (or deleted) task is no longer the timer's task (#189): the timer keeps running,
+    but the cat and the focus_end question stop naming it. Called with _lock held."""
+    t = db.get_task(int(p["task_id"])) if p.get("task_id") else None
+    if p.get("task_id") and (not t or t["status"] == "done"):
+        p["task_id"] = None
+        _save(p)
+    return p
+
+
 def _task_title(task_id):
     t = db.get_task(int(task_id)) if task_id else None
     return t["title"] if t else ""
 
 
 def state(cfg):
-    p = _load()
+    with _lock:
+        p = _drop_done_task(_load())
     focus, _, _ = _minutes(cfg)
     if p["mode"] == "idle":
         remaining = focus * 60
@@ -135,6 +146,7 @@ def tick(cfg):
         p = _load()
         if p["mode"] == "idle" or p["paused"] or time.time() < p["ends_at"]:
             return
+        _drop_done_task(p)
         focus, short, long_ = _minutes(cfg)
         if p["mode"] == "focus":
             is_long = p["round"] % 4 == 0

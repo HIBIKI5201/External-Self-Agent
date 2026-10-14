@@ -61,6 +61,17 @@ def work_area():
     return rc.l, rc.t, rc.r, rc.b
 
 
+def hover_text(pomo):
+    """The timer's state shown while the pointer is on the cat, or "" when idle (#189)."""
+    if not pomo or pomo.get("mode", "idle") == "idle":
+        return ""
+    mins = int(pomo.get("remaining", 0) // 60) + 1
+    what = "集中" if pomo["mode"] == "focus" else "休憩"
+    paused = "（一時停止中）" if pomo.get("paused") else ""
+    task = f"（{pomo['task']}）" if pomo.get("task") else ""
+    return f"{what}{paused} あと{mins}分{task}"
+
+
 class Pet:
     def __init__(self):
         self.root = tk.Tk()
@@ -171,13 +182,16 @@ class Pet:
         self.root.after(random.randint(9000, 18000), self._fidget)
 
     # ---- speech bubble ------------------------------------------------------------------
-    def say(self, text, buttons=None, secs=None, voice=True, key=None, kind="feedback", source="pet", ukey=None):
+    def say(self, text, buttons=None, secs=None, voice=True, key=None, kind="feedback", source="pet", ukey=None,
+            log=True):
         if self._hidden:
             return  # the chat window owns companion speech while the desktop cat is hidden
         # Everything the cat says goes to the one utterance log (#139); an event's line carries its key
-        # so the server, other windows and the cat record it only once.
-        body = {"text": text, "kind": kind, "source": source, **({"key": ukey} if ukey else {})}
-        threading.Thread(target=lambda: self._quiet(lambda: api("/api/es/said", body)), daemon=True).start()
+        # so the server, other windows and the cat record it only once. A display such as the timer's
+        # remaining time on hover is not something Es said, so it is not logged (#189).
+        if log:
+            body = {"text": text, "kind": kind, "source": source, **({"key": ukey} if ukey else {})}
+            threading.Thread(target=lambda: self._quiet(lambda: api("/api/es/said", body)), daemon=True).start()
         if voice and self.voice.get("enabled"):
             self._speak(text, key)
         self._close_bubble()
@@ -401,12 +415,10 @@ class Pet:
         self._open_chat()
 
     def _hover(self, e):
-        if self.bubble or not self.pomo or self.pomo.get("mode") == "idle":
+        text = hover_text(self.pomo)
+        if self.bubble or not text:
             return
-        mins = int(self.pomo.get("remaining", 0) // 60) + 1
-        what = "集中" if self.pomo["mode"] == "focus" else "休憩"
-        task = f"（{self.pomo['task']}）" if self.pomo.get("task") else ""
-        self.say(f"{what} あと{mins}分{task}", secs=2.5, voice=False)
+        self.say(text, secs=2.5, voice=False, log=False)
 
     @staticmethod
     def _greeting():
