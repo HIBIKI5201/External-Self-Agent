@@ -83,6 +83,9 @@ name refers to (a place, enemy, item, product) unless the user told you. Your ow
 in the records; never talk about tasks or work as if you had done them yourself. If the answer
 is not there (for example a word, code or number the user never told you), say honestly that you do not
 know or do not remember it. Never invent one.
+You cannot see what is happening outside this PC now (sales, news, weather, prices, releases, events, outages):
+never agree that something is happening there; say you cannot check it. Do not explain how to set up or use
+services, APIs or products you were not told about; offer 「/claude 調べて …」 instead.
 Never claim you did something that is not listed under "What just happened"."""
 _lock = threading.Lock()
 
@@ -809,6 +812,25 @@ def _meaning_flow(cfg, text):
     word = (f"「{term}」は英語だと「{gloss[:30]}」という意味の言葉だよ。" if meaningful
             else f"「{term}」は、言葉としての意味もうまく訳せなかった。")
     return (word + "ただ、それがゲームや作品の中で何を指すのかは、調べていないから私にはわからないんだ。"
+            "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
+
+
+# 「プライムセールやってんの？今。」 -- the model answered 「うん、プライムセールやってるね～」 (#208).
+# Es cannot look outside the PC, so what is happening out there now is not hers to confirm.
+_OUTSIDE_TOPIC_RE = re.compile(r"(?P<topic>[^\s、。！!？?]{0,12}(?:セール|キャンペーン|ニュース|天気|株価|値段|価格|"
+                               r"発売|リリース|メンテ(?:ナンス)?|障害|配信|ライブ|開催))")
+_OUTSIDE_ASK_RE = re.compile(r"(?:やって(?:る|ん|い)|始まって|終わって|開催|ある|出て(?:る|ん)|いくら|どう(?:なって|だった)|"
+                             r"いつ(?:から|まで)?|晴れ|雨|降)[^。！!？?\n]{0,8}(?:[？?]|の[。\s]|$)")
+
+
+def _outside_fact_flow(text):
+    """「セールやってる？」「明日の天気は？」: Es cannot check the outside world, so she says so (#208)."""
+    said = text.strip()
+    topic = _OUTSIDE_TOPIC_RE.search(said)
+    if not topic or len(said) > 50 or _ACTION_HINT_RE.search(said) or not _OUTSIDE_ASK_RE.search(said):
+        return None
+    name = re.sub(r"^(?:今|いま|もう|明日の|今日の|ええ。?|え、?)", "", topic.group("topic")) or topic.group("topic")
+    return (f"ごめんね、私はネットを見られないから、{name}のことは確かめられないの。"
             "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
 
 
@@ -2426,6 +2448,10 @@ def _chat(text, cfg, message_id=None):
         if repeat:
             db.add_message("assistant", repeat)
             return {"reply": repeat, "events": [], "handoffs": [], "intent": "repeat"}
+        outside = _outside_fact_flow(text)
+        if outside:  # 「セールやってるの？」: not something Es can check (#208)
+            db.add_message("assistant", outside)
+            return {"reply": outside, "events": [], "handoffs": [], "intent": "outside"}
         activity = _activity_flow(text)
         if activity:
             db.add_message("assistant", activity)
