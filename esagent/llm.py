@@ -15,6 +15,41 @@ class LLMError(Exception):
     pass
 
 
+class LLMTimeout(LLMError):
+    """Ollama answered nothing within the time limit: it is running, the reply was cut (#198)."""
+
+    def __init__(self, seconds):
+        self.seconds = seconds
+        super().__init__(f"返事に {seconds} 秒以上かかったので打ち切りました（Ollama にはつながっています）。")
+
+
+CONNECT_ERROR = "Ollama に接続できません。Ollama が起動しているか確認してください。"
+# The latest failed request, for brain.status_lines: {"kind": "timeout"|"connect", "at": time, "seconds": n}.
+LAST_ERROR = {}
+
+
+def _failed(e, timeout):
+    """LLMTimeout for a timeout, else the connection error. urllib wraps a connect timeout in URLError."""
+    reason = getattr(e, "reason", e)
+    if isinstance(e, TimeoutError) or isinstance(reason, TimeoutError):
+        LAST_ERROR.update(kind="timeout", at=time.time(), seconds=timeout)
+        return LLMTimeout(timeout)
+    LAST_ERROR.update(kind="connect", at=time.time(), seconds=None)
+    return LLMError(CONNECT_ERROR)
+
+
+def _load_first(cfg):
+    """Load the model before a request with a short time limit, so loading (15-20 s after keep_alive
+    let it go) is not counted in that limit (#198). Best effort: when Ollama cannot be asked, go on."""
+    if loaded(cfg) is not False:
+        return
+    deadline = time.time() + 180
+    warm(cfg, wait=True)
+    while _WARM["state"] == "loading" and time.time() < deadline:  # another thread is loading it
+        jobs.check()
+        time.sleep(0.2)
+
+
 _VALIDATION = contextvars.ContextVar("validation", default=None)
 
 
@@ -46,6 +81,7 @@ def chat(cfg, messages, schema=None, options=None, think=False, on_text=None, ti
         setting = pipeline.get(stage, {}) if isinstance(pipeline, dict) else {}
         cfg = {**cfg, "model": setting.get("model") or cfg["model"]}
         timeout = max(1, min(180, int(setting.get("timeout_seconds", 30))))
+        _load_first(cfg)
     body = {
         "model": cfg["model"],
         "messages": messages,
@@ -146,8 +182,9 @@ def _request(cfg, body, timeout, on_text=None):
                            f"ターミナルで `ollama pull {cfg['model']}` を実行してください。")
         detail = e.read().decode("utf-8", "replace")[:300]
         raise LLMError(f"Ollama がエラーを返しました ({e.code}): {detail}")
-    except (urllib.error.URLError, TimeoutError, ConnectionError):
-        raise LLMError("Ollama に接続できません。Ollama が起動しているか確認してください。")
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        raise _failed(e, timeout) from None
+    LAST_ERROR.clear()
     return data
 
 
@@ -159,6 +196,7 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
         setting = cfg.get("local_pipeline", {}).get("tools", {})
         cfg = {**cfg, "model": setting.get("model") or cfg["model"]}
         timeout = max(1, min(180, int(setting.get("timeout_seconds", 30))))
+        _load_first(cfg)
     body = {
         "model": cfg["model"],
         "messages": messages,
@@ -181,8 +219,10 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
         _log(cfg, body, None, started, error=f"HTTP {e.code}: {detail}")
         raise LLMError(f"Ollama がエラーを返しました ({e.code}): {detail}")
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-        _log(cfg, body, None, started, error=str(e))
-        raise LLMError("Ollama に接続できません。Ollama が起動しているか確認してください。")
+        err = _failed(e, timeout)
+        _log(cfg, body, None, started, error=str(err))
+        raise err from None
+    LAST_ERROR.clear()
     _log(cfg, body, data, started)
     jobs.check()
     msg["content"] = _THINK_RE.sub("", msg.get("content") or "").strip()
