@@ -59,7 +59,7 @@
       "pathPattern": "(^|/)(esagent/conversation_game[.]py|tests/test_conversation_game[.]py|spec/test/conversation-game-108[.]md|spec/test/shiritori-start-156[.]md)$"
     },
     {
-      "pathPattern": "(^|/)(esagent/conversation_jobs[.]py|tests/test_conversation_jobs[.]py|spec/test/local-request-revisions-110[.]md)$"
+      "pathPattern": "(^|/)(esagent/conversation_jobs[.]py|tests/test_conversation_jobs[.]py|tests/test_ollama_down[.]py|spec/test/local-request-revisions-110[.]md)$"
     },
     {
       "pathPattern": "(^|/)(tests/test_truthful_reports\\.py|spec/test/truthful-reports-111\\.md)$"

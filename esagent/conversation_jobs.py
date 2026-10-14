@@ -215,7 +215,7 @@ def accept(body, cfg, operation):
 
 
 def _work(request_id, revision, body, cfg, operation):
-    result, stopped, token = None, False, None
+    result, stopped, token, reason = None, False, None, ""
     try:
         with scope(request_id, revision) as token:
             with boundary(), db.connect() as con:
@@ -224,7 +224,7 @@ def _work(request_id, revision, body, cfg, operation):
             check()
             if result.get("pending"):
                 # Async requests must not leak into the legacy automatic pending rerun loop.
-                raise Stopped()
+                raise Stopped(result.get("error") or "")
             with boundary():
                 with db.connect() as con:
                     con.execute("UPDATE conversation_jobs SET state='done',result=?,updated_at=? WHERE id=? AND revision=?",
@@ -236,8 +236,8 @@ def _work(request_id, revision, body, cfg, operation):
                                     "AND request_revision = ?", (request_id, revision))
                 import voice
                 voice.reply(cfg, result, key=f"job:{request_id}:{revision}")
-    except Stopped:
-        stopped = True
+    except Stopped as e:
+        stopped, reason = True, (e.args[0] if e.args else "")
     except Exception:
         result = {"reply": "処理結果を確認できません。履歴とタスクを確認してください。", "events": [], "handoffs": [], "failed": True}
         with detached(), _LOCK:
@@ -248,8 +248,7 @@ def _work(request_id, revision, body, cfg, operation):
     finally:
         with detached(), _LOCK:
             if stopped and _LIVE.get(_key(request_id)) == revision:
-                result = {"reply": "処理を完了できませんでした。自動再実行はせず、履歴とタスクを確認してください。",
-                          "events": [], "handoffs": [], "failed": True}
+                result = {"reply": stopped_reply(reason), "events": [], "handoffs": [], "failed": True}
                 with db.connect() as con:
                     con.execute("UPDATE conversation_jobs SET state='failed',result=? WHERE id=? AND revision=?",
                                 (json.dumps(result, ensure_ascii=False), request_id, revision))
@@ -257,6 +256,15 @@ def _work(request_id, revision, body, cfg, operation):
                 with db.connect() as con:
                     con.execute("UPDATE messages SET status='cancelled' WHERE request_id=? AND request_revision=? AND (role IN ('assistant','es') OR status='pending')",
                                 (request_id, revision))
+
+
+def stopped_reply(reason=""):
+    """The reply of a request that ended without one. A model error (Ollama not running, #190) is said
+    as it is: the conversation stopped before any task change, so it does not ask to check the tasks."""
+    if reason:
+        when = "Ollama が起動したら" if "接続できません" in reason else "モデルの準備ができたら"
+        return f"{reason}\nこの発言にはまだ返事できていないよ。{when}、もう一度送ってね。"
+    return "処理を完了できませんでした。自動再実行はせず、履歴とタスクを確認してください。"
 
 
 def clear_pending():
