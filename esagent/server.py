@@ -91,7 +91,7 @@ def pet_state():
     return {"mood": mood, "pomo": pomo, "stage": prog["stage"], "overdue": overdue,
             "last_event": events.last_id(), "port": CFG["port"],
             "enabled": pet_enabled(), "cat": CFG.get("pet_cat", 2), "scale": CFG.get("pet_scale", 3),
-            "voice": voice.status(CFG)}
+            "voice": voice.status(CFG), "chat": db.get_setting("pet_chat", "1") == "1"}
 
 
 def pet_enabled():
@@ -329,6 +329,7 @@ class Handler(BaseHTTPRequestHandler):
             with jobs.boundary():
                 if not jobs.CURRENT.get():
                     voice.reply(CFG, result)  # async jobs deliver once after final revision validation
+                    events.chat_reply(text, result, via=body.get("via"))
                 if result.get("events"):
                     line = utterances.reaction(result["events"])
                     ev = events.push("chat_events", lines=result["events"], text=line)
@@ -460,6 +461,9 @@ class Handler(BaseHTTPRequestHandler):
             db.set_setting("pet_enabled", "1" if on else "0")
             if on:
                 _start_pet()  # the cat keeps a single instance itself
+            return pet_state()
+        if path == "/api/pet/chat":  # show chat replies in the cat's bubble (#121), from its right-click menu
+            db.set_setting("pet_chat", "1" if body.get("enabled") else "0")
             return pet_state()
         if path == "/api/poke":  # the MCP server's "something changed" signal
             return {"ok": True}
