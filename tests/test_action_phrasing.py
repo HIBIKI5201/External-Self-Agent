@@ -149,3 +149,25 @@ def test_real_model_wording_after_add_and_complete_is_checked():
         r = sb.chat(f"{t['title']}、終わったよ")
         assert db.get_task(t["id"])["status"] == "done"
         assert "削除" not in r["reply"] and "開始" not in r["reply"], r
+
+
+def test_words_and_dates_inside_task_names_are_not_claims():
+    """Review of #242: a name that contains 変更・通知・3日 must not reject a correct wording."""
+    def facts(op, title):
+        return {"facts": [{"op": op, "id": 1, "title": title, "project": "", "due": "", "repeat": ""}], "next": ""}
+    for op, title, wording in (
+            ("complete", "住所変更の手続き", "お疲れさま！「住所変更の手続き」を完了にしたよ。"),
+            ("add", "通知機能の修正", "「通知機能の修正」を追加したよ。"),
+            ("add", "タイマーの削除ボタン", "「タイマーの削除ボタン」を登録したよ。"),
+            ("add", "3日の会議資料", "「3日の会議資料」を追加したよ。")):
+        assert not brain.phrase_errors(wording, facts(op, title)), (wording, brain.phrase_errors(wording, facts(op, title)))
+    # Outside the name the same words still count.
+    assert brain.phrase_errors("「住所変更の手続き」を完了にして、締切も変更したよ。", facts("complete", "住所変更の手続き"))
+    assert brain.phrase_errors("「3日の会議資料」を追加したよ。5日までにね。", facts("add", "3日の会議資料"))
+
+
+def test_a_failing_check_keeps_the_change_and_answers_with_the_template():
+    with Sandbox(copy_real=False) as sb, patch.object(brain, "phrase_errors", side_effect=NameError("moved")):
+        result, _, _ = add_tomorrow(sb, "「ES 提出」を追加したよ。")
+        assert [t["title"] for t in db.list_tasks()] == ["ES 提出"]
+        assert result["reply"].startswith("登録しました") and not result.get("phrased")

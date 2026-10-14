@@ -3,6 +3,7 @@
 The model only proposes actions as JSON; this module validates and executes them,
 and reports what actually happened, so a wrong guess never corrupts the data.
 """
+import contextvars
 import datetime as dt
 import json
 import re
@@ -1260,8 +1261,11 @@ _FACT_OP_WORDS = {"add": re.compile(r"追加|登録|作成|作っておい|作�
                   "delegate": re.compile(r"引き継|準備")}
 _FACT_NEVER_RE = re.compile(r"削除|消し|消去|開始|スタート|タイマー|覚え|記憶|リマインド|通知|アラーム|"
                             r"(?:でき|し|して|い)(?:なかった|ていない|てない|ません)|失敗|エラー|反映して")
-_FACT_SHAPE_RE = re.compile(r"#\d|[{}\[\]<>＜＞]|^\s*[-・*]\s", re.M)
+_FACT_SHAPE_RE = re.compile(r"#\d|[{}\[\]<>＜＞]|^\s*[-・*＋+✎✔→↺]|記録\s*[:：]", re.M)
 _FACT_VAGUE_DATE_RE = re.compile(r"来週|今週|再来週|週末|月末|来月|今月|昨日|おととい|一昨日|\d+\s*(?:日後|週間|か月|ヶ月)")
+# Whether the reply to the current message is the model's checked wording (#142). Kept here, not in
+# shared progress state, so the flag stays with the code that sets it.
+_PHRASED = contextvars.ContextVar("phrased", default=False)
 _FACT_REL_DAYS = {"今日": 0, "きょう": 0, "本日": 0, "明日": 1, "あした": 1, "あす": 1, "明後日": 2, "あさって": 2}
 
 
@@ -1359,23 +1363,29 @@ def phrase_errors(reply, found, today=None):
     errors = []
     if not reply or len(reply) > 140 or reply.count("\n") > 2 or not re.search(r"[ぁ-ん]", reply):
         errors.append("shape")
-    if _FACT_SHAPE_RE.search(reply) or _RECORD_RE.search(reply) or strip_model_records(reply) != reply.strip():
+    if _FACT_SHAPE_RE.search(reply):
         errors.append("record or markup")
+    names = {f["title"] for f in found["facts"]} | {f.get("old_title") for f in found["facts"]} \
+        | {f["project"] for f in found["facts"]} | {found["next"], "Claude Codeで開く", "Claude Code で開く"}
+    names.discard(None)
+    names.discard("")
+    # 「住所変更の手続き」「3日の会議資料」: the words and dates inside a fact's own name are not claims.
+    rest = reply
+    for n in sorted(names, key=len, reverse=True):
+        rest = rest.replace(n, "〇")
     ops = {f["op"] for f in found["facts"]}
     for op, words in _FACT_OP_WORDS.items():
-        if op not in ops and words.search(reply):
+        if op not in ops and words.search(rest):
             errors.append(f"claims {op}")
-    if "設定" in reply and not ("update" in ops or any(f["due"] or f["repeat"] for f in found["facts"])):
+    if "設定" in rest and not ("update" in ops or any(f["due"] or f["repeat"] for f in found["facts"])):
         errors.append("claims setting")
-    if _FACT_NEVER_RE.search(reply) or _MODE_CLAIM_RE.search(reply):
+    if _FACT_NEVER_RE.search(rest) or _MODE_CLAIM_RE.search(rest):
         errors.append("other operation or failure")
     if "delegate" in ops and "Claude Code" not in reply:
         errors.append("handoff without Claude Code")
-    names = {f["title"] for f in found["facts"]} | {f.get("old_title") for f in found["facts"]} \
-        | {f["project"] for f in found["facts"]} | {found["next"], "Claude Codeで開く", "Claude Code で開く"}
     errors += [f"name {n}" for n in re.findall(r"「([^」]*)」", reply) if n not in names]
     errors += [f"missing {f['title']}" for f in found["facts"] if f["title"] not in reply]
-    errors += _dates_errors(reply, found, today)
+    errors += _dates_errors(rest, found, today)
     if strip_promises(reply)[1] or strip_alarm_promises(reply)[1] or strip_model_offers(reply)[1]:
         errors.append("promise or offer")
     return errors
@@ -1402,19 +1412,19 @@ Write Es's reply to the user's latest message.
     messages.append({"role": "user", "content": text})
     try:
         reply = llm.chat(cfg, messages, options={"temperature": 0.7, "num_predict": 120}, timeout=30).strip()
+        reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.S).strip()
+        return None if phrase_errors(reply, found) else reply
     except Exception:  # noqa: BLE001 - the tasks already changed: the template answers rather than nothing (#95)
         return None
-    reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.S).strip()
-    return None if phrase_errors(reply, found) else reply
 
 
 def _action_reply(cfg, text, history, intent, events, touched):
-    _progress["phrased"] = False
+    _PHRASED.set(False)
     if cfg.get("natural_action_replies", True):
         found = action_facts(events, touched)
         reply = found and _phrased_reply(cfg, text, history, found)
         if reply:
-            _progress["phrased"] = True
+            _PHRASED.set(True)
             return reply
     return _template_reply(intent, events, touched)
 
@@ -2273,7 +2283,8 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
         conversation_context.STATS.set({})
         started = db.now()
         _stage("判断中")
-        _progress.update(text=text, message_id=message_id, phrased=False)
+        _progress.update(text=text, message_id=message_id)
+        _PHRASED.set(False)
         result = None
         try:
             selected = choices.before(text, selection)
@@ -2284,7 +2295,7 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
                 with db.connect() as con:
                     con.execute("UPDATE messages SET intent = ? WHERE role = 'assistant' AND id > ?",
                                 (result["intent"], last_id))
-            if _progress.get("phrased"):  # the model worded a verified action reply (#142)
+            if _PHRASED.get():  # the model worded a verified action reply (#142)
                 result["phrased"] = True
             if not selected:
                 _answer_behavior_wish(text, result)
