@@ -30,6 +30,9 @@
     },
     {
       "pathPattern": "(^|/)spec/test/youtube-2026-10-08\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_sync_trigger\\.py$"
     }
   ],
   "source": "manual",

@@ -47,6 +47,9 @@ CFG = db.load_config()
 brain._status_cfg = CFG
 log = logging.getLogger("esagent")
 traffic = runtime_log.Traffic(log)
+# POSTs that can change tasks or projects. Only these wake the Google sync: the window reports
+# playback, warms the model and logs listening every few seconds, and each full sync is a quota hit (#231).
+SYNCING_POST = re.compile(r"/api/(chat|tasks(/\d+(/delegate)?)?|focus/done|poke|admin/(config|project(/draft)?))")
 
 
 def state():
@@ -265,8 +268,8 @@ class Handler(BaseHTTPRequestHandler):
     def _post_result(self, path, body):
         try:
             result = self._route(path, body)
-            if not path.startswith(("/api/youtube/", "/api/voice", "/api/calendar")):
-                gsync.request()  # mutations should reach Google; YouTube and voice calls do not trigger sync
+            if SYNCING_POST.fullmatch(path):
+                gsync.request()  # task and project changes should reach Google
             return 200, result
         except youtube.YouTubeError as e:
             return e.code, {"error": str(e), **({"link": e.link} if e.link else {})}
