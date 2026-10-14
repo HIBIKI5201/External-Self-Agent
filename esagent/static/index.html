@@ -589,7 +589,7 @@ async function submitItem(item) {
   if (!item.delivery) {
     item.deliveryError = null;
     item.delivery = api("/api/chat/submit", {
-      text: item.text, queuedAt: item.at, requestId: item.id, choice: item.choice,
+      text: item.text, queuedAt: item.at, requestId: item.id, choice: item.choice, via: item.via,
       relation: item.relation || "independent", targetId: item.targetId, targetRevision: item.targetRevision
     }).then(job => {
       item.jobId = job.jobId; item.revision = job.revision; saveQueue(); return job;
