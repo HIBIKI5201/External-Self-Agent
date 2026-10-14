@@ -74,6 +74,7 @@ class Sandbox:
         import handoff
         import llm
         handoff.HANDOFF_DIR = os.path.join(self.dir, "handoffs")
+        llm._STATUS.clear()  # the model's state as another test's fake Ollama answered it
         self._patches = [(gsync, "run_once", gsync.run_once), (gapi, "request", gapi.request),
                          (llm, "_post", llm._post), (llm, "chat_tools", llm.chat_tools), (gsync, "_req", gsync._req), (gsync, "_paged", gsync._paged)]
         self.sync_once = gsync.run_once      # the real sync, for tests that use FakeTasks

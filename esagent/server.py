@@ -79,8 +79,7 @@ def pet_state():
     prog = brain.progress()
     pomo = pomodoro.state(CFG)
     llm_ok = llm.status(CFG).get("model", False)
-    today = db.now()[:10]
-    overdue = next((t["title"] for t in db.list_tasks() if t["due"] and t["due"] < today), "")
+    overdue = db.first_overdue(db.now()[:10])
     if prog["busy"]:
         mood = "thinking"
     elif pomo["mode"] == "focus" and not pomo["paused"]:

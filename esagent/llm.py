@@ -226,6 +226,12 @@ def warm(cfg, wait=False):
         _WARM.update(state="loading", at=time.time(), error="")
 
     def run():
+        try:
+            load()
+        finally:
+            _STATUS.clear()  # the model may be in memory now; tell the next status() at once
+
+    def load():
         started = time.time()
         if loaded(cfg):
             _WARM.update(state="ready", ms=0)
@@ -248,8 +254,25 @@ def warm(cfg, wait=False):
     return dict(_WARM)
 
 
+# The cat asks every second, the chat window every 8 and the waiting-message loop every 5 (#241). The
+# model's readiness changes far more slowly, so Ollama is asked at most once per STATUS_TTL seconds.
+STATUS_TTL = 5
+_STATUS = {}  # (ollama_url, model) -> (asked at, answer)
+
+
 def status(cfg):
     """{'ollama': reachable, 'model': model pulled, 'loaded': in memory now, 'warming': being loaded}."""
+    key = (cfg["ollama_url"], cfg["model"])
+    hit = _STATUS.get(key)
+    if hit and time.monotonic() - hit[0] < STATUS_TTL:
+        answer = hit[1]
+    else:
+        answer = _ask_status(cfg)
+        _STATUS[key] = (time.monotonic(), answer)
+    return {**answer, "warming": _WARM["state"] == "loading"} if answer["ollama"] else dict(answer)
+
+
+def _ask_status(cfg):
     try:
         with urllib.request.urlopen(_url(cfg, "/api/tags"), timeout=1.5) as r:
             names = [m["name"] for m in json.load(r).get("models", [])]
@@ -257,5 +280,4 @@ def status(cfg):
         return {"ollama": False, "model": False, "name": cfg["model"]}
     want = cfg["model"]
     have = any(_same(n, want) for n in names)
-    return {"ollama": True, "model": have, "name": want, "loaded": bool(loaded(cfg)) if have else False,
-            "warming": _WARM["state"] == "loading"}
+    return {"ollama": True, "model": have, "name": want, "loaded": bool(loaded(cfg)) if have else False}

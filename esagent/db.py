@@ -372,6 +372,14 @@ def get_task(task_id):
         return _task(con, task_id)
 
 
+def first_overdue(today):
+    """The title of the open task whose due date passed longest ago, or "" (the cat asks every second, #241)."""
+    with connect() as con:
+        row = con.execute("SELECT title FROM tasks WHERE status != 'done' AND due IS NOT NULL AND due != '' "
+                          "AND due < ? ORDER BY due, id LIMIT 1", (today,)).fetchone()
+    return row["title"] if row else ""
+
+
 def list_tasks(include_done=False, project=None):
     where, args = [], []
     with connect() as con:
