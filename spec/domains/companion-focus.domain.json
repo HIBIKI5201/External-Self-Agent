@@ -21,6 +21,9 @@
     },
     {
       "pathPattern": "(^|/)esagent/static/cat/"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_focus_length\\.(py|js)$"
     }
   ],
   "source": "manual",

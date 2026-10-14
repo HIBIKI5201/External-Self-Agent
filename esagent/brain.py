@@ -1697,7 +1697,7 @@ def _offer_flow(text):
     db.set_setting("pending_focus", "")
     task = db.get_task(int(pending))
     if task and _YES_RE.search(text.strip()):
-        return f"じゃあ始めよ！「{task['title']}」、25分。私も隣でがんばるね。", {"focus": task["id"]}
+        return f"じゃあ始めよ！「{task['title']}」。私も隣でがんばるね。", {"focus": task["id"]}
     return None
 
 
@@ -2016,7 +2016,7 @@ def _choice_reply(selected, cfg, message_id=None):
     elif kind == 'focus':
         t = db.get_task(payload.get('task_id', 0))
         if t and t['status'] != 'done' and t['title'] == payload.get('title'):
-            reply, ui = f'じゃあ始めよ！「{t["title"]}」、25分。私も隣でがんばるね。', {'focus': t['id']}
+            reply, ui = f'じゃあ始めよ！「{t["title"]}」。私も隣でがんばるね。', {'focus': t['id']}
         else:
             reply = '対象タスクが変わっているので、集中タイマーは開始していないよ。'
     elif kind == 'feature' and isinstance(payload.get('wish'), str):

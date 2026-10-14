@@ -1,0 +1,20 @@
+// The timer shows the configured focus length while idle (#248): run the actual timer code of companion.js.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('esagent/static/companion.js', 'utf8');
+const code = source.slice(source.indexOf('  let P = {'), source.indexOf('  function renderPomo()'));
+let now = 0;
+const ctx = vm.createContext({performance: {now: () => now}});
+vm.runInContext(code + '\nthis.setState = (s) => { P = s; pAt = performance.now(); };', ctx);
+ctx.setState({mode: 'idle', remaining: 50 * 60, paused: false});
+now = 90000;
+assert.equal(vm.runInContext('fmt(remainingMs())', ctx), '50:00', 'idle shows the server length');
+ctx.setState({mode: 'focus', remaining: 600, paused: false});
+now += 61000;
+assert.equal(vm.runInContext('fmt(remainingMs())', ctx), '08:59', 'running counts down');
+ctx.setState({mode: 'focus', remaining: 600, paused: true});
+now += 61000;
+assert.equal(vm.runInContext('fmt(remainingMs())', ctx), '10:00', 'paused stays');
+assert.ok(!/25分/.test(source), 'a fixed 25-minute line remains');
+console.log('focus length: passed');
