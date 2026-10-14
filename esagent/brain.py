@@ -280,7 +280,10 @@ def _voice_state():
 _ASKS = r"(?:[？?]|の[？?]?|かな|か[？?]?|って[？?]?)?[。！!\s]*$"
 _SPEAK_Q_RE = re.compile(r"(?:喋れる|しゃべれる|喋れるように|しゃべれるように|声(?:を|が)?出せる|声で話せる|声で話して(?:る|くれる)|"
                          r"読み上げ(?:られる|できる|て(?:る|くれる)))[^。！!\n]{0,8}" + _ASKS)
-_HEAR_Q_RE = re.compile(r"(?:聞こえる|聴こえる|聞こえて(?:る)?|聞き取れる|マイク(?:は|って)?(?:使える|で話せる))[^。！!\n]{0,8}" + _ASKS)
+_HEAR_Q_RE = re.compile(r"(?:聞こえる|聴こえる|聞こえて(?:る)?|聞き取れる|マイク(?:は|って)?(?:使える|で話せる))[^。！!\n]{0,8}" + _ASKS +
+                        # 「マイクの音声読み取り使ってるよね？」「どうやって聞いてるの？」 (#207)
+                        r"|(?:音声認識|音声読み取り|マイク(?:の)?音声|どうやって(?:聞|聴)いて|どうやって声を)[^。！!\n]{0,20}"
+                        r"[？?][。！!\s]*$")
 
 
 def _ability_flow(text, cfg):
@@ -299,9 +302,12 @@ def _ability_flow(text, cfg):
         note = f"ただ、いまは{trouble[st['engine']]}、声が出せていないかも。" if st.get("engine") in trouble else ""
         return f"うん、話せるよ。返事を VOICEVOX の{who}の声で読み上げてるよ。{note}"
     if _HEAR_Q_RE.search(said):
-        music = re.search(r"音楽|曲|BGM|動画|音", said)
+        music = re.search(r"音楽|曲|BGM|動画|音(?!声)", said)
+        # The model told the user to make a Google Cloud project and an API key for it (#207, #208).
+        how = re.search(r"どうやって|API|キー|仕組み|何(?:を)?使", said, re.I)
         return ("会話モードをオンにすると、マイクで話してくれた言葉を Edge の音声認識で文字にして受け取れるよ。"
-                "音楽や動画の音そのものは聞こえないんだ。"
+                + ("ブラウザに入っている機能を使うから、API キーや Google Cloud の設定は要らないんだ。" if how else "")
+                + "音楽や動画の音そのものは聞こえないんだ。"
                 + ("アプリ内の YouTube なら、タイトルと再生しているかどうかだけは分かるよ。" if music else ""))
     return None
 
@@ -1455,6 +1461,12 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
 # Es cannot hear (#109). Such sentences are dropped when the reply has something else to say.
 _GENERIC_CLOSER_RE = re.compile(r"(?:何でも|なんでも|いつでも|気軽に|遠慮なく|好きなだけ)[^。！!？?\n]{0,15}"
                                 r"(?:話|聞|言|相談|教え|声をかけ)|聞かせて(?:ね|ください|ほしい|欲しい)?(?:な)?[。！!〜ー♪\s]*$")
+# 「E.S. Agent は音声を直接聞くことはできないから、文字に変換して話してね」 is never true: the user's speech
+# arrives through 会話モード (#207). Unlike music, there is no question in which it is the right answer.
+_VOICE_LIMIT_RE = re.compile(r"(?:音声|声|言葉|話)(?:は|が|を)?[^。！!？?\n]{0,8}"
+                             r"(?:聞く(?:こと)?(?:は|が)?(?:でき|出来)(?:ない|ません)|直接聞(?:け|か)(?:ない|ません|ず)|"
+                             r"扱え(?:ない|ません)|受け取れ(?:ない|ません))|"
+                             r"文字に(?:変換|直)して(?:話|送|入力|書)")
 _SELF_LIMIT_RE = re.compile(r"(?:音|声|曲|音楽|BGM)(?:は|が|を)?[^。！!？?\n]{0,8}(?:聞こえ|聴こえ|聞け|聴け|出せ)(?:ない|ません)|"
                             r"画面(?:は|が|を)?[^。！!？?\n]{0,6}見(?:え|れ)(?:ない|ません)|私は(?:AI|プログラム)だから")
 _ABILITY_ASK_RE = re.compile(r"聞こえ|聴こえ|喋れ|しゃべれ|話せる|声|音|見える|見えて|できる[？?]|できるの|機能")
@@ -1478,7 +1490,7 @@ def tidy_chat_reply(reply, text, history):
         # 「何でも話してね」 is generic even next to the user's words; 「〇〇を聞かせて」 is not.
         if closer and (not closer[0].startswith("聞かせ") or not any(w in s for w in words)):
             return True
-        if _SELF_LIMIT_RE.search(s) and not _ABILITY_ASK_RE.search(text):
+        if _SELF_LIMIT_RE.search(s) and not _ABILITY_ASK_RE.search(text) or _VOICE_LIMIT_RE.search(s):
             return True
         n = _norm(s)
         return len(n) >= 6 and any(n == e or (len(_bigrams(n)) > 3 and _similarity(n, e) >= 0.8) for e in earlier)
