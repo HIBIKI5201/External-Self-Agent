@@ -124,10 +124,12 @@ class Sandbox:
 class FakeTasks:
     """In-memory Google Tasks API, wired in place of gsync._req / gsync._paged."""
 
-    def __init__(self):
+    def __init__(self, account="L0"):
+        # The default list's id stands for the Google account (#194): FakeTasks("B") is another account.
         self.n = itertools.count(1)
-        self.lists = {"L0": {"id": "L0", "title": "マイタスク"}}
-        self.tasks = {"L0": {}}
+        self.default = account
+        self.lists = {account: {"id": account, "title": "マイタスク"}}
+        self.tasks = {account: {}}
         self.offline = False
 
     def stamp(self):
@@ -142,7 +144,7 @@ class FakeTasks:
         if path == "/users/@me/lists" and method == "GET":
             return {"items": list(self.lists.values())}
         if path == "/users/@me/lists/@default":
-            return self.lists["L0"]
+            return self.lists[self.default]
         if path == "/users/@me/lists" and method == "POST":
             i = f"L{next(self.n)}"
             self.lists[i] = {"id": i, "title": body["title"]}

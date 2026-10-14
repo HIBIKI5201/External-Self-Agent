@@ -471,6 +471,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/google/disconnect":
             gauth.disconnect()
             return {"ok": True}
+        if path == "/api/google/resolve":  # the answer to an account change or a mass deletion (#194)
+            return gsync.resolve(body.get("action"))
         m = re.fullmatch(r"/api/handoffs/(\d+)/dismiss", path)
         if m:
             db.set_handoff(int(m[1]), status="dismissed")
