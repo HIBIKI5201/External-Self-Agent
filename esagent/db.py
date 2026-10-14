@@ -132,6 +132,8 @@ MIGRATIONS = {
               ("repeat", "TEXT"), ("last_reset", "TEXT"),
               # Read from a file another tool owns (#182, linked_todos): only that file completes it.
               ("read_only", "INTEGER NOT NULL DEFAULT 0")],
+    # The TOML file the item was read from (#184), to tell where a read-only task is completed.
+    "linked_items": [("file", "TEXT")],
 }
 
 TASK_SELECT = """
@@ -381,11 +383,20 @@ def add_task(title, project=None, due=None, notes="", status="todo", read_only=F
         return _task(con, cur.lastrowid)
 
 
-READ_ONLY_REPLY = "「{title}」はリポジトリのファイルから読み取ったタスクだから、ここでは完了や未完了に変えられないよ。元のファイルの done を書き換えてね。"
+READ_ONLY_REPLY = "「{title}」はリポジトリのファイルから読み取ったタスクだから、ここでは完了や未完了に変えられないよ。元のファイル{where}の done を書き換えてね。"
+
+
+def source_file(task_id):
+    """The TOML file a read-only task was read from (#184), or None when it is not known."""
+    with connect() as con:
+        row = con.execute("SELECT file FROM linked_items WHERE task_id = ? AND file IS NOT NULL AND file != '' "
+                          "LIMIT 1", (task_id,)).fetchone()
+    return row["file"] if row else None
 
 
 def read_only_reply(task):
-    return READ_ONLY_REPLY.format(title=task["title"])
+    path = source_file(task["id"])
+    return READ_ONLY_REPLY.format(title=task["title"], where=f"（{path}）" if path else "")
 
 
 class ReadOnlyTask(ValueError):

@@ -234,6 +234,8 @@ class _Run:
 
     def t_get_task(self, task_id):
         t = db.get_task(int(task_id))
+        if t and t["read_only"]:
+            t["source_file"] = db.source_file(t["id"])  # where it is completed (#184)
         return json.dumps(t, ensure_ascii=False) if t else self._reject("そのタスクはありません。一覧から番号を選んでください")
 
     def t_add_task(self, title, project="", due="", notes=""):
@@ -265,7 +267,9 @@ class _Run:
         if not t:
             return self._reject("そのタスクはありません。一覧から番号を選んでください")
         if t["read_only"] and t["status"] != "done":
-            return self._reject("このタスクは読み取り専用です。完了にせず、元のファイルで done にするよう利用者に伝えてください")
+            path = db.source_file(t["id"])
+            return self._reject("このタスクは読み取り専用です。完了にせず、元のファイル" + (f"（{path}）" if path else "")
+                                + "で done にするよう利用者に伝えてください")
         db.update_task(t["id"], status="done")
         self.events.append(f"✔ #{t['id']} {t['title']} を完了にしました")
         return "完了にしました"
