@@ -47,7 +47,7 @@ def invalidate():
 
 
 def publish(kind, payload=None):
-    labels = {'mode': '切り替える', 'focus': '集中を始める', 'feature': 'タスクに登録する'}
+    labels = {'mode': '切り替える', 'focus': '集中を始める', 'feature': 'タスクに登録する', 'complete': '完了にする'}
     if kind == 'topic':
         options = [{'value': key, 'label': v[0]} for key, v in TOPICS.items()]
     elif kind in labels:
