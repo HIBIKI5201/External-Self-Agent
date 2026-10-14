@@ -6,15 +6,36 @@ A DB transaction and cancellation share a lock: committed operations are never u
 import contextvars
 from contextlib import contextmanager
 import json
+import logging
 import re
 import threading
 
 import db
 
+log = logging.getLogger("esagent")
 CURRENT = contextvars.ContextVar("conversation_job", default=None)
 _LOCK = threading.RLock()
 _LIVE = {}  # (database path, id) -> revision; scoped to this server process
-_WRITING = re.compile(r"^(?:INSERT(?: OR \w+)? INTO|UPDATE|DELETE FROM)\s+(tasks|memories|projects|handoffs)\b", re.I)
+# Whether a write inside a request means "something already happened" (a correction must then not rerun
+# the request). Every table and settings key is listed; a write to one that is not listed counts as
+# committed and is logged, so a new table or key is never silently treated as nothing done (#236).
+DURABLE_TABLES = {"tasks", "memories", "projects", "handoffs", "linked_items", "reply_feedback"}
+SCRATCH_TABLES = {
+    "messages",           # the conversation itself; only /clear (DELETE) is durable
+    "conversation_jobs",  # this bookkeeping
+    "chat_requests",      # replay protection for the window's requests
+    "calendar_events",    # a copy of Google Calendar, refilled by every sync
+}
+DURABLE_SETTINGS = {"pomo", "chat_mode", "voice", "pet_enabled", "conversation_game", "deleted_memory_sources",
+                    "calendar_selected", "gcal_calendar_id", "companion_sessions", "companion_minutes",
+                    "companion_day", "companion_today"}
+DURABLE_SETTING_PREFIXES = ("snooze:", "task_context_corrections:")
+SCRATCH_SETTINGS = {"pending_focus", "pending_feature", "active_offer", "last_advice", "task_context_draft",
+                    "messages_last_id", "bgm_sync", "calendar_list", "calendar_sync", "google_state", "google_last_sync",
+                    "google_last_error", "google_cal_last_sync", "google_cal_error"}
+SCRATCH_SETTING_PREFIXES = ("linked:", "google_")
+_WRITE = re.compile(r"^(INSERT(?: OR \w+)? INTO|REPLACE INTO|UPDATE(?: OR \w+)?|DELETE FROM)\s+[\"`\[]?(\w+)", re.I)
+_SETTING_KEY = re.compile(r"(?:VALUES\s*\(\s*|\bkey\s*=\s*)'((?:[^']|'')*)'", re.I)
 ID = re.compile(r"[A-Za-z0-9_-]{16,80}")
 # continue: the next piece of the same spoken message (#116), joined to it while it is not done.
 MODES = {"independent", "correction", "append", "cancel", "topic", "auto", "continue"}
@@ -71,13 +92,48 @@ def scope(request_id, revision):
         CURRENT.reset(marker)
 
 
-def note_commit(statements):
+def _setting_durable(key):
+    if key in DURABLE_SETTINGS or key.startswith(DURABLE_SETTING_PREFIXES):
+        return True
+    if key in SCRATCH_SETTINGS or key.startswith(SCRATCH_SETTING_PREFIXES):
+        return False
+    return None
+
+
+def durable(sql):
+    """True if this statement writes something a rerun must not repeat, False if not, None if not a write."""
+    m = _WRITE.match(sql.strip())
+    if not m:
+        return None
+    op, table = m[1].upper(), m[2].lower()
+    if table == "messages":
+        return op.startswith("DELETE")
+    if table == "settings":
+        keys = [k.replace("''", "'") for k in _SETTING_KEY.findall(sql)]
+        found = [_setting_durable(k) for k in keys]
+        if keys and None not in found:
+            return any(found)
+        log.warning("settings write not classified for corrections: %s", keys or sql[:80])
+        return True
+    if table in DURABLE_TABLES:
+        return True
+    if table in SCRATCH_TABLES:
+        return False
+    log.warning("table not classified for corrections: %s", table)
+    return True
+
+
+def mark_committed():
+    """For writes that never pass through the database, such as adding a Google Calendar event."""
+    note_commit([], force=True)
+
+
+def note_commit(statements, force=False):
     token = CURRENT.get()
-    written = any(_WRITING.search(sql.strip()) or re.match(r"DELETE FROM messages", sql.strip(), re.I) or
-                  (re.search(r"\bsettings\b", sql, re.I) and
-                   re.search(r"(?:VALUES\s*\(\s*|key\s*=\s*)'(?:pomo|chat_mode|voice)'", sql, re.I))
-                  for sql in statements)
-    if token and written:
+    if not token:
+        return
+    written = force or any(durable(sql) for sql in statements)
+    if written:
         token["committed"] = True
         # This is part of the same transaction boundary; retain it even after cancellation.
         with detached(), db.connect() as con:
