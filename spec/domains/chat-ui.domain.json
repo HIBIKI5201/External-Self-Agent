@@ -21,6 +21,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_chat_choices\\.py|spec/test/chat-choices-45\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_chat_scroll\\.(py|js)$"
     }
   ],
   "source": "manual",
