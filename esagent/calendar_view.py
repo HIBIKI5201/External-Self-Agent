@@ -234,6 +234,11 @@ def start():
 WEEKDAYS = "月火水木金土日"
 _ASK = re.compile(r"予定|スケジュール|何が(?:ある|あった)|なにが(?:ある|あった)|空いて|あいて|埋まって")
 _Q = re.compile(r"(?:予定|スケジュール)[。！!\s]*$|[？?]|教えて|ある$|あるかな|あったっけ|だっけ|かな|どう|見せて|空いてる$|って$")
+# A request (add, remember, plan with me…) or the user telling their own plan is not a schedule question,
+# even with 「予定」 and a 「？」: it goes on to the task, advice and memory flows (#193).
+_NOT_ASK = re.compile(r"追加|登録|入れて|タスク|覚えて|忘れないで|メモ|何から|なにから|どうすれば|どうしたら|相談|"
+                      r"立て|組(?:み|ん|も)|決め|変更|延期|ずら|消して|削除|"
+                      r"予定(?:なん(?:だ|です)|なので|なのに|だけど|だから|だよ|だった|です|でした|だ(?:[。！!、,\s]|$))")
 
 
 def span(text, today=None):
@@ -295,7 +300,7 @@ def _line(e):
 
 def answer(text):
     """The kept events for a schedule question, or None when the message is not one."""
-    if len(text) > 60 or not _ASK.search(text) or not _Q.search(text.strip()):
+    if len(text) > 60 or not _ASK.search(text) or not _Q.search(text.strip()) or _NOT_ASK.search(text):
         return None
     found = span(text)
     if not found:

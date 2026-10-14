@@ -149,3 +149,16 @@ def test_http_routes_and_the_reply_prompt():
                 assert e.code == 400
         finally:
             app.shutdown(); app.server_close(); thread.join(timeout=2)
+
+
+def test_requests_and_own_plans_are_not_schedule_questions():
+    # 「予定」 and 「？」 alone do not make a schedule question: requests and the user's own plans go on (#193).
+    with patch.object(calendar_view, "ready", side_effect=AssertionError("answered as a schedule question")):
+        for text in ("明日の予定にES提出を追加してくれる？", "金曜までに資料を出す予定だけど、タスクにしてくれる？",
+                     "来週の予定を立てたいんだけど、何からやればいい？", "明日は友達と遊ぶ予定なんだ、楽しみ！どう思う？",
+                     "12月に引っ越す予定だから覚えておいて？", "明日の予定に歯医者を入れて？"):
+            assert calendar_view.answer(text) is None, text
+    with patch.object(calendar_view, "ready", return_value=False):
+        for text in ("明日の予定は？", "12月に何がある？", "来週空いてる？", "明日何か予定ある？",
+                     "金曜の予定教えて", "明日出かける予定あったっけ？"):
+            assert calendar_view.answer(text), text
