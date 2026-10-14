@@ -160,7 +160,11 @@ aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; co
 .handoff .m { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
 .handoff .row { display: flex; gap: 6px; }
 .group { margin-bottom: 10px; }
-.group .name { font-size: 12.5px; font-weight: 600; margin: 8px 0 4px; }
+.group .name { font-size: 12.5px; font-weight: 600; margin: 8px 0 4px; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.group .name .fold { background: none; border: 0; padding: 0 2px; font: inherit; color: var(--muted); cursor: pointer; flex: none; }
+.group .name .gname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.group .name .count { color: var(--muted); font-weight: 400; flex: none; }
+.group .name .soon { color: var(--warn); flex: none; }
 .task { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: start; padding: 5px 0; border-bottom: 1px dashed var(--line); }
 .task input[type=checkbox] { margin-top: 4px; accent-color: var(--accent); }
 .task .title { word-break: break-word; }
@@ -280,6 +284,21 @@ function setStatus(ok, text) {
 
 function today() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
 
+// Categories of the task list can be folded (#173). Only a screen preference, so it stays in this browser.
+const folded = (() => { try { return new Set(JSON.parse(localStorage.getItem("es.folded") || "[]")); } catch { return new Set(); } })();
+const saveFolded = () => { try { localStorage.setItem("es.folded", JSON.stringify([...folded])); } catch {} };
+function groupHtml(name, ts, row, t0) {
+  const shut = folded.has(name);
+  // A folded category still shows that a task in it is due today or overdue, so it is not missed.
+  const soon = shut && ts.some((t) => t.status !== "done" && t.due && t.due <= t0);
+  return `<div class="group${shut ? " folded" : ""}"><div class="name">` +
+    `<button type="button" class="fold" data-fold="${esc(name)}" aria-expanded="${shut ? "false" : "true"}" ` +
+    `title="${shut ? "開く" : "畳む"}">${shut ? "▸" : "▾"}</button><span class="gname">${esc(name)}</span>` +
+    (shut ? `<span class="count">（${ts.length}）</span>` : "") +
+    (soon ? `<span class="soon" title="今日まで・締切を過ぎたタスクがあります">⚠</span>` : "") +
+    `</div>${shut ? "" : ts.map(row).join("")}</div>`;
+}
+
 function render() {
   const l = S.llm;
   if (!l.ollama) setStatus(false, "Ollama 未起動（タスク管理だけ使えます）");
@@ -336,7 +355,7 @@ function render() {
       </div>` : ""}
     </div>`;
   $("#tasks").innerHTML = Object.keys(groups).length
-    ? Object.entries(groups).map(([name, ts]) => `<div class="group"><div class="name">${esc(name)}</div>${ts.map(row).join("")}</div>`).join("")
+    ? Object.entries(groups).map(([name, ts]) => groupHtml(name, ts, row, t0)).join("")
     : `<div class="meta">まだタスクはありません</div>`;
   $("#done").innerHTML = S.done.map(row).join("");
 
@@ -695,6 +714,9 @@ document.addEventListener("click", async (e) => {
   }
   try {
     if (d.expand) { const id = +d.expand; openTasks.has(id) ? openTasks.delete(id) : openTasks.add(id); return render(); }
+    if (d.fold !== undefined && e.target.closest("#tasks")) {
+      folded.has(d.fold) ? folded.delete(d.fold) : folded.add(d.fold); saveFolded(); return render();
+    }
     if (d.focus) return window.Es?.focusOn(d.focus);
     if (d.savenotes) {
       const ta = document.querySelector(`[data-notes="${d.savenotes}"]`);
