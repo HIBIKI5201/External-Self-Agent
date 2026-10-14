@@ -1402,6 +1402,15 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     reply = llm.chat(cfg, messages, options={"temperature": 0.6, "num_predict": 400}, on_text=None if evidence else _partial).strip()
     if evidence and reply != evidence[0]:
         reply = '以前の発言では「' + evidence[0] + '」と聞いているよ。'
+    if not evidence:
+        said = [m["content"] for m in history[-40:] if m["role"] == "es" and m.get("source")]
+        reply, echoed = strip_context_echo(reply, said)
+        if echoed:  # only a copy of the context: ask once more, then a short fixed line (#175)
+            messages.insert(-1, {"role": "system", "content": ECHO_RETRY_NOTE})
+            reply, echoed = strip_context_echo(
+                llm.chat(cfg, messages, options={"temperature": 0.6, "num_predict": 400}).strip(), said)
+            if echoed:
+                reply = ECHO_FALLBACK
     # Only set_mode() changes the mode; the model must not announce a switch on its own.
     reply = _MODE_CLAIM_RE.sub("", reply).strip()
     if _TALK_START_RE.search(text) and db.get_setting("chat_mode", "work") == "work":
@@ -1535,8 +1544,33 @@ NO_CHANGE_NOTE = "まだ何も登録・変更していないよ。登録する�
 def strip_model_records(reply):
     """Only code writes operation records, including parenthesized inline records."""
     reply = re.sub(r"[（(]記録\s*[:：][^）)\n]*[）)]", "", reply)
-    return "\n".join(line for line in reply.splitlines()
-                     if not re.match(r"\s*(?:記録\s*[:：]|[＋+✎✔→↺]\s*|・\s*#\d+)", line)).strip()
+    reply = "\n".join(line for line in reply.splitlines()
+                      if not re.match(r"\s*(?:記録\s*[:：]|[＋+✎✔→↺]\s*|・\s*#\d+)", line))
+    return _LEAD_CLOSE_RE.sub("", reply).strip()  # a 「）」 left of a record or label opens no sentence (#175)
+
+
+# The context once showed Es's own lines as 「（Es が自分から言ったこと・…）…」 assistant turns, and the
+# model copied the label, the meow after it and a bare 「）」 into its replies (#175).
+_ES_LABEL_RE = re.compile(r"[（(]\s*Es\s*が(?:少し前に)?自分から言った[^）)\n]*[）)]|参考（返事の手本ではない[^\n]*")
+_ES_LABEL_TAIL_RE = re.compile(r"[（(]\s*E(?:s[^）)\n]*)?$|参考（[^\n]*$")
+_LEAD_CLOSE_RE = re.compile(r"^[ \t　]*[）)」』][）)」』／/、。 \t　]*", re.M)
+_LEAD_MEOW_RE = re.compile(r"^(?:(?:にゃ[ーあぁ〜~]*|なになに)[？?！!…。、\s]*)+")
+ECHO_RETRY_NOTE = ("返事の案が Es の過去の発言や参考の注記の写しになっていた。注記の形式・鳴き声・過去の発言を繰り返さず、"
+                   "利用者の今の発言そのものに、自分の言葉で短く答える。")
+ECHO_FALLBACK = "うん、聞いてるよ。"
+
+
+def strip_context_echo(reply, said=()):
+    """Remove a copied context label and a leading orphan bracket (#175).
+
+    Returns (reply, echoed). echoed: nothing of the reply's own is left, it only repeats a line Es
+    said by herself (`said`), or it was a label with only a meow behind it."""
+    labelled = bool(_ES_LABEL_RE.search(reply))
+    reply = _LEAD_CLOSE_RE.sub("", _ES_LABEL_RE.sub("", reply)).strip()
+    if labelled:
+        reply = _LEAD_MEOW_RE.sub("", reply).strip()
+    n = _norm(reply)
+    return reply, not n or any(n == _norm(line) for line in said)
 
 
 def clean_model_reply(reply, events=()):
@@ -1579,6 +1613,7 @@ def _partial(text):
     jobs.check()
     safe = strip_model_records(text)
     safe = re.sub(r"[（(]記録\s*[:：].*$", "", safe)
+    safe = _LEAD_CLOSE_RE.sub("", _ES_LABEL_TAIL_RE.sub("", _ES_LABEL_RE.sub("", safe)))
     _progress["partial"] = "".join(part for part in re.split(r"(?<=[。！!？?\n])", safe)
                                     if not _CLAIM_RE.search(part) and not _MODEL_OFFER_RE.search(part)
                                     and not _PROMISE_RE.search(part.strip()))

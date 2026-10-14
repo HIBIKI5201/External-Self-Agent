@@ -21,6 +21,9 @@ KINDS = ("notice", "question", "murmur", "feedback")
 HIDDEN = ("murmur", "feedback")  # recorded and in the context, but not shown in the chat history
 MAX_LEN = 300
 RECENT_MINUTES = 30
+# The cat greets the user each time it starts; a restarted server must not log it again (#175).
+# The day of a greeting starts at 05:00, so the night line 「夜ふかし？」 is one slot across midnight.
+GREETING_DAY_STARTS = 5
 _lock = threading.Lock()
 
 
@@ -31,6 +34,9 @@ def record(text, source="pet", kind="notice", key=None, ref=None):
         return None
     source = source if source in SOURCES else "system"
     kind = kind if kind in KINDS else "notice"
+    if not key and source == "clock":
+        day = (dt.datetime.now() - dt.timedelta(hours=GREETING_DAY_STARTS)).date().isoformat()
+        key = f"clock:{day}:{text}"
     key = str(key)[:80] if key else None
     with _lock, db.connect() as con:
         if key and con.execute("SELECT 1 FROM messages WHERE event_key = ?", (key,)).fetchone():
@@ -54,11 +60,24 @@ def reaction(lines):
     return ""
 
 
-def label(row):
-    """How a recorded line reads in the model's context."""
-    where = {"pet": "デスクトップの猫", "window": "チャット画面の猫", "timer": "集中タイマー", "task": "タスク完了",
-             "bgm": "BGM", "clock": "時刻", "system": "お知らせ"}.get(row.get("source"), "お知らせ")
-    return f"（Es が自分から言ったこと・{where}）{row['content']}"
+WHERE = {"pet": "デスクトップの猫", "window": "チャット画面の猫", "timer": "集中タイマー", "task": "タスク完了",
+         "bgm": "BGM", "clock": "時刻のあいさつ", "system": "お知らせ"}
+NOTE_HEAD = "参考（返事の手本ではない。この形式や言葉を返事に写さない）: Es はこの間に自分から次のことを言った。"
+
+
+def note(rows):
+    """How recorded lines read in the model's context (#175).
+
+    They used to be assistant turns 「（Es が自分から言ったこと・…）…」; the 8B model took them as
+    examples and copied the label and the meows into its replies. Now consecutive lines become one
+    system note, a repeated line appears once, and meows are left out (`conversation_context`)."""
+    seen, parts = set(), []
+    for row in rows:
+        where = WHERE.get(row.get("source"), "お知らせ")
+        if (where, row["content"]) not in seen:
+            seen.add((where, row["content"]))
+            parts.append(f"{where}「{row['content']}」")
+    return NOTE_HEAD + "、".join(parts)
 
 
 def answered_line(before_id):

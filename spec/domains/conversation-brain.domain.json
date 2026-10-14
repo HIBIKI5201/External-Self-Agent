@@ -83,7 +83,7 @@
       "pathPattern": "(^|/)(tests/eval_conversation\\.py|tests/test_naturalness_eval\\.py|spec/test/naturalness/[^/]+)$"
     },
     {
-      "pathPattern": "(^|/)(esagent/utterances\\.py|tests/test_utterance_log\\.py|spec/test/utterance-log-139\\.md)$"
+      "pathPattern": "(^|/)(esagent/utterances\\.py|tests/test_utterance_log\\.py|tests/test_context_echo\\.py|spec/test/utterance-log-139\\.md)$"
     },
     {
       "pathPattern": "(^|/)(tests/test_fixed_reply_misfire\\.py|spec/test/fixed-reply-misfire-113\\.md)$"

@@ -55,14 +55,24 @@ def select(history, budget):
             groups.append([{"role": role, "content": message["content"]}])
         elif role == "assistant" and groups:
             groups[-1].append({"role": role, "content": message["content"]})
-        elif role == "es":  # what Es said by herself (#139), labelled as such
-            turn = {"role": "assistant", "content": utterances.label(message) if message.get("source") else message["content"]}
-            if groups and message.get("source") is None:
+        elif role == "es" and message.get("source") is None:  # a skill's reply to the user's message
+            turn = {"role": "assistant", "content": message["content"]}
+            if groups:
                 groups[-1].append(turn)
             else:
                 groups.append([turn])
+        elif role == "es":  # what Es said by herself (#139): a reference note, never a reply (#175)
+            if message.get("kind") == "murmur":
+                continue  # meows and one-word reactions add nothing but lines to copy
+            if groups and "es_lines" in groups[-1][0]:
+                groups[-1][0]["es_lines"].append(message)
+            else:
+                groups.append([{"role": "system", "es_lines": [message]}])
         elif role == "notice" and groups and groups[-1][-1]["role"] == "assistant":
             groups[-1][-1]["content"] = "（記録: " + message["content"] + "）\n" + groups[-1][-1]["content"]
+    for group in groups:
+        if "es_lines" in group[0]:
+            group[0] = {"role": "system", "content": utterances.note(group[0]["es_lines"])}
     picked, used, shortened = [], 0, 0
     for group in reversed(groups):
         remaining = budget - used
