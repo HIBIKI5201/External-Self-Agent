@@ -201,7 +201,9 @@ class Pet:
         x = min(max(l, self.root.winfo_x() + self.w // 2 - bw // 2), r - bw)
         y = max(t, self.root.winfo_y() - bh - 2)
         b.geometry(f"+{x}+{y}")
-        b.bind("<Button-1>", lambda e: self._close_bubble())
+        # A click anywhere on the bubble closes it, except on its buttons (#170): the toplevel is in every
+        # child's bindtags, so closing on a button's press destroyed it before its command could run.
+        b.bind("<Button-1>", lambda e: None if isinstance(e.widget, tk.Button) else self._close_bubble())
         self.bubble = b
         if not buttons:
             self.root.after(int((secs or max(4, len(text) * 0.16)) * 1000), lambda bb=b: self._close_bubble(bb))
