@@ -32,6 +32,9 @@
       "pathPattern": "(^|/)esagent/server\\.py$"
     },
     {
+      "pathPattern": "(^|/)tests/test_server_routes\\.py$"
+    },
+    {
       "pathPattern": "(^|/)esagent/launch\\.py$"
     },
     {
