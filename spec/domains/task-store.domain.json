@@ -18,6 +18,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/linked_todos\\.py|tests/test_linked_todos\\.py|tests/test_read_only_tasks\\.py)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_offline_(repeat|rules)\\.py$"
     }
   ],
   "source": "manual",
