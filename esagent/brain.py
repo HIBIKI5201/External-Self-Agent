@@ -876,9 +876,60 @@ def set_mode(mode):
         return f"もう{MODES[mode]}だよ。"
     db.set_setting("chat_mode", mode)
     db.add_message("notice", f"— {MODES[mode]}に切り替えました —")
+    return _mode_reply(mode)
+
+
+def _mode_reply(mode):
     if mode == "talk":
         return "雑談モードにしたよ。タスクの話はこっちから振らないね。作業モードに戻るときは上のボタンか /work で。"
     return "作業モードに戻したよ。タスクの相談や「何からやる？」はいつでもどうぞ。"
+
+
+def shown_mode():
+    """The mode the header shows: a switch asked for while Es is replying counts at once (#199)."""
+    return db.get_setting("pending_mode") or db.get_setting("chat_mode", "work")
+
+
+def _switch_mode(mode):
+    """Under choices.lock: drop the open offers and the task in focus, then switch."""
+    choices.invalidate()
+    task_context.clear()
+    return set_mode(mode)
+
+
+def settle_mode():
+    """Under choices.lock: carry out a switch that waited for a reply, so its marker line comes
+    after that reply (#199). Does nothing when no switch is waiting."""
+    mode = db.get_setting("pending_mode")
+    if not mode:
+        return
+    with jobs.detached():  # the switch is the user's, not part of the request being answered
+        db.set_setting("pending_mode", "")
+        _switch_mode(mode)
+
+
+def request_mode(mode):
+    """The header's 作業／雑談 switch (POST /api/mode). Returns (reply, deferred).
+
+    While Es is making a reply she holds choices.lock for the whole of it (model requests can take
+    a minute). The switch then does not wait: the header shows the new mode at once, the reply in
+    progress finishes in the mode it was asked in, and the switch happens right after it (#199)."""
+    if choices.lock.acquire(blocking=False):
+        try:
+            db.set_setting("pending_mode", "")
+            return _switch_mode(mode), False
+        finally:
+            choices.lock.release()
+    current = db.get_setting("chat_mode", "work")
+    db.set_setting("pending_mode", "" if mode == current else mode)
+
+    def wait_and_settle():
+        with choices.lock:
+            settle_mode()
+    threading.Thread(target=wait_and_settle, name="mode-switch", daemon=True).start()
+    if mode == current:
+        return f"今の返事は{MODES[mode]}のまま作り終えるね。", True
+    return _mode_reply(mode) + "（いま作っている返事を出してから切り替えるね）", True
 _WISH_RE = re.compile(r"欲しい|ほしい|あればいい|あったらいい|いいな$|いいなあ|できたらいい|"
                       r"あった方が|あったほうが|方がいい|ほうがいい|方が良い|ほうが良い|と思う")
 _YES_RE = re.compile(r"^(はい|うん|そうだね|そうして|お願い|おねがい|OK|ok|いいよ|それで|よろしく)")
@@ -2058,6 +2109,7 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
     if selection is None and message_id is None and is_status_question(text):
         return _status_answer(text, queued_at, received)
     with choices.lock, _lock:
+        settle_mode()  # a switch pressed before this message was taken up applies to it (#199)
         conversation_context.STATS.set({})
         started = db.now()
         _stage("判断中")
@@ -2077,6 +2129,7 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
             choices.expose(result)
             return result
         finally:
+            settle_mode()  # a switch pressed while this reply was made comes after it (#199)
             mid = _progress.get("message_id")
             if mid:
                 done = None if result is None or result.get("pending") else db.now()

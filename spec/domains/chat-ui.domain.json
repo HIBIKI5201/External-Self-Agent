@@ -20,7 +20,7 @@
       "pathPattern": "(^|/)esagent/admin\\.py$"
     },
     {
-      "pathPattern": "(^|/)(tests/test_chat_choices\\.py|spec/test/chat-choices-45\\.md)$"
+      "pathPattern": "(^|/)(tests/test_chat_choices\\.py|tests/test_mode_switch_busy\\.py|spec/test/chat-choices-45\\.md)$"
     }
   ],
   "source": "manual",

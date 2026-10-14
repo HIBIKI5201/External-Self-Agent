@@ -65,7 +65,7 @@ def state():
         "youtube": youtube.status(),
         "playback": playback.current.snapshot(),
         "choices": choices.public(),
-        "mode": db.get_setting("chat_mode", "work"),
+        "mode": brain.shown_mode(),
         "companion": companion.stats(),
         "voice": voice.status(CFG),
     }
@@ -447,12 +447,9 @@ class Handler(BaseHTTPRequestHandler):
             mode = body.get("mode")
             if mode not in brain.MODES:
                 raise ValueError("mode must be work or talk")
-            with choices.lock:
-                choices.invalidate()
-                task_context.clear()
-                reply = brain.set_mode(mode)
+            reply, deferred = brain.request_mode(mode)  # does not wait for a reply in progress (#199)
             voice.say(CFG, reply)
-            return {"mode": mode, "reply": reply}
+            return {"mode": mode, "reply": reply, "deferred": deferred}
         if path == "/api/pet/enabled":
             on = bool(body.get("enabled"))
             db.set_setting("pet_enabled", "1" if on else "0")
