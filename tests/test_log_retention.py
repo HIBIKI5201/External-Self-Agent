@@ -123,3 +123,36 @@ def test_rotation_settings_are_bounded_and_invalid_values_use_defaults():
                 assert (file.maxBytes,file.backupCount) == expected
             finally:
                 file.close()
+
+
+def test_playback_reports_are_summarised_and_favicon_is_not_a_warning():
+    """#209: the 5-second player reports went to the log one by one; the favicon was a 404 warning."""
+    out = io.StringIO()
+    logger = logging.Logger("playback-test", logging.INFO)
+    logger.addHandler(logging.StreamHandler(out))
+    clock = Clock()
+    traffic = runtime_log.Traffic(logger, clock)
+    for _ in range(60):
+        traffic.request("POST", "/api/playback/state", 200)
+    traffic.request("POST", "/api/playback/state", 500)
+    assert out.getvalue().strip() == "HTTP POST /api/playback/state 500"
+    clock.value = 300
+    traffic.checkpoint()
+    assert "poll summary POST /api/playback/state 200 count=60 window_seconds=300" in out.getvalue()
+    assert runtime_log.route("/favicon.ico") == "/favicon.ico"
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory)/"esagent.log"
+        path.write_text(out.getvalue().replace("poll summary", "2026-10-01 00:05:00,000 INFO poll summary"), encoding="utf-8")
+        report = diagnose.read_server([path], diagnose.timestamp("2026-10-01T00:00:00"), diagnose.timestamp("2026-10-01T01:00:00"))
+        assert report["poll_successes_in_complete_windows"] == 60, report
+
+
+def test_favicon_gets_an_empty_answer():
+    import server
+    handler = object.__new__(server.Handler)
+    sent = []
+    handler.path, handler.headers = "/favicon.ico", {"Host": "127.0.0.1:8765"}
+    with patch.object(server.Handler, "_host_ok", lambda self: True), \
+            patch.object(server.Handler, "_send", lambda self, code, obj=None, body=None, **k: sent.append((code, body))):
+        handler.do_GET()
+    assert sent == [(204, b"")]
