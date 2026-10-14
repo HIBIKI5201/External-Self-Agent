@@ -89,6 +89,9 @@
       "pathPattern": "(^|/)(tests/test_fixed_reply_misfire\\.py|spec/test/fixed-reply-misfire-113\\.md)$"
     },
     {
+      "pathPattern": "(^|/)(tests/test_fixed_reply_order\\.py|spec/test/fixed-reply-order-206\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)(tests/test_no_false_promises\\.py|tests/test_no_alarm_promise\\.py|spec/test/no-false-promises-114\\.md)$"
     },
     {

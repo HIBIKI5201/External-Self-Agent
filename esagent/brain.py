@@ -10,6 +10,7 @@ wait) and conversation_state (the lock and the progress of the running turn).
 import datetime as dt
 import json
 import re
+from dataclasses import dataclass, field
 
 import db
 import llm
@@ -1547,6 +1548,277 @@ def _es_reply_flow(text, message_id):
     return None
 
 
+@dataclass
+class Turn:
+    """One message on its way through the fixed replies (#206)."""
+    text: str
+    cfg: dict
+    message_id: int
+    history: list
+    annotated: str
+
+
+@dataclass
+class Fixed:
+    """A fixed reply and what goes with it. It is saved once, by _say_fixed."""
+    reply: str
+    intent: str
+    events: list = field(default_factory=list)
+    clear: bool = False  # the talk moved on: drop the task details being gathered (task_context)
+    ui: dict = None
+    offer: tuple = None  # (kind, value) published as choices under the reply
+    mode: str = None
+
+
+def _fixed_game(t):
+    reply = conversation_game.handle(t.text)
+    return None if reply is None else Fixed(reply, "game", clear=True)
+
+
+def _fixed_es_reply(t):
+    answered = _es_reply_flow(t.text, t.message_id)  # 「終わったよ」 to the timer's 「〇〇、終わった？」 (#139)
+    return None if answered is None else Fixed(answered[0], "es-reply", answered[1])
+
+
+def _fixed_schedule(t):
+    schedule = calendar_view.answer(t.text)  # 「明日の予定は？」: the kept calendar events only (#157)
+    return Fixed(schedule, "schedule", clear=True) if schedule else None
+
+
+def _fixed_ability(t):
+    ability = _ability_flow(t.text, t.cfg)
+    return Fixed(ability, "ability", clear=True) if ability else None
+
+
+def _fixed_playback(t):
+    reply = playback.answer(t.text)
+    return None if reply is None else Fixed(reply, "playback", clear=True)
+
+
+def _fixed_focus(t):
+    focus = _focus_selection(t.text, t.cfg)
+    return None if focus is None else Fixed(focus[0], "focus", focus[1], clear=True)
+
+
+def _fixed_mode_proposal(t):
+    proposed = choices.proposed_mode(t.text)
+    if not proposed:
+        return None
+    return Fixed(f"{MODES[proposed]}に切り替える？選ぶまでモードは変えていないよ。", "proposal", clear=True,
+                 offer=("mode", {"mode": proposed}))
+
+
+def _fixed_topic_proposal(t):
+    if not re.fullmatch(r"(?:話題を選びたい|話題を選ばせて|話題を選んで)[。！!\s]*", t.text):
+        return None
+    return Fixed("どんな話をしよう？選んでも、自由に書いてくれてもいいよ。", "proposal", clear=True, offer=("topic", None))
+
+
+def _fixed_mode(t):
+    wants = choices.explicit_mode(t.text)
+    if not wants or _ACTION_HINT_RE.search(t.text):
+        return None
+    return Fixed(set_mode(wants), "mode", clear=True, mode=wants)
+
+
+def _fixed_feature_context(t):
+    context = task_context.detail_request(t.text) or task_context.proposal(t.text, t.message_id)
+    if not context:
+        return None
+    if context.get("register"):
+        value = context["register"]
+        reply, events = _register_feature(t.cfg, value["wish"], task_context.lines(value))
+    else:
+        reply, events = context["reply"], context.get("events", [])
+    return Fixed(reply, "feature-context", events)
+
+
+def _fixed_remember_command(t):
+    if not re.search(_MEMORY_COMMAND + r"(?:[。！!？?\s]*$|\s*[:：])", t.text):
+        return None
+    return Fixed(_remember(t.cfg, t.text, t.history), "remember")
+
+
+def _fixed_action_log(t):
+    answer = _action_log_flow(t.text, t.history)  # read-only questions about the records (#70)
+    return Fixed(answer, "lookup") if answer else None
+
+
+def _fixed_lookup(t):
+    answer = _lookup_flow(t.text, t.history)  # read-only questions about the stored values (#76)
+    return Fixed(answer, "lookup") if answer else None
+
+
+def _fixed_rename_reference(t):
+    history = t.history
+    if re.search(r"さっき|直前", t.text):
+        history = db.recent_messages(80, roles=("user", "assistant", "notice", "es"), before=t.message_id)
+    renamed = _reference_rename(t.text, history)
+    return Fixed(renamed[0], "guarded", renamed[1]) if renamed else None
+
+
+def _fixed_recall(t):
+    unknown = _recall_flow(t.text, t.message_id)
+    return Fixed(unknown, "recall") if unknown else None
+
+
+def _fixed_remember(t):
+    # 「記憶ってすごいね」 is talk; only a request or a question about memory gets the fixed answer (#113).
+    if not (_REMEMBER_RE.search(t.text) or ("記憶" in t.text and _MEMORY_ASK_RE.search(t.text))):
+        return None
+    reply = _remember(t.cfg, t.text, t.history)
+    return None if _said_just_before(reply, t.history) else Fixed(reply, "remember")
+
+
+def _fixed_offer(t):
+    offer = _offer_flow(t.text)
+    return Fixed(offer[0], "offer", ui=offer[1]) if offer else None
+
+
+def _fixed_alarm(t):
+    alarm = _alarm_flow(t.text)  # 「7時半に起こして」: no alarm exists, answered by code (#205)
+    return Fixed(alarm, "alarm") if alarm else None
+
+
+def _fixed_forget(t):
+    forget = _forget_flow(t.text)
+    return Fixed(forget, "forget") if forget else None
+
+
+def _fixed_repeat_bulk(t):
+    bulk = repeat_chat.bulk_repeat(t.text)  # one period for a project's tasks that have none, approved first (#123)
+    if not bulk:
+        return None
+    reply, offer = bulk
+    return Fixed(reply, "proposal" if offer else "repeat", offer=("repeat_bulk", offer) if offer else None)
+
+
+def _fixed_repeat_periodic(t):
+    periodic = repeat_chat.periodic_add(t.text, t.history)  # 「ウィークリーに「週課A」を追加して」: the period first (#135)
+    if not periodic:
+        return None
+    reply, events, offer = periodic
+    return Fixed(reply, "repeat", events, offer=("repeat_add", offer) if offer else None)
+
+
+def _fixed_guarded_write(t):
+    guarded = _guarded_write_flow(t.text, t.annotated, t.history)
+    return Fixed(guarded[0], "guarded", guarded[1]) if guarded else None
+
+
+def _fixed_ack(t):
+    if _ACK_RE.search(t.text) and not _ACTION_HINT_RE.search(t.text) and not _talking():
+        return Fixed("了解、じゃあ私も集中するね。終わったら教えて。", "ack")
+    return None
+
+
+def _fixed_repeat_command(t):
+    command = repeat_chat.handle(t.text, t.history)
+    return Fixed(command[0], "repeat", command[1]) if command else None
+
+
+def _fixed_repeat_question(t):
+    repeat = _repeat_question_flow(t.text)
+    return Fixed(repeat, "repeat") if repeat else None
+
+
+def _fixed_outside(t):
+    outside = _outside_fact_flow(t.text)  # 「セールやってるの？」: not something Es can check (#208)
+    return Fixed(outside, "outside") if outside else None
+
+
+def _fixed_activity(t):
+    activity = _activity_flow(t.text)
+    return Fixed(activity, "activity") if activity else None
+
+
+def _fixed_meaning(t):
+    meaning = _meaning_flow(t.cfg, t.text)
+    return Fixed(meaning, "meaning") if meaning else None
+
+
+def _fixed_report(t):
+    report = None if _talking() else _report_flow(t.text)
+    return Fixed(report[0], "report") if report else None
+
+
+def _fixed_policy(t):
+    if db.get_setting("pending_feature") or (_talking() and not _FROM_NOW_RE.search(t.text)):
+        return None
+    policy = _policy_flow(t.text)
+    return Fixed(policy, "policy") if policy else None
+
+
+def _fixed_feature(t):
+    feature = _feature_flow(t.cfg, t.text)
+    return Fixed(feature[0], "feature", feature[1]) if feature else None
+
+
+# The fixed replies, tried in this order before the model is asked; the first that answers wins.
+# This list is the source of truth for the order (AS-02). An earlier entry that matches too much takes
+# the words of a later one (#113, #134, #193): tests/test_fixed_reply_order.py checks which entry
+# each sentence reaches, so put a new entry where it belongs and add its sentences there.
+FIXED_REPLIES = (
+    ("game", _fixed_game),                        # しりとり (conversation_game)
+    ("es_reply", _fixed_es_reply),                # 「終わったよ」 to Es's own question (#139)
+    ("schedule", _fixed_schedule),                # 「明日の予定は？」 (#157)
+    ("ability", _fixed_ability),                  # 「喋れるようになった？」 (#120)
+    ("playback", _fixed_playback),                # 「今何の曲？」
+    ("focus", _fixed_focus),                      # 「集中タイマーのタスクを〇〇にして」
+    ("mode_proposal", _fixed_mode_proposal),
+    ("topic_proposal", _fixed_topic_proposal),
+    ("mode", _fixed_mode),                        # 「雑談モードにして」
+    ("feature_context", _fixed_feature_context),  # details for a wish being registered
+    ("remember_command", _fixed_remember_command),
+    ("action_log", _fixed_action_log),            # 「さっき何をした？」 (#70)
+    ("lookup", _fixed_lookup),                    # 「〇〇の締切は？」 (#76, #134)
+    ("rename_reference", _fixed_rename_reference),
+    ("recall", _fixed_recall),                    # 「前の合言葉は何だっけ？」
+    ("remember", _fixed_remember),                # 「記憶の仕組みは？」 (#113)
+    ("offer", _fixed_offer),
+    ("alarm", _fixed_alarm),                      # 「7時半に起こして」 (#205)
+    ("forget", _fixed_forget),
+    ("repeat_bulk", _fixed_repeat_bulk),          # (#123)
+    ("repeat_periodic", _fixed_repeat_periodic),  # (#135)
+    ("guarded_write", _fixed_guarded_write),      # writes the router must not guess (#72, #73, #74)
+    ("ack", _fixed_ack),                          # 「もう始めてるよ」
+    ("repeat_command", _fixed_repeat_command),
+    ("repeat_question", _fixed_repeat_question),
+    ("outside", _fixed_outside),                  # 「セールやってるの？」 (#208)
+    ("activity", _fixed_activity),
+    ("meaning", _fixed_meaning),
+    ("report", _fixed_report),                    # 「資料は自分で直すね」
+    ("policy", _fixed_policy),
+    ("feature", _fixed_feature),                  # a wish for Es's own features
+)
+
+
+def _fixed_reply(turn):
+    """The first fixed reply that answers, as (name, Fixed), or (None, None) for the model."""
+    for name, flow in FIXED_REPLIES:
+        hit = flow(turn)
+        if hit is not None:
+            return name, hit
+    return None, None
+
+
+def _say_fixed(name, hit):
+    """Save a fixed reply with its records and choices, and return the chat result."""
+    if hit.clear:
+        task_context.clear()
+    db.add_message("assistant", hit.reply)
+    if hit.events:
+        db.add_message("notice", "\n".join(hit.events))
+    if hit.offer:
+        choices.publish(*hit.offer)
+    result = {"reply": hit.reply, "events": list(hit.events), "handoffs": [], "intent": hit.intent, "fixed": name}
+    if hit.ui is not None:
+        result["ui"] = hit.ui
+    if hit.mode:
+        result["mode"] = hit.mode
+    return result
+
+
 def _chat(text, cfg, message_id=None):
     today = dt.date.today()
     # "es": what Es said by herself (the cat, timer notices…), so a reply to it is understood (#139).
@@ -1558,178 +1830,10 @@ def _chat(text, cfg, message_id=None):
     else:
         db.set_message_status(message_id, None)
     conversation_state.set_message_id(message_id)
-    game_reply = conversation_game.handle(text)
-    if game_reply is not None:
-        task_context.clear()
-        db.add_message("assistant", game_reply)
-        return {"reply": game_reply, "events": [], "handoffs": [], "intent": "game"}
-    answered = _es_reply_flow(text, message_id)
-    if answered is not None:  # 「終わったよ」 to the timer's 「〇〇、終わった？」 (#139)
-        reply, records = answered
-        db.add_message("assistant", reply)
-        if records:
-            db.add_message("notice", "\n".join(records))
-        return {"reply": reply, "events": records, "handoffs": [], "intent": "es-reply"}
-    schedule = calendar_view.answer(text)
-    if schedule:  # 「明日の予定は？」: the kept calendar events only (#157)
-        task_context.clear()
-        db.add_message("assistant", schedule)
-        return {"reply": schedule, "events": [], "handoffs": [], "intent": "schedule"}
-    ability = _ability_flow(text, cfg)
-    if ability:
-        task_context.clear()
-        db.add_message("assistant", ability)
-        return {"reply": ability, "events": [], "handoffs": [], "intent": "ability"}
-    media_reply = playback.answer(text)
-    if media_reply is not None:
-        task_context.clear()
-        db.add_message("assistant", media_reply)
-        return {"reply": media_reply, "events": [], "handoffs": [], "intent": "playback"}
-    focus_reply = _focus_selection(text, cfg)
-    if focus_reply is not None:
-        reply, events = focus_reply
-        task_context.clear()
-        db.add_message("assistant", reply)
-        if events:
-            db.add_message("notice", "\n".join(events))
-        return {"reply": reply, "events": events, "handoffs": [], "intent": "focus"}
-    proposed = choices.proposed_mode(text)
-    if proposed:
-        task_context.clear()
-        reply = f'{MODES[proposed]}に切り替える？選ぶまでモードは変えていないよ。'
-        db.add_message('assistant', reply)
-        choices.publish('mode', {'mode': proposed})
-        return {'reply': reply, 'events': [], 'handoffs': [], 'intent': 'proposal'}
-    if re.fullmatch(r'(?:話題を選びたい|話題を選ばせて|話題を選んで)[。！!\s]*', text):
-        task_context.clear()
-        reply = 'どんな話をしよう？選んでも、自由に書いてくれてもいいよ。'
-        db.add_message('assistant', reply)
-        choices.publish('topic')
-        return {'reply': reply, 'events': [], 'handoffs': [], 'intent': 'proposal'}
-    wants = choices.explicit_mode(text)
-    if wants and not _ACTION_HINT_RE.search(text):
-        task_context.clear()
-        reply = set_mode(wants)
-        db.add_message("assistant", reply)
-        return {"reply": reply, "events": [], "handoffs": [], "intent": "mode", "mode": wants}
-    detail = task_context.detail_request(text)
-    context = detail or task_context.proposal(text, message_id)
-    if context:
-        if context.get('register'):
-            value = context['register']
-            reply, events = _register_feature(cfg, value['wish'], task_context.lines(value))
-        else:
-            reply, events = context['reply'], context.get('events', [])
-        db.add_message('assistant', reply)
-        if events:
-            db.add_message('notice', '\n'.join(events))
-        return {'reply': reply, 'events': events, 'handoffs': [], 'intent': 'feature-context'}
     try:
-        if re.search(_MEMORY_COMMAND + r"(?:[。！!？?\s]*$|\s*[:：])", text):
-            reply = _remember(cfg, text, history)
-            db.add_message("assistant", reply)
-            return {"reply": reply, "events": [], "handoffs": [], "intent": "remember"}
-        answer = _action_log_flow(text, history) or _lookup_flow(text, history)
-        if answer:  # read-only questions about the records and stored values (#70, #76)
-            db.add_message("assistant", answer)
-            return {"reply": answer, "events": [], "handoffs": [], "intent": "lookup"}
-        rename_history = db.recent_messages(80, roles=("user", "assistant", "notice", "es"), before=message_id) if re.search(r"さっき|直前", text) else history
-        renamed = _reference_rename(text, rename_history)
-        if renamed:
-            reply, records = renamed
-            db.add_message("assistant", reply)
-            if records:
-                db.add_message("notice", "\n".join(records))
-            return {"reply": reply, "events": records, "handoffs": [], "intent": "guarded"}
-        unknown = _recall_flow(text, message_id)
-        if unknown:
-            db.add_message("assistant", unknown)
-            return {"reply": unknown, "events": [], "handoffs": [], "intent": "recall"}
-        # 「記憶ってすごいね」 is talk; only a request or a question about memory gets the fixed answer (#113).
-        if _REMEMBER_RE.search(text) or ("記憶" in text and _MEMORY_ASK_RE.search(text)):
-            reply = _remember(cfg, text, history)
-            if not _said_just_before(reply, history):
-                db.add_message("assistant", reply)
-                return {"reply": reply, "events": [], "handoffs": [], "intent": "remember"}
-        offer = _offer_flow(text)
-        if offer:
-            reply, ui = offer
-            db.add_message("assistant", reply)
-            return {"reply": reply, "events": [], "handoffs": [], "ui": ui, "intent": "offer"}
-        alarm = _alarm_flow(text)
-        if alarm:  # 「7時半に起こして」: no alarm exists, answered by code (#205)
-            db.add_message("assistant", alarm)
-            return {"reply": alarm, "events": [], "handoffs": [], "intent": "alarm"}
-        forget = _forget_flow(text)
-        if forget:
-            db.add_message("assistant", forget)
-            return {"reply": forget, "events": [], "handoffs": [], "intent": "forget"}
-        bulk = repeat_chat.bulk_repeat(text)
-        if bulk:  # one period for a project's tasks that have none, approved first (#123)
-            reply, offer = bulk
-            db.add_message("assistant", reply)
-            if offer:
-                choices.publish("repeat_bulk", offer)
-            return {"reply": reply, "events": [], "handoffs": [], "intent": "proposal" if offer else "repeat"}
-        periodic = repeat_chat.periodic_add(text, history)
-        if periodic:  # 「ウィークリーに「週課A」を追加して」: ask the period first (#135)
-            reply, events, offer = periodic
-            db.add_message("assistant", reply)
-            if events:
-                db.add_message("notice", "\n".join(events))
-            if offer:
-                choices.publish("repeat_add", offer)
-            return {"reply": reply, "events": events, "handoffs": [], "intent": "repeat"}
-        guarded = _guarded_write_flow(text, annotated, history)
-        if guarded:
-            reply, events = guarded
-            db.add_message("assistant", reply)
-            if events:
-                db.add_message("notice", "\n".join(events))
-            return {"reply": reply, "events": events, "handoffs": [], "intent": "guarded"}
-        if _ACK_RE.search(text) and not _ACTION_HINT_RE.search(text) and not _talking():
-            reply = "了解、じゃあ私も集中するね。終わったら教えて。"
-            db.add_message("assistant", reply)
-            return {"reply": reply, "events": [], "handoffs": [], "intent": "ack"}
-        repeat_command = repeat_chat.handle(text, history)
-        if repeat_command:
-            reply, events = repeat_command
-            db.add_message('assistant', reply)
-            if events:
-                db.add_message('notice', '\n'.join(events))
-            return {'reply': reply, 'events': events, 'handoffs': [], 'intent': 'repeat'}
-        repeat = _repeat_question_flow(text)
-        if repeat:
-            db.add_message("assistant", repeat)
-            return {"reply": repeat, "events": [], "handoffs": [], "intent": "repeat"}
-        outside = _outside_fact_flow(text)
-        if outside:  # 「セールやってるの？」: not something Es can check (#208)
-            db.add_message("assistant", outside)
-            return {"reply": outside, "events": [], "handoffs": [], "intent": "outside"}
-        activity = _activity_flow(text)
-        if activity:
-            db.add_message("assistant", activity)
-            return {"reply": activity, "events": [], "handoffs": [], "intent": "activity"}
-        meaning = _meaning_flow(cfg, text)
-        if meaning:
-            db.add_message("assistant", meaning)
-            return {"reply": meaning, "events": [], "handoffs": [], "intent": "meaning"}
-        report = None if _talking() else _report_flow(text)
-        if report:
-            db.add_message("assistant", report[0])
-            return {"reply": report[0], "events": [], "handoffs": [], "intent": "report"}
-        policy = None if db.get_setting("pending_feature") or (_talking() and not _FROM_NOW_RE.search(text)) \
-            else _policy_flow(text)
-        if policy:
-            db.add_message("assistant", policy)
-            return {"reply": policy, "events": [], "handoffs": [], "intent": "policy"}
-        feature = _feature_flow(cfg, text)
-        if feature:
-            reply, events = feature
-            db.add_message("assistant", reply)
-            if events:
-                db.add_message("notice", "\n".join(events))
-            return {"reply": reply, "events": events, "handoffs": [], "intent": "feature"}
+        name, hit = _fixed_reply(Turn(text, cfg, message_id, history, annotated))
+        if hit is not None:
+            return _say_fixed(name, hit)
         if _REMEMBER_RE.search(text) and not _ACTION_HINT_RE.search(text):
             conversation_state.stage("覚えています")
             reply, intent, events, handoffs = _remember(cfg, text, history), "remember", [], []
