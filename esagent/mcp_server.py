@@ -34,7 +34,7 @@ TOOLS = [
         "description": "タスクを追加する。作業中に見つけたフォローアップなどに使う。",
         "inputSchema": {"type": "object", "properties": {
             "title": {"type": "string"},
-            "project": {"type": "string"},
+            "project": {"type": "string", "description": "既存のプロジェクト名。見つからなければエラーになる（候補が返る）"},
             "due": {"type": "string", "description": "YYYY-MM-DD"},
             "notes": {"type": "string"},
         }, "required": ["title"]},
@@ -82,6 +82,11 @@ def call_tool(name, args):
     if name == "get_task":
         return db.get_task(args["task_id"]) or {"error": "task not found"}
     if name == "add_task":
+        if args.get("project"):
+            with db.connect() as con:
+                if not db.find_project(con, args["project"]):
+                    names = "、".join(p["name"] for p in db.list_projects())
+                    return {"error": f"project not found: {args['project']} (projects: {names})"}  # #197
         return db.add_task(args["title"], project=args.get("project"), due=args.get("due"),
                            notes=args.get("notes", ""))
     if name == "update_task":

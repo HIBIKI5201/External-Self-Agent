@@ -11,7 +11,7 @@
       "pathPattern": "(^|/)esagent/recurring\\.py$"
     },
     {
-      "pathPattern": "(^|/)esagent/projects\\.py$"
+      "pathPattern": "(^|/)(esagent/projects\\.py|tests/test_project_match\\.py)$"
     },
     {
       "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|tests/test_periodic_add\\.py|spec/test/conversation-repeat-53\\.md|spec/test/periodic-add-135\\.md)$"
