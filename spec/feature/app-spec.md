@@ -27,7 +27,7 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 - **実装:** チャット画面は Edge のアプリウィンドウ（`--app=http://127.0.0.1:8765/`）。**Ctrl+Alt+E** またはスタートメニューの「E.S. Agent」で開く（`esagent/launch.py`）。**既に開いていれば前面に出し、無ければ開く**（`esagent/winfocus.py`）。
 - **実装:** サーバー起動時にデスクトップの黒猫（AS-12）も起動する。黒猫はタスクスケジューラのジョブから外して起動する（`CREATE_BREAKAWAY_FROM_JOB`）。
 - **意図:** 黒猫がタスクのジョブに残ると、サーバーが落ちてもタスクが「実行中」のままになり、再起動できなくなるため。
-- **実装:** データは `data/`（SQLite `esagent.db`、ログ `esagent.log`、引き継ぎ文 `handoffs/`、黒猫の位置 `pet.json`）、秘密情報は `secrets/`、設定は `config.json`（いずれも Git の管理外。共有用の雛形は `config.example.json`）。
+- **実装:** データは `data/`（SQLite `esagent.db`、ログ `esagent.log`、引き継ぎ文 `handoffs/`、黒猫の位置 `pet.json`）、秘密情報は `secrets/`、設定は `config.json`（いずれも Git の管理外。共有用の雛形は `config.example.json`）。`config.json` と Google のトークン（`secrets/google_token.json`）は同じフォルダの一時ファイルに書いてから置き換える（`db.write_atomic`、書き込みは直列）。書き込み中に止まっても元のファイルが残る。モデルが思考に対応しないという実行中の判定は `config.json` に書かない（#233）。
 - **実装:** バックグラウンド処理 — Google 同期（3分ごと＋変更時）、繰り返しタスクのリセット判定（60秒ごと）、集中タイマー（1秒ごと）、返事待ちメッセージの処理（5秒ごと）。
 
 ## AS-02 モデルと判断の流れ

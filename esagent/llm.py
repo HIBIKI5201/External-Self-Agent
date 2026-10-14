@@ -32,6 +32,15 @@ def _url(cfg, path):
     return cfg["ollama_url"].rstrip("/") + path
 
 
+# Models that answered "does not support thinking". Kept apart from the shared config, which the admin
+# page writes to config.json, so a runtime finding is not saved as a setting (#233).
+_NO_THINK = set()
+
+
+def _thinks(cfg):
+    return cfg.get("supports_think", True) and cfg["model"] not in _NO_THINK
+
+
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.S)
 
 
@@ -55,13 +64,13 @@ def chat(cfg, messages, schema=None, options=None, think=False, on_text=None, ti
     }
     if schema:
         body["format"] = schema
-    if cfg.get("supports_think", True):
+    if _thinks(cfg):
         body["think"] = bool(think)
     try:
         return _post(cfg, body, timeout, on_text)
     except LLMError as e:
         if "think" in body and "does not support thinking" in str(e):
-            cfg["supports_think"] = False
+            _NO_THINK.add(cfg["model"])  # not in cfg: the admin page would save it to config.json (#233)
             del body["think"]
             return _post(cfg, body, timeout, on_text)
         raise
@@ -167,7 +176,7 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
         "keep_alive": cfg.get("keep_alive", "10m"),
         "options": {"temperature": 0.2, "num_ctx": cfg.get("num_ctx", 8192), **(options or {})},
     }
-    if cfg.get("supports_think", True):
+    if _thinks(cfg):
         body["think"] = False
     req = urllib.request.Request(_url(cfg, "/api/chat"), data=json.dumps(body).encode("utf-8"),
                                  headers={"Content-Type": "application/json"})

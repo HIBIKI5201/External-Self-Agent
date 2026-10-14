@@ -51,6 +51,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/runtime_log\\.py|tests/test_log_retention\\.py|spec/test/log-retention-82\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_atomic_write\\.py$"
     }
   ],
   "source": "manual",

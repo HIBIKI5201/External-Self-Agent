@@ -4,6 +4,8 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
+import threading
 from contextlib import contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -151,9 +153,29 @@ def load_config():
 
 
 def save_config(cfg):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    write_atomic(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+
+
+_write_lock = threading.Lock()
+
+
+def write_atomic(path, text):
+    """Replace a whole file so that a crash or shutdown leaves the old or the new contents, never a
+    half-written one (#233): config.json is read when the server starts, the Google token every hour."""
+    with _write_lock:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=os.path.basename(path) + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def valid_datetime(value):
