@@ -131,10 +131,26 @@ MIGRATIONS = {
               ("rev", "INTEGER NOT NULL DEFAULT 1"), ("synced_rev", "INTEGER NOT NULL DEFAULT 0"),
               ("repeat", "TEXT"), ("last_reset", "TEXT"),
               # Read from a file another tool owns (#182, linked_todos): only that file completes it.
-              ("read_only", "INTEGER NOT NULL DEFAULT 0")],
+              ("read_only", "INTEGER NOT NULL DEFAULT 0"),
+              # When the task last became done (#253): updated_at also moves with a memo or a rename.
+              ("done_at", "TEXT")],
     # The TOML file the item was read from (#184), to tell where a read-only task is completed.
     "linked_items": [("file", "TEXT")],
 }
+
+_NOW = "strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime')"
+DONE_AT_TRIGGERS = f"""
+CREATE TRIGGER IF NOT EXISTS tasks_done_at AFTER UPDATE OF status ON tasks
+WHEN NEW.status IS NOT OLD.status
+BEGIN
+  UPDATE tasks SET done_at = CASE WHEN NEW.status = 'done' THEN {_NOW} ELSE NULL END WHERE id = NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS tasks_done_at_insert AFTER INSERT ON tasks
+WHEN NEW.status = 'done' AND NEW.done_at IS NULL
+BEGIN
+  UPDATE tasks SET done_at = NEW.created_at WHERE id = NEW.id;
+END;
+"""
 
 TASK_SELECT = """
 SELECT t.*, p.name AS project, p.folder AS folder
@@ -219,10 +235,15 @@ def init():
                     if table == "tasks" and name == "synced_rev":
                         con.execute("UPDATE tasks SET synced_rev = rev WHERE gtask_id IS NOT NULL "
                                     "AND synced_at IS NOT NULL AND updated_at = synced_at")
+                    if table == "tasks" and name == "done_at":  # the best guess there is for old rows
+                        con.execute("UPDATE tasks SET done_at = updated_at WHERE status = 'done'")
                     if table == "tasks" and name == "read_only":
                         con.execute("UPDATE tasks SET read_only = 1 WHERE id IN "
                                     "(SELECT task_id FROM linked_items WHERE task_id IS NOT NULL)")
         con.execute("CREATE INDEX IF NOT EXISTS messages_event_key ON messages(event_key)")
+        # Every way a task is completed (chat, screen, Google, linked files, repeats) goes through an
+        # UPDATE or INSERT of status, so the database itself keeps done_at (#253).
+        con.executescript(DONE_AT_TRIGGERS)
 
 
 def get_setting(key, default=None):
@@ -368,8 +389,15 @@ def list_tasks(include_done=False, project=None):
 
 def recently_done(limit=8):
     with connect() as con:
-        sql = TASK_SELECT + " WHERE t.status = 'done' ORDER BY t.updated_at DESC LIMIT ?"
+        sql = TASK_SELECT + " WHERE t.status = 'done' ORDER BY COALESCE(t.done_at, t.updated_at) DESC LIMIT ?"
         return [dict(r) for r in con.execute(sql, (limit,))]
+
+
+def done_on(day):
+    """Tasks completed on a day ('YYYY-MM-DD'), by when they became done, not by their last edit (#253)."""
+    with connect() as con:
+        sql = TASK_SELECT + " WHERE t.status = 'done' AND substr(t.done_at, 1, 10) = ? ORDER BY t.done_at, t.id"
+        return [dict(r) for r in con.execute(sql, (day,))]
 
 
 def add_task(title, project=None, due=None, notes="", status="todo", read_only=False):
