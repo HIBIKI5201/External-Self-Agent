@@ -2316,7 +2316,7 @@ def _chat(text, cfg, message_id=None):
     else:
         db.set_message_status(message_id, None)
     _progress["message_id"] = message_id
-    game_reply = conversation_game.handle(text)
+    game_reply = conversation_game.handle(text, cfg)
     if game_reply is not None:
         task_context.clear()
         db.add_message("assistant", game_reply)

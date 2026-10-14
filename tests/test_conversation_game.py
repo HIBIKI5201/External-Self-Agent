@@ -47,7 +47,8 @@ def test_invalid_repeated_n_and_reading_rules():
         game.save({**before, "next": "げ"})
         assert "もう使った" in sb.chat("げーむ")["reply"]
         game.save({**before, "next": "ね"})
-        assert "読みも" in sb.chat("未知漢字")["reply"]
+        with patch.object(brain.llm, "chat", side_effect=brain.llm.LLMError("offline")):
+            assert "読みも" in sb.chat("未知漢字")["reply"]
         assert "コアラ" in sb.chat("猫（ねこ）")["reply"]
         game.save({**before, "next": "み"})
         assert "負け" in sb.chat("みかん")["reply"] and not game.state()
@@ -103,3 +104,32 @@ def test_everyday_start_phrasings_keep_the_state():
 
 def test_health_tells_the_running_code():
     assert set(db.CODE_VERSION) == {"version", "commit"} and db.CODE_VERSION["version"]
+
+
+def test_kanji_from_voice_recognition_gets_a_checked_reading():
+    """「虫。」 from voice recognition continues the game; the reading is said back (#169)."""
+    with Sandbox(copy_real=False, mode="talk") as sb, \
+            patch.object(brain.llm, "chat", side_effect=AssertionError("model called")):
+        game.save({"activity": "shiritori", "turn": "user", "last_word": "ミルク", "next": "む", "used": ["みるく"]})
+        result = sb.chat("虫。")  # in the table: no model needed
+        assert result["intent"] == "game" and game.state()["used"][-2] == "むし", (result, game.state())
+        game.save({"activity": "shiritori", "turn": "user", "last_word": "ウシ", "next": "か", "used": ["うし"]})
+        assert "モグラ" not in sb.chat("感じ")["reply"] and game.state()["used"][-2] == "かんじ"
+    with Sandbox(copy_real=False, mode="talk") as sb:
+        before = {"activity": "shiritori", "turn": "user", "last_word": "ウシ", "next": "し", "used": ["うし"]}
+        game.save(dict(before))
+        with patch.object(brain.llm, "chat", return_value="シモバシラ") as model:
+            result = sb.chat("霜柱")
+        assert model.called and "霜柱（シモバシラ）" in result["reply"] and game.state()["used"][1] == "しもばしら", result
+        assert game.state()["turn"] == "user"
+        for out, why in (("ゆきだるま", "head"), ("I don't know", "not kana"), ("カンカク", "okurigana")):
+            game.save(dict(before))
+            word = "感覚じ" if why == "okurigana" else "雪達磨"
+            with patch.object(brain.llm, "chat", return_value=out):
+                reply = sb.chat(word)["reply"]
+            assert game.state() == before, (out, reply)  # nothing moves on without a fitting reading
+            assert ("読みが違ったら" in reply) if why == "head" else ("読みも" in reply), (out, reply)
+        game.save(dict(before))
+        with patch.object(brain.llm, "chat", side_effect=brain.llm.LLMError("offline")):
+            assert "読みも" in sb.chat("雪達磨")["reply"] and game.state() == before
+        assert not db.list_tasks()
