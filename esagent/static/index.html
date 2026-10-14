@@ -571,7 +571,8 @@ async function submitItem(item) {
     item.deliveryError = null;
     item.delivery = api("/api/chat/submit", {
       text: item.text, queuedAt: item.at, requestId: item.id, choice: item.choice,
-      relation: item.relation || "independent", targetId: item.targetId, targetRevision: item.targetRevision
+      relation: item.relation || "independent", targetId: item.targetId, targetRevision: item.targetRevision,
+      via: item.via  // 会話モード: the server asks spoken words for an explicit request before writing (#174)
     }).then(job => {
       item.jobId = job.jobId; item.revision = job.revision; saveQueue(); return job;
     }, error => { item.deliveryError = error; return null; });
@@ -597,7 +598,7 @@ async function joinSpoken(text) {
   try { await submitItem(prev); } catch { return false; }
   if (!prev.jobId) return false;
   const r = await api("/api/chat/submit", {text, queuedAt: localIso(), requestId: requestId(), relation: "continue",
-    targetId: prev.jobId, targetRevision: prev.revision});
+    targetId: prev.jobId, targetRevision: prev.revision, via: "voice"});
   if (r.jobId === prev.jobId) {
     prev.text += " " + text; prev.parts = (prev.parts || 1) + 1; prev.revision = r.revision; prev.lastPart = Date.now();
   } else {  // the previous one was already answered: this is a message of its own
