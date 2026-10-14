@@ -21,6 +21,7 @@ import write_guard
 import conversation_context
 import conversation_game
 import playback
+import timer_chat
 import conversation_jobs as jobs
 import utterances
 import calendar_view
@@ -69,6 +70,9 @@ What you CAN do:
 - Your chat window has: "/" slash commands (type "/" or "/help" to see them), sending new messages
   while you are still thinking (they queue up), a live timer showing how long you are thinking,
   a 雑談モード (/talk), and memory ("覚えておいて" or /remember).
+- A focus timer (集中タイマー): the user starts, pauses, resumes or resets it and asks the time left in words
+  (「集中始めて」「タイマー一時停止」「再開して」「リセットして」「あと何分？」), in the window or from the
+  desktop cat. The program does those operations, not you; its state now is given below.
 - Reading aloud: your replies can be spoken with a VOICEVOX voice (on/off in the window; its state now is
   given below). 会話モード: the user can talk to you with the microphone; their speech arrives as text.
   You cannot hear music, videos or other sounds; for the app's own YouTube you know only the title and
@@ -262,6 +266,13 @@ def _schedule_block():
             "mention only when it helps):\n" + lines)
 
 
+def _timer_line():
+    try:
+        return timer_chat.prompt_line(db.load_config())
+    except Exception:
+        return "Focus timer now: unknown."
+
+
 def _voice_state():
     """Whether replies are read aloud now, from the settings (#120)."""
     try:
@@ -349,6 +360,7 @@ If something was not done, say so plainly. Do not list other tasks."""
     return f"""{PERSONA}
 
 Reading aloud now: {_voice_state()}.
+{_timer_line()}
 {_schedule_block()}
 
 Today is {today.isoformat()} ({WEEKDAYS[today.weekday()]}), now {dt.datetime.now():%H:%M}.
@@ -1544,11 +1556,15 @@ def clean_model_reply(reply, events=()):
     original = reply
     reply = strip_model_records(reply)
     sentences = re.split(r"(?<=[。！!？?\n])", reply)
-    kept = "".join(s for s in sentences if not _CLAIM_RE.search(s)).strip()
+    timer = [s for s in sentences if timer_chat.false_timer_sentence(s)]
+    kept = "".join(s for s in sentences if not _CLAIM_RE.search(s) and s not in timer).strip()
     removed = kept != original.strip()
+    kept = timer_chat.drop_foreign_lines(kept)
     kept = re.sub(r"#\d+\s*", "", kept).strip()
     if removed:
-        note = "実行した操作は下の記録を確認してね。" if events else NO_CHANGE_NOTE
+        only_timer = timer and not any(_CLAIM_RE.search(s) and s not in timer for s in sentences)
+        note = timer_chat.NO_TIMER_NOTE if only_timer else \
+            "実行した操作は下の記録を確認してね。" if events else NO_CHANGE_NOTE
         return f"{kept}\n{note}" if kept else note
     return kept
 
@@ -1581,6 +1597,7 @@ def _partial(text):
     safe = re.sub(r"[（(]記録\s*[:：].*$", "", safe)
     _progress["partial"] = "".join(part for part in re.split(r"(?<=[。！!？?\n])", safe)
                                     if not _CLAIM_RE.search(part) and not _MODEL_OFFER_RE.search(part)
+                                    and not timer_chat.CLAIM_RE.search(part)
                                     and not _PROMISE_RE.search(part.strip()))
 
 
@@ -1689,7 +1706,11 @@ def _recall_flow(text, message_id):
     return f"ごめんね、「{topic}」はまだ聞いてないと思う。教えてくれたら覚えておくよ。"
 
 
-def _offer_flow(text):
+def _focus_minutes(cfg):
+    return timer_chat.minutes(cfg)[0]
+
+
+def _offer_flow(text, cfg):
     """A yes to Es's offer to start the focus timer starts it in the window."""
     pending = db.get_setting("pending_focus") or ""
     if not pending:
@@ -1697,7 +1718,7 @@ def _offer_flow(text):
     db.set_setting("pending_focus", "")
     task = db.get_task(int(pending))
     if task and _YES_RE.search(text.strip()):
-        return f"じゃあ始めよ！「{task['title']}」、25分。私も隣でがんばるね。", {"focus": task["id"]}
+        return f"じゃあ始めよ！「{task['title']}」、{_focus_minutes(cfg)}分。私も隣でがんばるね。", {"focus": task["id"]}
     return None
 
 
@@ -2016,7 +2037,7 @@ def _choice_reply(selected, cfg, message_id=None):
     elif kind == 'focus':
         t = db.get_task(payload.get('task_id', 0))
         if t and t['status'] != 'done' and t['title'] == payload.get('title'):
-            reply, ui = f'じゃあ始めよ！「{t["title"]}」、25分。私も隣でがんばるね。', {'focus': t['id']}
+            reply, ui = f'じゃあ始めよ！「{t["title"]}」、{_focus_minutes(cfg)}分。私も隣でがんばるね。', {'focus': t['id']}
         else:
             reply = '対象タスクが変わっているので、集中タイマーは開始していないよ。'
     elif kind == 'feature' and isinstance(payload.get('wish'), str):
@@ -2113,6 +2134,8 @@ def _mentions_task(text):
 
 
 def is_status_question(text):
+    if timer_chat.is_timer_text(text):
+        return False  # 「タイマー止まってる？」 asks about the focus timer (#172)
     m = _STATUS_RE.search(text)
     if m and m[0] == "どうなって" and set(_WORD_RE.findall(text)) - _WAIT_WORDS:
         return False  # 「記憶の仕組みはどうなってるの？」 asks about something else (#113)
@@ -2278,6 +2301,12 @@ def _chat(text, cfg, message_id=None):
         if events:
             db.add_message("notice", "\n".join(events))
         return {"reply": reply, "events": events, "handoffs": [], "intent": "focus"}
+    with jobs.boundary():
+        timer_reply = timer_chat.answer(text, cfg)
+    if timer_reply is not None:  # 「タイマー、再開して」「あと何分？」: the timer itself, in code (#172)
+        task_context.clear()
+        db.add_message("assistant", timer_reply)
+        return {"reply": timer_reply, "events": [], "handoffs": [], "intent": "timer"}
     proposed = choices.proposed_mode(text)
     if proposed:
         task_context.clear()
@@ -2336,7 +2365,7 @@ def _chat(text, cfg, message_id=None):
             if not _said_just_before(reply, history):
                 db.add_message("assistant", reply)
                 return {"reply": reply, "events": [], "handoffs": [], "intent": "remember"}
-        offer = _offer_flow(text)
+        offer = _offer_flow(text, cfg)
         if offer:
             reply, ui = offer
             db.add_message("assistant", reply)

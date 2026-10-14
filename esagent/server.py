@@ -28,6 +28,7 @@ import llm  # noqa: E402
 import events  # noqa: E402
 import media  # noqa: E402
 import pomodoro  # noqa: E402
+import timer_chat  # noqa: E402
 import projects  # noqa: E402
 import recurring  # noqa: E402
 import skills  # noqa: E402
@@ -188,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/progress":
             return self._send(200, brain.progress())
         if path == "/api/chat/bypass":  # messages the window sends without queueing (#23)
-            return self._send(200, {"pattern": brain._STATUS_RE.pattern, "exclude": brain._TASK_REF_RE.pattern})
+            return self._send(200, {"pattern": brain._STATUS_RE.pattern, "exclude": f"{brain._TASK_REF_RE.pattern}|{timer_chat.TIMER_TEXT}"})
         if path == "/api/commands":
             return self._send(200, skills.catalog())
         if path == "/api/admin/tables":
