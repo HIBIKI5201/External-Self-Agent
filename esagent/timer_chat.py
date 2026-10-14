@@ -169,7 +169,7 @@ def _reset(cfg):
 # 「タイマーを再開します！」 with no operation (#172). _CLAIM_RE in brain covers 開始・スタート.
 CLAIM_RE = re.compile(r"(?:(?:タイマー|ポモドーロ)[^。！!？?\n]*|(?:集中|休憩)(?:タイム|時間)?(?:を|は|、)?)"
                       r"(?:始め|はじめ|開始|スタート|再開|止め|とめ|停止|ストップ|リセット|セット)"
-                      r"(?:し|す)?(?:ます(?:ね|よ)?|ました|た(?:よ|ね)?(?![らり])|る(?:ね|よ)|ておく|ておいた|ておきました|といた)")
+                      r"(?:し|す)?(?:ます(?:ね|よ)?|ました|た(?:よ|ね)?(?=[。！!？?、\s]|$)|る(?:ね|よ)|ておく|ておいた|ておきました|といた)")
 _MINUTES_RE = re.compile(r"(\d{1,3})\s*分")
 # 「concentración 🕒」: a line of Latin-script words with accented letters is not Japanese (#172).
 _FOREIGN_LINE_RE = re.compile(r"^[\sA-Za-zÀ-ÖØ-öø-ɏ\W]*[À-ÖØ-öø-ɏ][\sA-Za-zÀ-ÖØ-öø-ɏ\W]*$")
@@ -185,10 +185,24 @@ def false_timer_sentence(sentence, cfg=None):
     if not found:
         return False
     try:
-        allowed = set(minutes(cfg or db.load_config()))
+        cfg = cfg or db.load_config()
+        allowed = set(minutes(cfg)) | _current_minutes(cfg)
     except Exception:
         return False
     return bool(found - allowed)
+
+
+def _current_minutes(cfg):
+    """「あと12分」 from the running timer is true: the minutes left and gone, rounded either way."""
+    import math
+    st = pomodoro.state(cfg)
+    if st["mode"] == "idle":
+        return set()
+    focus, short, long_ = minutes(cfg)
+    left = st["remaining"] / 60
+    length = focus if st["mode"] == "focus" else max(short, long_) if left > short else short
+    gone = max(0.0, length - left)
+    return {math.floor(left), math.ceil(left), math.floor(gone), math.ceil(gone)}
 
 
 def drop_foreign_lines(reply):

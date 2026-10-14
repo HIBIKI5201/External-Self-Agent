@@ -118,3 +118,18 @@ def test_timer_questions_are_not_wait_questions():
         assert brain.is_status_question("返事遅くない？")
     exclude = re.compile(f"{brain._TASK_REF_RE.pattern}|{timer_chat.TIMER_TEXT}")  # what the window skips
     assert exclude.search("タイマー止まってる？") and not exclude.search("返事遅くない？")
+
+
+def test_guidance_and_true_remaining_minutes_are_kept():
+    """Review of #229: 「止めたいときは」 is no claim, and the real time left is not a wrong length."""
+    with Sandbox(copy_real=False) as sb:
+        _quiet(sb)
+        for text in ("タイマーを止めたいときは「タイマー止めて」って言ってね。", "集中を始めたいなら「集中始めて」って言ってね。",
+                     "タイマーを止めた後に休憩しよう。"):
+            assert brain.clean_model_reply(text) == text, text
+        assert "再開" not in brain.clean_model_reply("タイマーを再開したよ。")
+        p = {"mode": "focus", "ends_at": time.time() + 12 * 60 + 30, "paused": 0, "round": 1, "task_id": None}
+        db.set_setting("pomo", json.dumps(p))
+        for text in ("タイマーはあと12分だから、もう少しがんばろう。", "タイマーはあと13分くらいだよ。"):
+            assert brain.clean_model_reply(text) == text, text
+        assert "40分" not in brain.clean_model_reply("タイマーはあと40分だよ。")
