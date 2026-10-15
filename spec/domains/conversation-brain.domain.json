@@ -93,6 +93,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_ask_project\\.py|spec/test/ask-project-115\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_(memory|report_vs_delegate|task_intent|unverified_facts|wait_status|project_context)\\.py$"
     }
   ],
   "source": "manual",

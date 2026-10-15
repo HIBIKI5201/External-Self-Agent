@@ -24,6 +24,9 @@
     },
     {
       "pathPattern": "(^|/)(tests/test_skill_permissions\\.py|tests/test_done_again\\.py)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_offline_add\\.py$"
     }
   ],
   "source": "manual",
