@@ -8,6 +8,7 @@ import db
 import events
 import llm
 import pomodoro
+import support
 from support import Sandbox
 
 NO_MODEL = AssertionError("no model")
@@ -120,6 +121,7 @@ def test_the_focus_question_answer_also_takes_its_buttons_down():
 
 
 def test_the_cat_takes_down_only_the_answered_question():
+    support.require_windows()
     import pet
     cat = pet.Pet.__new__(pet.Pet)
     bubble = Mock()

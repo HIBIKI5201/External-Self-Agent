@@ -60,6 +60,9 @@ def main():
                 fn()
                 passed += 1
                 print(f"  ✅ {label}  {time.time() - start:.1f}s")
+            except support.SkipModule as e:
+                skipped += 1
+                print(f"  -  {label}（{e}のためスキップ）")
             except Exception as e:
                 failed += 1
                 print(f"  ❌ {label}: {e}")
