@@ -72,20 +72,22 @@ def _g_notes(notes):
     return notes[:NOTES_MAX - len(NOTES_MORE)] + NOTES_MORE
 
 
+def _norm_notes(s):
+    return (s or "").replace("\r\n", "\n").rstrip()
+
+
 def _pulled_notes(local, remote):
     """Notes to keep when Google's copy of a task wins (#195).
 
-    Google only holds the first NOTES_MAX characters of long notes. If its notes are still the cut
-    we sent (or the plain [:8000] cut sent before #195), the user changed something else there
-    (completed it, moved the due date) and our full notes stay. Only a real edit replaces them."""
+    Google only holds the first NOTES_MAX characters of long notes. If its notes still end with the
+    mark we put on the cut (or are the plain [:8000] cut sent before #195), the user changed
+    something else there (completed it, moved the due date) and our full notes stay, even when they
+    were edited here since the cut was sent. Only notes rewritten without the mark replace them."""
     local, remote = local or "", remote or ""
-    norm = lambda s: s.replace("\r\n", "\n").rstrip()
-    if len(local) <= NOTES_MAX or norm(remote) == norm(local):
+    if len(local) <= NOTES_MAX or _norm_notes(remote) == _norm_notes(local):
         return remote
-    if norm(remote) == norm(_g_notes(local)):
+    if _norm_notes(remote).endswith(NOTES_MORE):
         return local
-    if remote.endswith(NOTES_MORE) and local.startswith(remote[:-len(NOTES_MORE)]):
-        return local  # we cut it, then added to our notes before Google's change came in
     if len(remote) == NOTES_MAX and local.startswith(remote):
         return local  # cut before #195, without the mark
     return remote
@@ -224,12 +226,15 @@ def _apply_remote(local, g, list_id, project_id):
         # #182: only the file it was read from completes a read-only task. Keep ours and leave the
         # task unsynced, so the next push puts the check in Google back the way it was.
         status, pushed = local["status"], 0
+    notes = _pulled_notes(local["notes"], g.get("notes"))
+    if _norm_notes(_g_notes(notes)) != _norm_notes(g.get("notes")):
+        pushed = 0  # our full notes stayed but were edited since the cut was sent: send the new cut
     ts = db.now()
     with db.connect() as con:
         con.execute(
             "UPDATE tasks SET title = ?, notes = ?, due = ?, status = ?, project_id = ?, glist_id = ?, "
             "g_updated = ?, updated_at = ?, synced_at = ?, rev = rev + 1, synced_rev = rev + ? WHERE id = ? AND rev = ?",
-            ((g.get("title") or "").strip() or local["title"], _pulled_notes(local["notes"], g.get("notes")),
+            ((g.get("title") or "").strip() or local["title"], notes,
              _l_due(g), status,
              project_id, list_id, g["updated"], ts, ts, pushed, local["id"], local["rev"]))
 

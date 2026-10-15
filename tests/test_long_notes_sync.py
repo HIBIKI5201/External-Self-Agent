@@ -26,6 +26,25 @@ def test_completing_on_google_keeps_long_local_notes():
         assert gsync.status()['pending'] == 0
 
 
+def test_local_edit_then_change_on_google_keeps_the_edited_notes():
+    """Review on #216: the start of long notes edited here, then the task completed on the phone."""
+    with Sandbox(copy_real=False):
+        fake = FakeTasks().install()
+        notes = '集中 25分（Es と）\n' * 900
+        task = db.add_task('長いメモ', notes=notes)
+        gsync.sync_once()
+        remote = _remote(fake)
+        edited = '冒頭を書き直した\n' + notes
+        edited = db.update_task(task['id'], notes=edited)['notes']
+        remote['status'], remote['updated'] = 'completed', fake.stamp()
+        gsync.sync_once()
+        local = db.get_task(task['id'])
+        assert local['status'] == 'done'
+        assert local['notes'] == edited
+        gsync.sync_once()
+        assert _remote(fake)['notes'] == gsync._g_notes(edited)
+
+
 def test_notes_cut_before_the_mark_existed_are_kept_too():
     with Sandbox(copy_real=False):
         fake = FakeTasks().install()
