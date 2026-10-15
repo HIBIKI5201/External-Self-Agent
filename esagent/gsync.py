@@ -52,9 +52,40 @@ def _l_time(s):
     return dt.datetime.fromisoformat(s).astimezone()
 
 
+NOTES_MAX = 8000                      # Google Tasks keeps at most about 8,192 characters of notes
+NOTES_MORE = "\n…（続きは E.S. Agent に）"  # ends notes that were cut to fit (#195)
+
+
+def _g_notes(notes):
+    """The notes as sent to Google: cut to NOTES_MAX with a mark, so the cut is visible there."""
+    notes = notes or ""
+    if len(notes) <= NOTES_MAX:
+        return notes
+    return notes[:NOTES_MAX - len(NOTES_MORE)] + NOTES_MORE
+
+
+def _pulled_notes(local, remote):
+    """Notes to keep when Google's copy of a task wins (#195).
+
+    Google only holds the first NOTES_MAX characters of long notes. If its notes are still the cut
+    we sent (or the plain [:8000] cut sent before #195), the user changed something else there
+    (completed it, moved the due date) and our full notes stay. Only a real edit replaces them."""
+    local, remote = local or "", remote or ""
+    norm = lambda s: s.replace("\r\n", "\n").rstrip()
+    if len(local) <= NOTES_MAX or norm(remote) == norm(local):
+        return remote
+    if norm(remote) == norm(_g_notes(local)):
+        return local
+    if remote.endswith(NOTES_MORE) and local.startswith(remote[:-len(NOTES_MORE)]):
+        return local  # we cut it, then added to our notes before Google's change came in
+    if len(remote) == NOTES_MAX and local.startswith(remote):
+        return local  # cut before #195, without the mark
+    return remote
+
+
 def _body(t):
     done = t["status"] == "done"
-    body = {"title": t["title"], "notes": (t["notes"] or "")[:8000], "due": _g_due(t["due"]),
+    body = {"title": t["title"], "notes": _g_notes(t["notes"]), "due": _g_due(t["due"]),
             "status": "completed" if done else "needsAction"}
     if not done:
         body["completed"] = None
@@ -136,7 +167,8 @@ def _apply_remote(local, g, list_id, project_id):
         con.execute(
             "UPDATE tasks SET title = ?, notes = ?, due = ?, status = ?, project_id = ?, glist_id = ?, "
             "g_updated = ?, updated_at = ?, synced_at = ?, rev = rev + 1, synced_rev = rev + ? WHERE id = ? AND rev = ?",
-            ((g.get("title") or "").strip() or local["title"], g.get("notes") or "", _l_due(g), status,
+            ((g.get("title") or "").strip() or local["title"], _pulled_notes(local["notes"], g.get("notes")),
+             _l_due(g), status,
              project_id, list_id, g["updated"], ts, ts, pushed, local["id"], local["rev"]))
 
 
