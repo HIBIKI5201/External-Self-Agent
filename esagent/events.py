@@ -21,6 +21,20 @@ def push(kind, text="", **data):
         return ev
 
 
+def _head(text, limit):
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def chat_reply(said, result, via=None):
+    """A finished chat reply, for the desktop cat to show while the chat window is out of sight (#121).
+    Only the start of each side; the full text stays in the chat history."""
+    if not isinstance(result, dict) or result.get("pending") or not result.get("reply"):
+        return None
+    return push("chat_reply", said=_head(said, 40), reply=_head(result["reply"], 70),
+                via="voice" if via == "voice" else "text")
+
+
 def since(after):
     with _lock:
         return [e for e in _events if e["id"] > after]
