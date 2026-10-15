@@ -312,7 +312,7 @@ function render() {
   window.Es?.update(S);
 
   const log = $("#log");
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const atBottom = nearBottom(log);
   log.innerHTML = S.messages.length
     ? S.messages.map((m) => `<div class="msg ${esc(m.role)}${m.status === "pending" ? " pending" : ""}">${esc(m.content)}` +
         (m.status === "pending" ? `<small>⏳ 返事待ち — モデルの準備ができたら自動で返事します</small>` : "") +
@@ -320,8 +320,7 @@ function render() {
         (m.role === "assistant" ? renderRate(m) : "") + `</div>`).join("")
     : `<div class="empty">Es です。予定やタスク、困っていることを話しかけてください。<br>「/」でコマンド、コードの作業は Claude Code に引き継げます。</div>`;
   log.insertAdjacentHTML("beforeend", `<div id="live"></div>`);
-  renderLive();
-  if (atBottom || queue.length) log.scrollTop = log.scrollHeight;
+  renderLive(atBottom);
   document.querySelectorAll("#modesw [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === (S.mode || "work")));
   $("#input").placeholder = S.mode === "talk"
     ? "雑談モード：なんでも話してね（タスクの追加・完了もできます）"
@@ -455,7 +454,7 @@ $("#log").addEventListener("click", e => {
   document.querySelectorAll("button[data-offer]").forEach(x => { x.disabled = true; });
   queue.push({text: b.textContent, at: localIso(), id: requestId(),
     choice: {offer_id: b.dataset.offer, value: b.dataset.choiceValue}});
-  saveQueue(); renderLive(); pump();
+  saveQueue(); renderLive(true); pump();
 });
 
 // Messages not yet delivered; queue[0] is in flight while busy. Saved so a reload keeps them.
@@ -478,7 +477,10 @@ saveQueue(); // persist migrated IDs before the first request, including after a
 let offline = false;
 let thinkStart = 0, thinkStage = "", thinkDetail = "", thinkPartial = "", thinkTimer = null, stagePoll = null;
 
-function renderLive() {
+// Keeps the chat at the bottom only if it was there (#247): someone reading older messages is not
+// pulled down by the 8-second refresh or the thinking timer. Sending passes follow = true.
+const nearBottom = (log) => log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+function renderLive(follow = nearBottom($("#log"))) {
   const live = $("#live");
   if (!live) return;
   let html = "";
@@ -499,7 +501,7 @@ function renderLive() {
   });
   live.innerHTML = html;
   const log = $("#log");
-  log.scrollTop = log.scrollHeight;
+  if (follow) log.scrollTop = log.scrollHeight;
 }
 
 // One pump loop at a time (#179): busy is cleared while the screen refreshes between messages,
@@ -631,7 +633,7 @@ async function joinSpoken(text) {
     queue.push({text, at: localIso(), id: r.jobId, jobId: r.jobId, revision: r.revision, relation: "independent",
       via: "voice", lastPart: Date.now(), delivery: Promise.resolve(r)});
   }
-  saveQueue(); renderLive(); pump();
+  saveQueue(); renderLive(true); pump();
   return true;
 }
 
@@ -655,7 +657,7 @@ async function sendText(text, forcedRelation = null, opts = {}) {
     targetId: relation !== "independent" ? target?.id : undefined,
     targetRevision: relation !== "independent" ? target?.revision : undefined};
   if (relation !== "independent" && queue[0]) queue[0].invalidated = true;
-  queue.push(item); saveQueue(); renderLive();
+  queue.push(item); saveQueue(); renderLive(true);
   // Submission errors are held on the item until pump displays them.
   submitItem(item).catch(() => {});
   pump();

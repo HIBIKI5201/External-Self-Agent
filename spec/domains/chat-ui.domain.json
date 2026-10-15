@@ -27,6 +27,9 @@
     },
     {
       "pathPattern": "(^|/)tests/test_offline_admin\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_chat_scroll\\.(py|js)$"
     }
   ],
   "source": "manual",
