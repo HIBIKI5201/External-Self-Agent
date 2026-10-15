@@ -139,6 +139,7 @@ def classify(text):
 def accept(body, cfg, operation):
     request_id = body.get("requestId")
     text = str(body.get("text") or "").strip()
+    said = text  # what the user just said, shown by the desktop cat with the reply (#121)
     mode = body.get("relation", "independent")
     target = body.get("targetId")
     expected = body.get("targetRevision")
@@ -202,7 +203,7 @@ def accept(body, cfg, operation):
                     con.execute("UPDATE conversation_jobs SET state='cancelled' WHERE id=?", (target,))
         else:
             revision = 1
-        payload = {**body, "requestId": request_id, "text": text}
+        payload = {**body, "requestId": request_id, "text": text, "said": text if mode == "continue" else said}
         _LIVE[_key(request_id)] = revision
         with db.connect() as con:
             con.execute("INSERT INTO conversation_jobs(id,revision,state,text,updated_at) VALUES(?,?,'queued',?,?) "
@@ -236,6 +237,8 @@ def _work(request_id, revision, body, cfg, operation):
                                     "AND request_revision = ?", (request_id, revision))
                 import voice
                 voice.reply(cfg, result, key=f"job:{request_id}:{revision}")
+                import events
+                events.chat_reply(body.get("said") or body.get("text"), result, via=body.get("via"))
     except Stopped as e:
         stopped, reason = True, (e.args[0] if e.args else "")
     except Exception:
