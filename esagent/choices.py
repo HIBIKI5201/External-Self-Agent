@@ -16,6 +16,8 @@ _YES = re.compile(r'^(?:はい|うん|そうだね|そうして|お願い|おね
 _PLAIN = re.compile(r'繰り?返し(?:は)?(?:なし|無し|いらない)|普通に追加|そのまま追加|周期なし')
 # A new request that names a task is not an answer to the pending question.
 _OTHER_TASK = re.compile(r'[「『"“＂#]')
+# Offers whose answer writes tasks: a spoken answer does not choose them, the button does (#174).
+WRITES = {'feature', 'project_add', 'repeat_bulk', 'repeat_add', 'complete'}
 _NO = re.compile(r'^(?:いいえ|やめる|やめて|キャンセル|あとで|しない)[。！!\s]*$')
 
 
@@ -69,8 +71,9 @@ def publish(kind, payload=None):
     return public()
 
 
-def before(text, selection=None):
-    """Called under lock before storing the new user message. Consume once or invalidate."""
+def before(text, selection=None, spoken=False):
+    """Called under lock before storing the new user message. Consume once or invalidate.
+    spoken: the words came from 会話モード; they never choose a write (WRITES)."""
     offer = current()
     if selection is not None:
         if not isinstance(selection, dict) or set(selection) != {'offer_id', 'value'} \
@@ -98,6 +101,10 @@ def before(text, selection=None):
     else:
         invalidate()
         return None
+    if spoken and selection is None and value != 'cancel' and offer.get('kind') in WRITES:
+        # Kept, not consumed: the reply shows the same buttons again.
+        return {'kind': 'voice_confirm', 'offer_kind': offer['kind'], 'label': text.strip(),
+                'payload': offer.get('payload') or {}, 'value': ''}
     option = next((o for o in offer['options'] if o['value'] == value), None)
     if value == 'rename' and selection is None:
         option = {'value': 'rename', 'label': text.strip()}

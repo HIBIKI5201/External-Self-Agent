@@ -64,7 +64,7 @@ def test_lets_go_while_the_timer_already_runs_does_not_restart_it():
         p.update(mode="focus", ends_at=time.time() + 600)
         pomodoro._save(p)  # started elsewhere without a line in between
         r = brain._es_reply_flow("行こう", db.add_message("user", "行こう"), sb.cfg)
-        assert r == ("もう集中タイマーは動いてるよ。", []), r
+        assert r == ("もう集中タイマーは動いてるよ。", [], None), r
         assert pomodoro._load()["ends_at"] == p["ends_at"]
 
 

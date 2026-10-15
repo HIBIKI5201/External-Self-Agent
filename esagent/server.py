@@ -313,8 +313,9 @@ def _chat(body):
         raise ValueError("text is empty")
     queued = body.get("queuedAt")  # when send was pressed (the window queues messages)
     queued = db.normalize_datetime(queued)
-    result = brain.chat(text, CFG, queued_at=queued, selection=body['choice']) if body.get('choice') is not None else \
-        skills.run(text, CFG, queued_at=queued) if text.startswith('/') else brain.chat(text, CFG, queued_at=queued)
+    via = "voice" if body.get("via") == "voice" else None  # 会話モード: stricter task writes (#174)
+    result = brain.chat(text, CFG, queued_at=queued, selection=body['choice'], via=via) if body.get('choice') is not None else \
+        skills.run(text, CFG, queued_at=queued) if text.startswith('/') else brain.chat(text, CFG, queued_at=queued, via=via)
     with jobs.boundary():
         if not jobs.CURRENT.get():
             voice.reply(CFG, result)  # async jobs deliver once after final revision validation
@@ -370,10 +371,10 @@ def _feedback(body):  # 👍/👎 or a rewrite of one reply (#144)
 
 
 def _listen_diag(body):  # ?listen-diag: times of sound and of recognition only (#168)
-    kinds = ("diag-start", "diag-error", "voice", "result", "sent", "echo", "end", "error", "start", "note")
+    kinds = ("diag-start", "diag-error", "voice", "result", "sent", "echo", "unsure", "end", "error", "start", "note")
     if body.get("kind") not in kinds:
         raise ValueError("unknown diag event")
-    row = {"at": db.now(), "kind": body["kind"], **{k: body[k] for k in ("kind", "t", "from", "to", "peak", "floor", "final", "chars")
+    row = {"at": db.now(), "kind": body["kind"], **{k: body[k] for k in ("kind", "t", "from", "to", "peak", "floor", "final", "chars", "confidence")
                                if isinstance(body.get(k), (int, float, bool))},
            **{k: str(body[k])[:40] for k in ("error", "event") if body.get(k)}}
     path = os.path.join(db.DATA_DIR, "listen-diag.jsonl")
@@ -388,8 +389,8 @@ def _listen_diag(body):  # ?listen-diag: times of sound and of recognition only 
 def _listen_log(body):  # what 会話モード's recogniser did, never the words (#168)
     event = str(body.get("event") or "")
     detail = str(body.get("detail") or "")
-    if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed") \
-            or not re.fullmatch(r"[a-z-]{0,30}", detail):
+    if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed", "unsure") \
+            or not re.fullmatch(r"[a-z0-9.-]{0,30}", detail):
         raise ValueError("unknown listen event")
     log.info("listen: %s%s", event, f" ({detail})" if detail else "")
     return {"ok": True}

@@ -27,6 +27,9 @@
     },
     {
       "pathPattern": "(^|/)(esagent/static/listen\\.js|tests/test_listen\\.js)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_voice_writes\\.py$"
     }
   ],
   "source": "manual",

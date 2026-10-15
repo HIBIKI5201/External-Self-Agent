@@ -102,7 +102,17 @@ def status(cfg):
             # that stops midway, and how long a next piece still joins the previous message.
             "listen": {**{k: int(cfg.get("listen_" + k + "_ms", d)) for k, d in
                           (("silence", 1200), ("incomplete", 3000), ("merge", 15000))},
+                       # Below this recognition confidence a line is not sent (#174).
+                       "confidence": listen_confidence(cfg),
                        "corrections": listen_corrections(cfg)}}
+
+
+def listen_confidence(cfg):
+    try:
+        value = float(cfg.get("listen_min_confidence", 0.5))
+    except (TypeError, ValueError):
+        return 0.5
+    return min(max(value, 0.0), 1.0)
 
 
 # What the recogniser heard for words this app knows (#118): word -> mishearings. config.json's

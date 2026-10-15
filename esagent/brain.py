@@ -583,6 +583,8 @@ def _finish_project_add(payload, value, cfg):
         return "その選択には対応していないよ。何も変更していないよ。", []
     events, _, touched = _apply([{**action, "type": "add_task", "project": project}], cfg,
                                 user_text=payload.get("user_text") or "", context_text=payload.get("context_text") or "")
+    if payload.get("via") == "voice":
+        events = _mark_voice(events)
     return _template_reply("add", events, touched), events
 
 
@@ -2181,10 +2183,12 @@ def _guarded_write_flow(text, annotated, history):
     return None
 
 
-def _feature_flow(cfg, text):
+def _feature_flow(cfg, text, via=None):
     """Returns (reply, events) when the message is about EsAgent's own features, else None."""
     pending = db.get_setting("pending_feature") or ""
     if pending and (_YES_RE.search(text.strip()) or _REGISTER_RE.search(text)):
+        if via == "voice":  # the 「タスクに登録する」 button stays (choices.expose) (#174)
+            return VOICE_CONFIRM_NOTE, []
         db.set_setting("pending_feature", "")
         _stage("タスクを作成中")
         db.ensure_project("EsAgent")
@@ -2261,6 +2265,11 @@ def _choice_reply(selected, cfg, message_id=None):
     _progress['message_id'] = mid
     reply, events, ui = '', [], {}
     kind, value, payload = selected['kind'], selected['value'], selected['payload']
+    if kind == 'voice_confirm':  # a spoken yes to a write: the same buttons again (#174)
+        reply = VOICE_CONFIRM_NOTE
+        db.add_message('assistant', reply)
+        choices.publish(selected['offer_kind'], payload)
+        return {'reply': reply, 'events': [], 'handoffs': [], 'ui': {}, 'intent': 'proposal'}
     if kind == 'stale':
         reply = 'いま有効な提案を特定できなかったよ。現在の提案のボタンか、やりたいことを言葉で教えてね。何も変更していないよ。'
     elif value == 'cancel':
@@ -2305,8 +2314,9 @@ def _choice_reply(selected, cfg, message_id=None):
     return {'reply': reply, 'events': events, 'handoffs': [], 'ui': ui, 'intent': 'choice'}
 
 
-def chat(text, cfg, message_id=None, queued_at=None, selection=None):
+def chat(text, cfg, message_id=None, queued_at=None, selection=None, via=None):
     """Answer a message. With message_id, answer a stored message that was waiting.
+    via="voice": the words came from 会話モード's speech recognition (#174).
 
     Questions about the wait itself ("考えるの長くない？") are answered at once from the
     measured timings, without the lock or the model (#23)."""
@@ -2323,10 +2333,11 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None):
         result = None
         try:
             # 「うん」 right after the timer's 「次、いく？」 answers the timer, not an offer (#171).
-            selected = None if selection is None and _answers_timer_question(text) else choices.before(text, selection)
+            selected = None if selection is None and _answers_timer_question(text) else \
+                choices.before(text, selection, spoken=via == "voice")
             with db.connect() as con:
                 last_id = con.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
-            result = _choice_reply(selected, cfg, message_id) if selected else _chat(text, cfg, message_id)
+            result = _choice_reply(selected, cfg, message_id) if selected else _chat(text, cfg, message_id, via)
             if result.get("intent"):  # which replies the model wrote, for the ratings (#144)
                 with db.connect() as con:
                     con.execute("UPDATE messages SET intent = ? WHERE role = 'assistant' AND id > ?",
@@ -2482,6 +2493,49 @@ _DONE_REPLY_RE = re.compile(r"^(?:うん|はい)?[、,\s]*(?:終わった|おわ
 _NOT_YET_RE = re.compile(r"まだ|途中|終わってない|終わらな|できてない|出来てない")
 
 
+# 会話モード (#174): the microphone also hears games and videos, and the recognizer turns them into
+# sentences. A spoken message writes tasks only when its own words ask for the write (追加して, 完了にして)
+# and name the task changed; the router's guess from talk is not enough. Typed messages are not affected.
+_VOICE_ADD_RE = re.compile(r"タスク(?:を|に)?(?:作|追加|登録|して|化)|(?:追加|登録)(?:して|しといて|しておいて|お願い)|"
+                           r"入れて(?:おいて)?|メモして")
+# A spoken 「うん」「終わったよ」 alone is what a game or a video says too: it confirms a write only by
+# the button, never by voice (#174).
+VOICE_CONFIRM_NOTE = ("声の返事だけではタスクを変えないでおくね（周りの音を拾うことがあるから）。"
+                      "下のボタンで選んでね。まだ何も変えていないよ。")
+VOICE_HOLD_NOTE = ("声で聞き取った言葉だから、タスクはまだ何も変えていないよ。するなら「〇〇をタスクに追加して」"
+                   "「〇〇を完了にして」のように、タスクの名前を入れて言ってね。")
+
+
+def _voice_allows(actions, text):
+    """Whether a spoken message asks for every one of these writes in so many words."""
+    tasks = db.list_tasks(include_done=True)
+    for a in actions:
+        kind = a.get("type")
+        try:
+            task = db.get_task(int(a.get("task_id") or 0)) if a.get("task_id") else None
+        except (TypeError, ValueError):
+            task = None
+        if kind == "add_task" and not a.get("task_id"):
+            if not _VOICE_ADD_RE.search(text):
+                return False
+            continue
+        if kind == "delegate":
+            if not (_DELEGATE_ASK_RE.search(text) or _VOICE_ADD_RE.search(text)):
+                return False
+        elif not write_guard.REQUEST_RE.search(text):
+            return False
+        if a.get("task_id") and not (task and (f"#{task['id']}" in text or task["title"] in text
+                                               or _word_hit(text, task, tasks))):
+            return False
+    return True
+
+
+def _mark_voice(events):
+    """Changes made from a spoken message say so in the record and the notice (#174)."""
+    return [e + ("（🎙 声から登録）" if e.startswith("＋") else "（🎙 声から）") if e[:1] in "＋✎✔→" else e
+            for e in events]
+
+
 # 「次、いく？」 after a break (#171): a short yes starts the next focus, a short "later" leaves the timer.
 _GO_REPLY_RE = re.compile(r"^(?:(?:うん|はい|よし|じゃあ|おっけー|オッケー|ok)[、,\s]*)*"
                           r"(?:(?:まだ|もう少し|もうちょっと)(?:だけ)?[、,\s]*)?"  # 「まだいける」「もう少しだけ集中する」
@@ -2494,14 +2548,15 @@ _LATER_RE = re.compile(r"あとで|後で|あとにする|休む|休みたい|�
                        r"(?:まだ|もう少し|もうちょっと).*[休待]")
 
 
-def _es_reply_flow(text, message_id, cfg=None):
+def _es_reply_flow(text, message_id, cfg=None, via=None):
     """A short answer to a question the focus timer just asked (#139, #171).
 
     - 「〇〇、終わった？」: 「終わったよ」 completes that task, as the notice's 「終わった」 button does;
       「まだ途中」 keeps it.
     - 「休憩おわり。次、いく？」: 「行こうか」 starts the next focus (same task), as 「集中する」 does;
       「あとで」 leaves the timer alone.
-    Anything else goes on as usual, with the line in the context. Returns (reply, records) or None.
+    Anything else goes on as usual, with the line in the context. Returns (reply, records, offer) or None;
+    offer is a 'complete' button to publish instead of completing on a spoken 「終わったよ」 (#174).
     An answer also takes the buttons off that question in the window and on the cat."""
     line = utterances.answered_line(message_id)
     ref = (line or {}).get("ref") or {}
@@ -2509,7 +2564,7 @@ def _es_reply_flow(text, message_id, cfg=None):
     if not line or line["kind"] != "question" or len(said) > 20:
         return None
     if ref.get("event") == "focus_end" and ref.get("task_id"):
-        answered = _focus_end_reply(said, int(ref["task_id"]))
+        answered = _focus_end_reply(said, int(ref["task_id"]), via)
     elif ref.get("event") == "break_end":
         answered = _break_end_reply(said, cfg)
     else:
@@ -2535,20 +2590,23 @@ def _answers_timer_question(text):
     return False
 
 
-def _focus_end_reply(said, task_id):
+def _focus_end_reply(said, task_id, via=None):
     task = db.get_task(task_id)
     if not task or re.search(r"[？?]", said):
         return None
     if _DONE_REPLY_RE.search(said):
         if task["status"] == "done":
-            return f"「{task['title']}」はもう完了になってるよ。おつかれさま！", []
+            return f"「{task['title']}」はもう完了になってるよ。おつかれさま！", [], None
         if task["read_only"]:
-            return "おつかれさま！" + db.read_only_reply(task), []
+            return "おつかれさま！" + db.read_only_reply(task), [], None
+        if via == "voice":  # 「終わったよ」 alone never names the task: the button decides
+            return (f"「{task['title']}」を完了にする？" + VOICE_CONFIRM_NOTE,
+                    [], {"task_id": task["id"], "title": task["title"]})
         task = db.update_task(task["id"], status="done")
         return (f"やったね！「{task['title']}」を完了にしたよ。",
-                [f"✔ #{task['id']} {task['title']} を完了にしました"])
+                [f"✔ #{task['id']} {task['title']} を完了にしました"], None)
     if _NOT_YET_RE.search(said):
-        return f"了解、「{task['title']}」はそのままにしておくね。休憩したら続きをやろう。", []
+        return f"了解、「{task['title']}」はそのままにしておくね。休憩したら続きをやろう。", [], None
     return None
 
 
@@ -2556,18 +2614,18 @@ def _break_end_reply(said, cfg):
     import pomodoro
     if not _GO_REPLY_RE.search(said):  # a yes first: 「まだいける」 continues (#171 review)
         if _LATER_RE.search(said) and not re.search(r"[？?]", said):
-            return "了解、タイマーは止めたままにしておくね。始めるときは声をかけて。", []
+            return "了解、タイマーは止めたままにしておくね。始めるときは声をかけて。", [], None
         return None
     if pomodoro.state(cfg or {})["mode"] != "idle":
-        return "もう集中タイマーは動いてるよ。", []
+        return "もう集中タイマーは動いてるよ。", [], None
     with jobs.boundary():
         st = pomodoro.start(cfg or {})
     title = st.get("task") or ""
     return ("うん、集中タイマーを始めたよ。",
-            ["✎ 集中タイマーを始めました" + (f"（{title}）" if title else "")])
+            ["✎ 集中タイマーを始めました" + (f"（{title}）" if title else "")], None)
 
 
-def _chat(text, cfg, message_id=None):
+def _chat(text, cfg, message_id=None, via=None):
     today = dt.date.today()
     # "es": what Es said by herself (the cat, timer notices…), so a reply to it is understood (#139).
     history = db.recent_messages(80, roles=("user", "assistant", "notice", "es"), before=message_id)
@@ -2583,12 +2641,17 @@ def _chat(text, cfg, message_id=None):
         task_context.clear()
         db.add_message("assistant", game_reply)
         return {"reply": game_reply, "events": [], "handoffs": [], "intent": "game"}
-    answered = _es_reply_flow(text, message_id, cfg)
+    answered = _es_reply_flow(text, message_id, cfg, via)
     if answered is not None:  # 「終わったよ」「行こうか」 to the timer's questions (#139, #171)
-        reply, records = answered
+        reply, records, offer = answered
+        if via == "voice":
+            records = _mark_voice(records)
         db.add_message("assistant", reply)
         if records:
             db.add_message("notice", "\n".join(records))
+        if offer:
+            choices.publish("complete", offer)
+            return {"reply": reply, "events": [], "handoffs": [], "intent": "proposal"}
         return {"reply": reply, "events": records, "handoffs": [], "intent": "es-reply"}
     schedule = calendar_view.answer(text)
     if schedule:  # 「明日の予定は？」: the kept calendar events only (#157)
@@ -2757,7 +2820,7 @@ def _chat(text, cfg, message_id=None):
         if policy:
             db.add_message("assistant", policy)
             return {"reply": policy, "events": [], "handoffs": [], "intent": "policy"}
-        feature = _feature_flow(cfg, text)
+        feature = _feature_flow(cfg, text, via)
         if feature:
             reply, events = feature
             db.add_message("assistant", reply)
@@ -2779,19 +2842,26 @@ def _chat(text, cfg, message_id=None):
             if route_text != annotated:  # agreeing to Es's own proposal
                 context += " " + last_reply
             hold = write_guard.analyze(annotated, db.list_tasks(include_done=True)).hold
+            if not hold and via == "voice" and intent in ACTION_INTENTS and actions and not _voice_allows(actions, text):
+                hold = "voice"  # heard, not typed: a game or a video can be speaking (#174)
             asked = None if hold else _project_question(actions, annotated, context)
             if asked:  # the project is unknown: ask before adding (#115)
                 reply, offer = asked
+                if via == "voice":
+                    offer["via"] = "voice"
                 db.add_message("assistant", reply)
                 choices.publish("project_add", offer)
                 return {"reply": reply, "events": [], "handoffs": [], "intent": "proposal"}
             if hold and intent in ACTION_INTENTS:
                 # 「実行しないで」「と同僚が言っていた」「迷っている」: no write, whatever was proposed (#67).
                 events, handoffs = [], []
-                reply = "わかった、今回はタスクを何も変更していないよ。実行するときは「〇〇を完了にして」のように頼んでね。"
+                reply = VOICE_HOLD_NOTE if hold == "voice" else \
+                    "わかった、今回はタスクを何も変更していないよ。実行するときは「〇〇を完了にして」のように頼んでね。"
             else:
                 events, handoffs, touched = _apply([] if hold else actions, cfg, user_text=annotated,
                                                    context_text=context)
+                if via == "voice":
+                    events = _mark_voice(events)
                 which = intent in ACTION_INTENTS and not events and _ambiguous_targets(annotated, context)
                 if which:  # 「それを終わったことにして」 after two tasks were discussed (#67, #72)
                     events = ["⚠ " + "".join(f"「{w}」" for w in which) + "のどれのことか分からなかったため実行しませんでした"]

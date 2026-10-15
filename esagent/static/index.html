@@ -641,7 +641,7 @@ async function joinSpoken(text) {
   try { await submitItem(prev); } catch { return false; }
   if (!prev.jobId) return false;
   const r = await api("/api/chat/submit", {text, queuedAt: localIso(), requestId: requestId(), relation: "continue",
-    targetId: prev.jobId, targetRevision: prev.revision});
+    targetId: prev.jobId, targetRevision: prev.revision, via: "voice"});
   if (r.jobId === prev.jobId) {
     prev.text += " " + text; prev.parts = (prev.parts || 1) + 1; prev.revision = r.revision; prev.lastPart = Date.now();
   } else {  // the previous one was already answered: this is a message of its own
