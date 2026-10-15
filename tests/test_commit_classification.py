@@ -8,7 +8,6 @@ import os
 import re
 import sqlite3
 
-import calendar_view
 import conversation_jobs as jobs
 import db
 import feedback
@@ -22,10 +21,7 @@ def _classified_setting(key):
 
 
 def test_every_table_is_classified():
-    with Sandbox(copy_real=False):
-        with db.connect() as con:
-            feedback._init(con)
-            calendar_view._init(con)
+    with Sandbox(copy_real=False):  # db.init() creates every table (#239)
         con = sqlite3.connect(db.DB_PATH)
         tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
         con.close()

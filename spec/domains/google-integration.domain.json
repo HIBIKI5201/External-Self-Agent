@@ -5,7 +5,7 @@
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)(tests/test_sync_revisions\\.py|tests/test_long_notes_sync\\.py|spec/test/sync-revisions-33\\.md)$"
+      "pathPattern": "(^|/)(tests/test_sync_revisions\\.py|tests/test_long_notes_sync\\.py|spec/test/sync-revisions-33\\.md|tests/test_google_account\\.py)$"
     },
     {
       "pathPattern": "(^|/)esagent/gauth\\.py$"

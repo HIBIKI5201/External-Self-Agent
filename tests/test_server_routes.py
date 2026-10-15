@@ -23,7 +23,7 @@ POST_PATHS = ["/api/calendar/connect", "/api/calendar/select", "/api/calendar/sy
               "/api/focus/done", "/api/pomo", "/api/playback/open", "/api/playback/state", "/api/bgm/sync",
               "/api/bgm/window", "/api/media", "/api/bgm", "/api/admin/project", "/api/admin/project/draft",
               "/api/admin/config", "/api/mode", "/api/pet/enabled", "/api/pet/chat", "/api/poke", "/api/google/connect",
-              "/api/google/sync", "/api/google/disconnect"]
+              "/api/google/sync", "/api/google/disconnect", "/api/google/resolve"]
 
 
 def _handler(path="/api/x"):

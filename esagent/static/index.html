@@ -204,6 +204,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margi
   <span class="spacer"></span>
   <button id="gconnect" class="ghost" hidden>Google ToDo に接続</button>
   <button id="gsync" class="ghost" hidden>今すぐ同期</button>
+  <button id="gkeep" class="ghost" hidden>Google に送り直す</button>
+  <button id="gdrop" class="ghost" hidden></button>
   <button id="bgmBtn" class="ghost" title="YouTube の BGM と動画・プレイリスト" aria-expanded="false">♪ BGM</button>
   <button id="adminBtn" class="ghost" title="データベースの中身と設定">管理</button>
 </header>
@@ -389,6 +391,7 @@ function renderGoogle(g) {
   else if (g.state === "online") cls = "ok", text = `Google ToDo: 同期済み ${hhmm(g.last_sync)}${pending}`;
   else if (g.state === "offline") cls = "wait", text = `Google ToDo: オフライン（復帰したら同期）${pending}`;
   else if (g.state === "auth_error" || g.state === "error") cls = "bad", text = `Google ToDo: ${g.last_error}`;
+  else if (g.hold) cls = "bad", text = `Google ToDo: 同期を止めています。${g.hold.message}`;
   else cls = "wait", text = "Google ToDo: 同期準備中";
   $("#gstatus").className = cls;
   if (g.connected) {
@@ -400,8 +403,20 @@ function renderGoogle(g) {
   $("#gstatus").title = g.client ? "" : "secrets\\google_client.json を置くと接続できます";
   $("#gconnect").hidden = !g.client || (g.connected && g.calendar);
   $("#gconnect").textContent = g.connected ? "カレンダー連携のため再接続" : "Google ToDo に接続";
-  $("#gsync").hidden = !g.connected;
+  $("#gsync").hidden = !g.connected || !!g.hold;
+  // An account change or a mass deletion waits for the user's choice (#194).
+  $("#gkeep").hidden = $("#gdrop").hidden = !(g.connected && g.hold);
+  $("#gdrop").textContent = g.hold?.kind === "account" ? "接続をやめる" : `${g.hold?.tasks.length || 0} 件をここからも消す`;
+  $("#gdrop").dataset.action = g.hold?.kind === "account" ? "disconnect" : "delete";
 }
+
+async function resolveGoogle(action) {
+  if (action === "delete" && !confirm("Google で見えなくなったタスクを、ここからも消します。よろしいですか？")) return;
+  try { await api("/api/google/resolve", {action}); } catch (err) { alert(err.message); }
+  refresh();
+}
+$("#gkeep").addEventListener("click", () => resolveGoogle("resend"));
+$("#gdrop").addEventListener("click", () => resolveGoogle($("#gdrop").dataset.action));
 
 $("#gconnect").addEventListener("click", async () => {
   try { await api("/api/google/connect", {}); } catch (err) { alert(err.message); }

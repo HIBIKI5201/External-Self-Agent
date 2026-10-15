@@ -230,7 +230,8 @@ def run_action(action, args, cfg):
         linked = linked_todos.describe(linked_todos.run_once(cfg, force=True))  # before Google, so new tasks go too
         result = gsync.run_once()
         reply = {"online": "同期しました。", "offline": "オフラインなので、つながったら同期します。",
-                 "disconnected": "Google に接続されていません。", "busy": "ちょうど同期中です。"}.get(
+                 "disconnected": "Google に接続されていません。", "busy": "ちょうど同期中です。",
+                 "held": f"同期を止めています（#194）。{db.get_setting('google_last_error', '')} 画面上の Google のボタンで選べます。"}.get(
             result, f"同期でエラーが出ました: {db.get_setting('google_last_error', '')}")
         if linked:
             reply += "\n" + linked

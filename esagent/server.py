@@ -545,6 +545,8 @@ POST = _table({
     "/api/google/connect": Route(_google_connect),
     "/api/google/sync": Route(lambda body: {"result": gsync.run_once()}),
     "/api/google/disconnect": Route(_google_disconnect),
+    # The answer to an account change or a mass deletion (#194); gsync.resolve wakes the sync itself.
+    "/api/google/resolve": Route(lambda body: gsync.resolve(body.get("action"))),
 })
 
 
