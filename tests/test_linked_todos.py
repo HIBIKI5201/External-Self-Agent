@@ -166,3 +166,52 @@ def test_sync_skill_reads_the_files_first():
         assert len(_linked("Narin")) == 1
         r = sb.skill("/sync")
         assert "WarframeDocument 装備: 変更なし" in r["reply"], r["reply"]
+
+
+def _es_agent_dir(sb):
+    d = os.path.join(sb.dir, "repo", ".es-agent")
+    os.makedirs(d)
+    for name in ("decisions.toml", "todo.toml"):
+        _write(os.path.join(d, name), text='[[items]]\nname = "決める"\ndone = false\n')
+    sb.cfg["linked_todos"] = [{"name": "判断", "project": "Studio", "file": os.path.join(d, "decisions.toml")},
+                              {"name": "個人", "label": "個人TODO", "project": "Game", "file": os.path.join(d, "todo.toml")}]
+    return d
+
+
+def test_an_es_agent_directory_gets_a_readme_that_keeps_the_users_lines():
+    with Sandbox(copy_real=False) as sb:
+        d = _es_agent_dir(sb)
+        readme = os.path.join(d, "README.md")
+        linked_todos.run_once(sb.cfg)
+        text = open(readme, encoding="utf-8").read()
+        assert "| `decisions.toml` | 判断 | Studio |" in text and "| `todo.toml` | 個人TODO | Game |" in text, text
+        assert "done = true" in text.replace("`done` を `true`", "done = true") and "update_task" in text
+        assert text.startswith(linked_todos.BEGIN) and linked_todos.END in text
+        stamp = os.stat(readme).st_mtime_ns
+        assert linked_todos.update_readmes(sb.cfg) == []  # unchanged: not written again
+        assert os.stat(readme).st_mtime_ns == stamp
+        with open(readme, "a", encoding="utf-8") as f:
+            f.write("\n## メモ\n自分で書いた行\n")
+        sb.cfg["linked_todos"][1]["project"] = "Game2"
+        assert linked_todos.update_readmes(sb.cfg) == [readme]
+        text = open(readme, encoding="utf-8").read()
+        assert "| Game2 |" in text and "| Game |" not in text and "自分で書いた行" in text, text
+        assert text.count(linked_todos.BEGIN) == 1
+
+
+def test_a_readme_without_marks_is_kept_below_ours():
+    with Sandbox(copy_real=False) as sb:
+        d = _es_agent_dir(sb)
+        readme = os.path.join(d, "README.md")
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write("# 自分の README\n")
+        linked_todos.update_readmes(sb.cfg)
+        text = open(readme, encoding="utf-8").read()
+        assert text.startswith(linked_todos.BEGIN) and text.endswith("# 自分の README\n"), text
+
+
+def test_other_directories_get_no_readme():
+    with Sandbox(copy_real=False) as sb:
+        path = _source(sb)  # WarframeDocument's TODO/data belongs to that repository
+        linked_todos.run_once(sb.cfg)
+        assert not os.path.exists(os.path.join(os.path.dirname(path), "README.md"))
