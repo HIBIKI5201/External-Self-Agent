@@ -1,8 +1,12 @@
 """Automatic pet hiding is independent of enabled settings and foreground focus (#35)."""
 from unittest.mock import Mock, patch
 
-import pet
-import winfocus
+import support
+
+support.require_windows()  # pet.py needs tkinter, winfocus.py needs ctypes.windll
+
+import pet  # noqa: E402
+import winfocus  # noqa: E402
 
 
 def test_chat_window_visibility_handles_minimized_multiple_and_other_windows():
