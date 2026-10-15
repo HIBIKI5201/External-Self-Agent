@@ -72,6 +72,13 @@ def hover_text(pomo):
     return f"{what}{paused} あと{mins}分{task}"
 
 
+def start_label(pomo):
+    """The menu item that starts a focus session, with its length (#248): while idle, the server's
+    remaining time is the configured focus_minutes."""
+    secs = (pomo or {}).get("remaining") or 25 * 60
+    return f"集中を始める（{max(1, round(secs / 60))}分）"
+
+
 class Pet:
     def __init__(self):
         self.root = tk.Tk()
@@ -293,7 +300,7 @@ class Pet:
             elif ev.get("task_id"):
                 tid = ev["task_id"]
                 self.say(f"おつかれさま！{'長めに休もう。' if ev.get('long') else 'ひと休みしよ。'}\n「{ev['task']}」、終わった？",
-                         buttons=[("終わった", lambda: self._done(tid)), ("まだ", lambda: self.say("了解。次の25分で進めよ。"))],
+                         buttons=[("終わった", lambda: self._done(tid)), ("まだ", lambda: self.say("了解。次の集中で進めよ。"))],
                          kind="question", source="timer", ukey=ev.get("key"),
                          voice=False)
             else:
@@ -391,7 +398,7 @@ class Pet:
         m = tk.Menu(self.root, tearoff=0, font=("Yu Gothic UI", 10))
         mode = self.pomo.get("mode", "idle")
         if mode == "idle":
-            m.add_command(label="集中を始める（25分）", command=self._start)
+            m.add_command(label=start_label(self.pomo), command=self._start)
         else:
             m.add_command(label="再開" if self.pomo.get("paused") else "一時停止",
                           command=lambda: self._safe(lambda: api("/api/pomo", {"action": "toggle"})))

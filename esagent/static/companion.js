@@ -139,13 +139,13 @@
   }
 
   // ---- focus timer (state on the server) ---------------------------------------------------
-  const FOCUS = 25;
-  let P = { mode: "idle", remaining: FOCUS * 60, paused: false, round: 0, task_id: null, task: "" };
+  // The length comes from the server (focus_minutes, #248): while idle, remaining is the next session's length.
+  let P = { mode: "idle", remaining: 25 * 60, paused: false, round: 0, task_id: null, task: "" };
   let pAt = performance.now(), lastEvent = null, tasks = [];
 
   const fmt = (ms) => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
-  const remainingMs = () => P.mode === "idle" ? FOCUS * 60000
-    : P.paused ? P.remaining * 1000 : Math.max(0, P.remaining * 1000 - (performance.now() - pAt));
+  const remainingMs = () => P.mode === "idle" || P.paused ? P.remaining * 1000
+    : Math.max(0, P.remaining * 1000 - (performance.now() - pAt));
 
   function renderPomo() {
     const rem = remainingMs();
@@ -194,7 +194,7 @@
       if (ev.leveled_up) say(`なかよし度が上がった！ Lv${ev.level}「${ev.level_name}」`, { ms: 7000, ...timer, kind: "notice" });
       else if (ev.task_id) say(`おつかれさま！「${ev.task}」、終わった？`, { ...timer, kind: "question", buttons: [
         { label: "終わった", onClick: async () => { await post(`/api/tasks/${ev.task_id}`, { status: "done" }); say("やったね！"); window.EsHooks?.refresh?.(); } },
-        { label: "まだ", onClick: () => say("了解。次の25分で進めよ。") }] });
+        { label: "まだ", onClick: () => say("了解。次の集中で進めよ。") }] });
       else say(ev.long ? "おつかれさま！4回目だから長めに休んでね。" : "おつかれさま！ちょっと休憩しよ。", { ...timer, kind: "notice" });
       window.EsHooks?.refresh?.();
     } else if (ev.kind === "break_end") {

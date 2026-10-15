@@ -284,6 +284,7 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 ## AS-13 集中タイマーとなかよし度
 
 - **決定:** 25 分の集中と 5 分の休憩（4 回ごとに 15 分）。集中するタスクを選べる。
+- **実装（#248）:** 長さは管理画面の `focus_minutes` / `break_minutes` / `long_break_minutes` で変えられる。画面の待機中の表示（サーバーの `remaining`）と猫の右クリックの「集中を始める（N分）」はその長さを出し、Es の文言（［まだ］への返事、集中の開始）には分数を書かない。
 - **実装:** タイマーは**サーバー側**で動く（`esagent/pomodoro.py`）。チャット画面と黒猫のどちらからでも同じタイマーを操作でき、チャット画面を閉じていても進む。
 - **実装:** 変化はイベントとして配信し（`/api/events`、`esagent/events.py`）、チャット画面と黒猫がそれぞれ反応する。種類: focus_start / focus_end / break_end / pause / resume / reset / chat_events / answered / question_answered（タイマーの問いかけに声・チャットで答えた、#171）。
 - **実装:** 集中を 1 回終えると、選んでいたタスクのメモに「集中 25分（Es と）」を追記し、未着手なら進行中にする。
