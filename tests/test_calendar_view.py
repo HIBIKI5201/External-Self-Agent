@@ -160,5 +160,6 @@ def test_requests_and_own_plans_are_not_schedule_questions():
             assert calendar_view.answer(text) is None, text
     with patch.object(calendar_view, "ready", return_value=False):
         for text in ("明日の予定は？", "12月に何がある？", "来週空いてる？", "明日何か予定ある？",
-                     "金曜の予定教えて", "明日出かける予定あったっけ？"):
+                     "金曜の予定教えて", "明日出かける予定あったっけ？", "明日の予定ですが、何かありますか？",
+                     "明日の予定なんですけど、何がある？", "明日の予定だけど、何かある？"):
             assert calendar_view.answer(text), text
