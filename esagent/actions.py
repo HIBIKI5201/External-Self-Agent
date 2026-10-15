@@ -188,8 +188,10 @@ def run_action(action, args, cfg):
             recurring.set_rule(task["id"], None)
             reply = f"#{task['id']} {task['title']} の繰り返しをやめました。"
         else:
-            rule = recurring.parse(rule_text)
-            if not rule:
+            rule, problem = recurring.read(rule_text)
+            if problem:
+                reply = f"{problem}繰り返しは変えていません。"
+            elif not rule:
                 reply = f"「{rule_text}」を読めませんでした。「毎週月曜9時」「毎日5時」のように書いてください。"
             else:
                 t = recurring.set_rule(task["id"], rule)
