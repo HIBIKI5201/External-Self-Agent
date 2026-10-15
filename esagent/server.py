@@ -30,6 +30,7 @@ import llm  # noqa: E402
 import events  # noqa: E402
 import media  # noqa: E402
 import pomodoro  # noqa: E402
+import timer_chat  # noqa: E402
 import projects  # noqa: E402
 import recurring  # noqa: E402
 import skills  # noqa: E402
@@ -259,7 +260,8 @@ GET = _table({
     "/api/pet": Route(lambda q: pet_state()),
     "/api/progress": Route(lambda q: brain.progress()),
     # messages the window sends without queueing (#23)
-    "/api/chat/bypass": Route(lambda q: {"pattern": brain._STATUS_RE.pattern, "exclude": brain._TASK_REF_RE.pattern}),
+    "/api/chat/bypass": Route(lambda q: {"pattern": brain._STATUS_RE.pattern,
+                                                    "exclude": f"{brain._TASK_REF_RE.pattern}|{timer_chat.TIMER_TEXT}"}),
     "/api/commands": Route(lambda q: skills.catalog()),
     "/api/admin/tables": Route(lambda q: {"tables": admin.tables(), "db": db.DB_PATH}),
     "/api/admin/table": Route(_admin_table),
