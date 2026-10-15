@@ -1,8 +1,12 @@
 """The desktop cat's bubble buttons run their action; clicking elsewhere still closes it (#170)."""
-import tkinter as tk
 from unittest.mock import patch
 
-import pet
+import support
+support.require_windows()
+
+import tkinter as tk  # noqa: E402
+
+import pet  # noqa: E402
 
 
 def _cat():
