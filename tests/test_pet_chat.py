@@ -5,8 +5,11 @@ from unittest.mock import Mock
 import conversation_jobs as jobs
 import db
 import events
-import pet
-from support import Sandbox
+import support
+support.require_windows()
+
+import pet  # noqa: E402
+from support import Sandbox  # noqa: E402
 
 
 def _wait(request_id):

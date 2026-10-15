@@ -1,7 +1,10 @@
 """AS-12: how the desktop cat answers timer events, overdue tasks and a missing server (#255)."""
 from unittest.mock import Mock, patch
 
-import pet
+import support
+support.require_windows()
+
+import pet  # noqa: E402
 
 
 def _cat():

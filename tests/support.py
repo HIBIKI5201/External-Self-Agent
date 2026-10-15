@@ -23,6 +23,20 @@ import db  # noqa: E402
 REAL_DB = db.DB_PATH
 
 
+class SkipModule(Exception):
+    """Raised at import time by a test module that cannot run here; tests/run.py counts it as skipped."""
+
+
+def require_windows():
+    """Call at the top of a test module that needs tkinter or the Windows API (pet.py, winfocus.py)."""
+    if sys.platform != "win32":
+        raise SkipModule("Windows のみ")
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        raise SkipModule("tkinter がない")
+
+
 def ollama_ready(cfg=None):
     cfg = cfg or db.load_config()
     try:

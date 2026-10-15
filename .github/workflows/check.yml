@@ -21,7 +21,7 @@ jobs:
       - name: Python syntax
         run: python -m compileall -q esagent tests
       - name: JavaScript syntax
-        run: node --check esagent/static/companion.js && node --check esagent/static/listen.js
+        run: node --check esagent/static/companion.js && node --check esagent/static/listen.js && node --check esagent/static/calendar.js
       - name: Chat queue retry tests
         run: node tests/test_chat_queue.js
       - name: Voice chat echo tests
@@ -36,4 +36,17 @@ jobs:
         shell: bash
         run: for f in config.example.json spec/domains/*.json .claude/settings.json; do python -m json.tool "$f" > /dev/null || exit 1; done
       - name: Offline tests (no model, fake Google)
+        run: python tests/run.py --offline
+
+  # Cloud Claude Code sessions run on Linux without tkinter; keep the offline tests runnable there (#204).
+  offline-linux:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Offline tests (no model, fake Google; Windows-only modules skipped)
         run: python tests/run.py --offline
