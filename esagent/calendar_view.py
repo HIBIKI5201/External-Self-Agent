@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.parse
 
+import conversation_jobs as jobs
 import db
 import gapi
 import gauth
@@ -199,6 +200,7 @@ def add(cal_id, title, date, start_time="", end_time="", cfg=None):
     else:
         body = {"summary": title, "start": {"date": day.isoformat()}, "end": {"date": (day + dt.timedelta(days=1)).isoformat()}}
     ev = _req("POST", f"/calendars/{_quote(cal_id)}/events", None, body)
+    jobs.mark_committed()  # the event exists now, even though only a cache row is written below (#236)
     row = _row(cal, {**body, **ev, "start": ev.get("start", body["start"]), "end": ev.get("end", body["end"])},
                dt.date.today())
     if row and cal["selected"]:

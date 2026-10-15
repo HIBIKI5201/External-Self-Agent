@@ -4,6 +4,8 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
+import threading
 import unicodedata
 from contextlib import contextmanager
 
@@ -168,9 +170,29 @@ def load_config():
 
 
 def save_config(cfg):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    write_atomic(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+
+
+_write_lock = threading.Lock()
+
+
+def write_atomic(path, text):
+    """Replace a whole file so that a crash or shutdown leaves the old or the new contents, never a
+    half-written one (#233): config.json is read when the server starts, the Google token every hour."""
+    with _write_lock:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=os.path.basename(path) + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def valid_datetime(value):
@@ -387,6 +409,14 @@ def get_task(task_id):
         return _task(con, task_id)
 
 
+def first_overdue(today):
+    """The title of the open task whose due date passed longest ago, or "" (the cat asks every second, #241)."""
+    with connect() as con:
+        row = con.execute("SELECT title FROM tasks WHERE status != 'done' AND due IS NOT NULL AND due != '' "
+                          "AND due < ? ORDER BY due, id LIMIT 1", (today,)).fetchone()
+    return row["title"] if row else ""
+
+
 def list_tasks(include_done=False, project=None):
     where, args = [], []
     with connect() as con:
@@ -491,11 +521,18 @@ def update_task(task_id, title=None, status=None, due=None, project=None, notes_
 
 # ---- messages ---------------------------------------------------------------
 
+# /clear empties the table, and SQLite would then number messages from 1 again, so ratings that keep a
+# message id would land on a different reply (#232). New ids continue after the highest one ever used.
+NEW_MESSAGE_ID = ("(SELECT MAX(COALESCE((SELECT MAX(id) FROM messages), 0), COALESCE((SELECT CAST(value AS INTEGER) "
+                  "FROM settings WHERE key = 'messages_last_id'), 0)) + 1)")
+
+
 def add_message(role, content, status=None):
     with connect() as con:
         import conversation_jobs as jobs
         request_id, revision = jobs.message_metadata()
-        cur = con.execute("INSERT INTO messages(role, content, created_at, status, request_id, request_revision) VALUES(?, ?, ?, ?, ?, ?)",
+        cur = con.execute(f"INSERT INTO messages(id, role, content, created_at, status, request_id, request_revision) "
+                          f"VALUES({NEW_MESSAGE_ID}, ?, ?, ?, ?, ?, ?)",
                           (role, content, now(), status, request_id, revision))
         return cur.lastrowid
 
@@ -555,6 +592,8 @@ def clear_messages():
     import conversation_jobs as jobs
     jobs.clear_pending()
     with connect() as con:
+        con.execute(f"INSERT INTO settings(key, value) VALUES('messages_last_id', {NEW_MESSAGE_ID} - 1) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         con.execute("DELETE FROM messages")
         con.execute("DELETE FROM settings WHERE key = 'conversation_game'")
 

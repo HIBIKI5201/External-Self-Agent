@@ -73,6 +73,15 @@ def _url(cfg, path):
     return cfg["ollama_url"].rstrip("/") + path
 
 
+# Models that answered "does not support thinking". Kept apart from the shared config, which the admin
+# page writes to config.json, so a runtime finding is not saved as a setting (#233).
+_NO_THINK = set()
+
+
+def _thinks(cfg):
+    return cfg.get("supports_think", True) and cfg["model"] not in _NO_THINK
+
+
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.S)
 
 
@@ -97,13 +106,13 @@ def chat(cfg, messages, schema=None, options=None, think=False, on_text=None, ti
     }
     if schema:
         body["format"] = schema
-    if cfg.get("supports_think", True):
+    if _thinks(cfg):
         body["think"] = bool(think)
     try:
         return _post(cfg, body, timeout, on_text)
     except LLMError as e:
         if "think" in body and "does not support thinking" in str(e):
-            cfg["supports_think"] = False
+            _NO_THINK.add(cfg["model"])  # not in cfg: the admin page would save it to config.json (#233)
             del body["think"]
             return _post(cfg, body, timeout, on_text)
         raise
@@ -212,7 +221,7 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
         "keep_alive": cfg.get("keep_alive", "10m"),
         "options": {"temperature": 0.2, "num_ctx": cfg.get("num_ctx", 8192), **(options or {})},
     }
-    if cfg.get("supports_think", True):
+    if _thinks(cfg):
         body["think"] = False
     req = urllib.request.Request(_url(cfg, "/api/chat"), data=json.dumps(body).encode("utf-8"),
                                  headers={"Content-Type": "application/json"})
@@ -266,6 +275,12 @@ def warm(cfg, wait=False):
         _WARM.update(state="loading", at=time.time(), error="")
 
     def run():
+        try:
+            load()
+        finally:
+            _STATUS.clear()  # the model may be in memory now; tell the next status() at once
+
+    def load():
         started = time.time()
         if loaded(cfg):
             _WARM.update(state="ready", ms=0)
@@ -289,8 +304,25 @@ def warm(cfg, wait=False):
     return dict(_WARM)
 
 
+# The cat asks every second, the chat window every 8 and the waiting-message loop every 5 (#241). The
+# model's readiness changes far more slowly, so Ollama is asked at most once per STATUS_TTL seconds.
+STATUS_TTL = 5
+_STATUS = {}  # (ollama_url, model) -> (asked at, answer)
+
+
 def status(cfg):
     """{'ollama': reachable, 'model': model pulled, 'loaded': in memory now, 'warming': being loaded}."""
+    key = (cfg["ollama_url"], cfg["model"])
+    hit = _STATUS.get(key)
+    if hit and time.monotonic() - hit[0] < STATUS_TTL:
+        answer = hit[1]
+    else:
+        answer = _ask_status(cfg)
+        _STATUS[key] = (time.monotonic(), answer)
+    return {**answer, "warming": _WARM["state"] == "loading"} if answer["ollama"] else dict(answer)
+
+
+def _ask_status(cfg):
     try:
         with urllib.request.urlopen(_url(cfg, "/api/tags"), timeout=1.5) as r:
             names = [m["name"] for m in json.load(r).get("models", [])]
@@ -298,5 +330,4 @@ def status(cfg):
         return {"ollama": False, "model": False, "name": cfg["model"]}
     want = cfg["model"]
     have = any(_same(n, want) for n in names)
-    return {"ollama": True, "model": have, "name": want, "loaded": bool(loaded(cfg)) if have else False,
-            "warming": _WARM["state"] == "loading"}
+    return {"ollama": True, "model": have, "name": want, "loaded": bool(loaded(cfg)) if have else False}

@@ -54,6 +54,10 @@ def rate(message_id, rating=None, rewrite=None, cfg=None):
         context = [{"role": r["role"], "content": r["content"]} for r in reversed(before)]
         kind = "chat" if (msg["intent"] or "chat") in MODEL_INTENTS else "template"
         now = db.now()
+        # A rating made before /clear stopped reusing message ids (#232) can hold this id for another
+        # reply. Keep it, under a number no message will have, and start a new one for this reply.
+        con.execute("UPDATE reply_feedback SET message_id = -id WHERE message_id = ? AND reply != ?",
+                    (msg["id"], msg["content"]))
         con.execute(
             "INSERT INTO reply_feedback(message_id, rating, rewrite, reply, kind, context, model, prompt_version, "
             "created_at, updated_at) VALUES(?, 0, '', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO NOTHING",
@@ -75,7 +79,8 @@ def ratings(message_ids):
         return {}
     with db.connect() as con:
         _init(con)
-        rows = con.execute(f"SELECT message_id, rating, rewrite FROM reply_feedback WHERE message_id IN "
+        rows = con.execute(f"SELECT f.message_id, f.rating, f.rewrite FROM reply_feedback f JOIN messages m "
+                           f"ON m.id = f.message_id AND m.content = f.reply WHERE f.message_id IN "
                            f"({','.join('?' * len(ids))})", ids).fetchall()
     return {r["message_id"]: {"rating": r["rating"], "rewritten": bool(r["rewrite"])} for r in rows}
 

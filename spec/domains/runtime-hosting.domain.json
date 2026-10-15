@@ -54,6 +54,9 @@
     },
     {
       "pathPattern": "(^|/)spec/test/verification-log\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_atomic_write\\.py$"
     }
   ],
   "source": "manual",

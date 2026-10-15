@@ -96,6 +96,9 @@
     },
     {
       "pathPattern": "(^|/)tests/test_(memory|report_vs_delegate|task_intent|unverified_facts|wait_status|project_context)\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_commit_classification\\.py$"
     }
   ],
   "source": "manual",

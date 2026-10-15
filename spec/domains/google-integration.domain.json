@@ -33,6 +33,9 @@
     },
     {
       "pathPattern": "(^|/)tests/test_offline_google\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_sync_trigger\\.py$"
     }
   ],
   "source": "manual",

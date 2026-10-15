@@ -47,6 +47,9 @@ CFG = db.load_config()
 brain._status_cfg = CFG
 log = logging.getLogger("esagent")
 traffic = runtime_log.Traffic(log)
+# POSTs that can change tasks or projects. Only these wake the Google sync: the window reports
+# playback, warms the model and logs listening every few seconds, and each full sync is a quota hit (#231).
+SYNCING_POST = re.compile(r"/api/(chat|tasks(/\d+(/delegate)?)?|focus/done|poke|admin/(config|project(/draft)?))")
 
 
 def state():
@@ -76,8 +79,7 @@ def pet_state():
     prog = brain.progress()
     pomo = pomodoro.state(CFG)
     llm_ok = llm.status(CFG).get("model", False)
-    today = db.now()[:10]
-    overdue = next((t["title"] for t in db.list_tasks() if t["due"] and t["due"] < today), "")
+    overdue = db.first_overdue(db.now()[:10])
     if prog["busy"]:
         mood = "thinking"
     elif pomo["mode"] == "focus" and not pomo["paused"]:
@@ -265,8 +267,8 @@ class Handler(BaseHTTPRequestHandler):
     def _post_result(self, path, body):
         try:
             result = self._route(path, body)
-            if not path.startswith(("/api/youtube/", "/api/voice", "/api/calendar")):
-                gsync.request()  # mutations should reach Google; YouTube and voice calls do not trigger sync
+            if SYNCING_POST.fullmatch(path):
+                gsync.request()  # task and project changes should reach Google
             return 200, result
         except youtube.YouTubeError as e:
             return e.code, {"error": str(e), **({"link": e.link} if e.link else {})}
@@ -421,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
             db.set_setting("bgm_sync", json.dumps({"mode": body.get("mode"), "focusOnly": bool(body.get("focusOnly"))}))
             return {"ok": True}
         if path == "/api/bgm/window":
-            media.open_window(CFG, body["url"])
+            media.open_window(CFG, body.get("url"))
             return {"ok": True}
         if path == "/api/media":
             action = body.get("action", "status")
@@ -429,7 +431,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("action must be status, play or pause")
             return {"sessions": media.control(action)}
         if path == "/api/bgm":  # remember a pasted BGM URL in config.json
-            url, title = (body.get("url") or "").strip(), (body.get("title") or "YouTube").strip()[:80]
+            url, title = str(body.get("url") or "").strip(), str(body.get("title") or "YouTube").strip()[:80]
+            if url:
+                url = media.youtube_url(url)  # the list goes back to /api/bgm/window as is (#234)
             if url and not any(b["url"] == url for b in CFG.setdefault("bgm", [])):
                 CFG["bgm"].append({"title": title, "url": url})
                 db.save_config(CFG)
