@@ -117,3 +117,32 @@ def test_the_screen_gets_a_reason_not_a_success():
         finally:
             app.shutdown(); app.server_close(); thread.join(timeout=2)
         assert db.get_task(t["id"])["status"] == "todo"
+
+
+def test_the_reason_and_get_task_name_the_source_file():
+    with Sandbox(copy_real=False) as sb:
+        t = _linked(sb)
+        path = sb.cfg["linked_todos"][0]["file"]
+        try:
+            db.update_task(t["id"], status="done")
+            raise AssertionError("a read-only task was completed")
+        except db.ReadOnlyTask as e:
+            assert path in str(e), str(e)
+        out = mcp_server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                 "params": {"name": "get_task", "arguments": {"task_id": t["id"]}}})
+        assert json.loads(out["content"][0]["text"])["source_file"] == path, out
+        mine = db.add_task("自分のタスク")
+        out = mcp_server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                 "params": {"name": "get_task", "arguments": {"task_id": mine["id"]}}})
+        assert "source_file" not in json.loads(out["content"][0]["text"])
+
+
+def test_rows_from_before_the_file_column_learn_their_file():
+    with Sandbox(copy_real=False) as sb:
+        t = _linked(sb)
+        with db.connect() as con:
+            con.execute("ALTER TABLE linked_items DROP COLUMN file")
+        db.init()
+        assert db.source_file(t["id"]) is None and "元のファイルの done" in db.read_only_reply(t)
+        linked_todos.run_once(sb.cfg, force=True)
+        assert db.source_file(t["id"]) == sb.cfg["linked_todos"][0]["file"]

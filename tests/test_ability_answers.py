@@ -45,3 +45,19 @@ def test_the_reply_prompt_carries_the_voice_state():
         prompt = brain._responder_prompt(__import__("datetime").date.today(), "chat", "やあ", "", [])
         assert "Reading aloud now: OFF" in prompt and "You cannot hear music" in prompt
         assert db.list_tasks() == []
+
+
+def test_voice_input_is_not_denied_and_its_mechanism_is_answered():
+    """#207: 「E.S. Agent は音声を直接聞くことはできない」 while the user spoke through 会話モード."""
+    reply = ("うん、便利だよね～！でも、E.S. Agent は音声を直接聞くことはできないから、   \n"
+             "文字に変換して話してね～。また、音声で何か話したいときは、マイクを押して言ってね！ 😊")
+    tidy = brain.tidy_chat_reply(reply, "便利でしょ。", [])
+    assert "聞くことはできない" not in tidy and "文字に変換" not in tidy and tidy.startswith("うん、便利"), tidy
+    assert brain.tidy_chat_reply("音楽は聞こえないの。でも曲名は分かるよ。", "Esって音楽聞こえる？", []).startswith("音楽は")
+    with Sandbox(copy_real=False) as sb, patch.object(llm, "chat", side_effect=AssertionError("no model")):
+        r = sb.chat("なんかGoogle edgeのマイク音声読み取りAPI使ってんだよね？")
+        assert r["intent"] == "ability" and "Edge の音声認識" in r["reply"], r
+        assert "API キー" in r["reply"] and "要らない" in r["reply"] and "タイトル" not in r["reply"], r
+        r = sb.chat("どうやって聞いてるの？")
+        assert "会話モード" in r["reply"], r
+    assert brain._ability_flow("音声認識の調子が悪い", {}) is None
