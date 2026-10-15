@@ -44,6 +44,9 @@
       "pathPattern": "(^|/)esagent/db\\.py$"
     },
     {
+      "pathPattern": "(^|/)tests/test_db_schema\\.py$"
+    },
+    {
       "pathPattern": "(^|/)install\\.ps1$"
     },
     {
