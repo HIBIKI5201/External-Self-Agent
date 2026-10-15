@@ -33,6 +33,9 @@
     },
     {
       "pathPattern": "(^|/)tests/test_ui_failures\\.(py|js)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_static_syntax\\.py$"
     }
   ],
   "source": "manual",
