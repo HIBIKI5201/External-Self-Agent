@@ -2280,6 +2280,10 @@ def status_lines(now=None):
         lines.append(head + "（" + "、".join(parts) + "）。" + ("待たせてごめんね。" if total >= 60 else ""))
     elif not lines:
         lines.append("時間を測った記録がまだないので、何に時間がかかったのかはわからないんだ。")
+    err = llm.LAST_ERROR
+    if err.get("kind") == "timeout" and time.time() - err.get("at", 0) < 600:
+        lines.append(f"さっきのモデルへの要求は、返事に {err['seconds']} 秒以上かかったので打ち切ったよ"
+                     "（接続はできていて、遅かっただけ）。")
     st = llm.status(_status_cfg) if _status_cfg else {}
     if st and not st.get("ollama"):
         lines.append("いまモデル（Ollama）に接続できていないよ。")
@@ -2307,6 +2311,16 @@ PENDING_NOTE = "モデルの準備ができたら、このメッセージに返�
 # running it again would repeat the change, so Es says what she did and stops (#95).
 PARTIAL_NOTE = ("変更は下の記録のとおり済ませたよ。ただ、途中でモデルにつながらなくなって、その先はできていないの。"
                 "続きがあれば、もう一度頼んでね。")
+# The same when the model was reachable but too slow (#198): saying it lost the connection would mislead.
+PARTIAL_TIMEOUT_NOTE = ("変更は下の記録のとおり済ませたよ。ただ、そのあとの返事に {seconds} 秒以上かかったので打ち切って、"
+                        "その先はできていないの。続きがあれば、もう一度頼んでね。")
+
+
+def partial_note(error):
+    """PARTIAL_NOTE, or the time-limit version when the request timed out instead of failing to connect."""
+    if isinstance(error, llm.LLMTimeout):
+        return PARTIAL_TIMEOUT_NOTE.format(seconds=error.seconds)
+    return PARTIAL_NOTE
 
 
 def changed(events, handoffs=()):
@@ -2621,12 +2635,12 @@ def _chat(text, cfg, message_id=None):
                 _stage("返事を考え中")
                 try:
                     reply = _respond(cfg, annotated, today, history, intent, focus, events, touched)
-                except llm.LLMError:
+                except llm.LLMError as e:
                     if not changed(events, handoffs):
                         raise
                     # The tasks already changed: answering later would run the message again
                     # and repeat the change (#95). Say what was done instead.
-                    reply = PARTIAL_NOTE
+                    reply = partial_note(e)
     except llm.LLMError as e:
         # Keep the message; the server answers it once the model is ready. The reason goes with it so
         # a queued request can tell the user that Ollama is not running (#190).
