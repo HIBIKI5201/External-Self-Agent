@@ -80,6 +80,7 @@ class Pet:
         self.mood, self.override, self.override_until = "idle", None, 0
         self.pomo, self.last_event, self.online, self.warned_day = {}, None, True, ""
         self.bubble, self.asking = None, False
+        self.bubble_key = None
         self.voice = {}
         self.chat_on = True  # show chat replies in the bubble while the chat window is out of sight (#121)
         self.drag = None
@@ -187,6 +188,7 @@ class Pet:
         b = tk.Toplevel(self.root)
         b.overrideredirect(True)
         b.attributes("-topmost", True)
+        self.bubble_key = ukey  # the question it asks, so an answer in the chat can take it down (#171)
         frame = tk.Frame(b, bg="#fffdf8", highlightbackground="#d9d2c3", highlightthickness=1)
         frame.pack()
         tk.Label(frame, text=text, bg="#fffdf8", fg="#2a2433", font=("Yu Gothic UI", 10), wraplength=230,
@@ -234,6 +236,7 @@ class Pet:
         if self.bubble and (only is None or only is self.bubble):
             self.bubble.destroy()
             self.bubble, self.asking = None, False
+            self.bubble_key = None
 
     # ---- server polling ----------------------------------------------------------------
     def _poll(self):
@@ -286,6 +289,9 @@ class Pet:
         elif kind == "break_end":
             self.say("休憩おわり。次、いく？", buttons=[("集中する", self._start), ("あとで", None)], voice=False,
                      kind="question", source="timer", ukey=ev.get("key"))
+        elif kind == "question_answered":  # answered in the chat or by voice: no second answer here (#171)
+            if ev.get("question") and ev["question"] == getattr(self, "bubble_key", None):
+                self._close_bubble()
         elif kind == "chat_reply":
             # The chat window is closed or minimised (otherwise the cat is hidden): show what was sent and how
             # Es answered, so a misheard voice message is noticed (#121). Reading aloud stays with the server.

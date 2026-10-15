@@ -87,8 +87,9 @@
   function flashMini(mood, ms = 2500) { miniOverride = mood; miniUntil = Date.now() + ms; setMini(); setTimeout(() => setMini(), ms + 50); }
 
   // ---- Es's lines in this window ---------------------------------------------------------
-  let lineTimer = null;
+  let lineTimer = null, lineKey = null;
   function say(text, opts = {}) {
+    lineKey = opts.ukey || null;  // the question shown, so an answer in the chat can take it down (#171)
     speak(text, opts);
     record(text, opts);
     $("#minicat-text").textContent = text;
@@ -199,6 +200,9 @@
     } else if (ev.kind === "break_end") {
       chime();
       say("休憩おわり。次、いく？", { voice: false, kind: "question", source: "timer", ukey: ev.key, buttons: [{ label: "集中する", onClick: startFocus }, { label: "あとで" }] });
+    } else if (ev.kind === "question_answered") {
+      // Answered in the chat or by voice: take the buttons down so it isn't answered twice (#171).
+      if (ev.question && ev.question === lineKey) { $("#esline").hidden = true; $("#esline-btns").innerHTML = ""; }
     } else if (ev.kind === "pause" || ev.kind === "reset") {
       if (embed) pauseEmbed();
     } else if (ev.kind === "answered") {
