@@ -82,3 +82,13 @@ def test_due_change_of_a_task_named_with_a_repeat_word_is_left_to_the_router():
         db.add_task('定期券の購入')
         for text in ['定期券の購入を明日に変更して', '定期券の購入を金曜に変えて', '定期券の購入を3時に変更して']:
             assert repeat_chat.handle(text, []) is None, text
+
+
+def test_time_of_day_words_are_read_like_new_repeats():
+    """「夜10時」 is 22:00 and 「午前12時」 is 0:00, as recurring.read reads them (#196)."""
+    for text, rule in [('シンジケートのリセットを夜10時に変更して', 'daily 22:00'),
+                       ('シンジケートのリセットを午前12時に変更して', 'daily 00:00')]:
+        with Sandbox(copy_real=False) as sb, _no_model():
+            task = recurring.set_rule(db.add_task('シンジケートミッション')['id'], 'daily 09:00')
+            r = sb.chat(text)
+            assert db.get_task(task['id'])['repeat'] == rule, (text, r['reply'])

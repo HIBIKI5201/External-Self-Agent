@@ -28,7 +28,7 @@ def test_spoken_noise_adds_nothing():
             r = brain.chat("旅行したいんだ。お客様、どうぞご紹介。明日", sb.cfg, via="voice")
         assert len(db.list_tasks(include_done=True)) == before, r
         assert r["events"] == [] and r["reply"] == brain.VOICE_HOLD_NOTE, r
-        assert not db.get_setting("pending_choice"), "no project question for words nobody asked"
+        assert not db.get_setting("active_offer"), "no project question for words nobody asked"
 
 
 def test_spoken_noise_completes_nothing():

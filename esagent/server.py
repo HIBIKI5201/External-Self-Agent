@@ -168,7 +168,7 @@ def failure(e, route=None, what="request"):
     if isinstance(e, GOOGLE_ERRORS) and route and route.google_down:
         log.info("calendar: %s", e)
         return 503, {"error": route.google_down}
-    if isinstance(e, LookupError):
+    if isinstance(e, LookupError) and not isinstance(e, (KeyError, IndexError)):
         return 404, {"error": str(e)}
     if isinstance(e, ValueError):  # bad input from the screen
         return 400, {"error": str(e)}

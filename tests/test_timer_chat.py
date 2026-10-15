@@ -133,3 +133,13 @@ def test_guidance_and_true_remaining_minutes_are_kept():
         for text in ("タイマーはあと12分だから、もう少しがんばろう。", "タイマーはあと13分くらいだよ。"):
             assert brain.clean_model_reply(text) == text, text
         assert "40分" not in brain.clean_model_reply("タイマーはあと40分だよ。")
+
+
+def test_a_short_line_without_a_timer_word_does_not_reset_the_timer():
+    """「週課をリセットして」 is about a task, even while the focus timer runs."""
+    with Sandbox(copy_real=False) as sb:
+        _quiet(sb)
+        pomodoro.start(sb.cfg)
+        assert timer_chat.answer("週課をリセットして", sb.cfg) is None
+        assert pomodoro.state(sb.cfg)["mode"] == "focus"
+        assert "リセットした" in timer_chat.answer("リセットして", sb.cfg)

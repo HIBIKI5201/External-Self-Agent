@@ -24,6 +24,8 @@ _PAUSE_RE = re.compile(_TIMER + _JOIN + r"(?:一時停止|いったん止め|一
 _RESUME_RE = re.compile(_TIMER + r"[^。！!？?\n]{0,6}(?:再開|続き(?:から|を)|もう一度動かし|動かして)|(?:再開|続きから)(?:して|させて|お願い)")
 _RESET_RE = re.compile(_TIMER + _JOIN + r"(?:リセット|最初から|やめ(?:て|る|よう|ます)|終わりにし|キャンセル|中止)|リセットして")
 _TIMER_WORD_RE = re.compile(r"タイマー|ポモドーロ|集中|休憩")
+# Without a timer word, only these whole lines can mean the timer: 「週課をリセットして」 cannot.
+_BARE_RE = re.compile(r"(?:再開|続きから|リセット)(?:して|させて|お願い)(?:ね|よ|ください)?[。！!\s]*")
 
 _ASK = r"[^。！!\n]{0,12}(?:[？?]|か[。！!\s]*$|の[。！!\s]*$|知ってる|教えて|わかる|分かる)"
 _STATUS_RE = re.compile(r"あと何分|残り(?:時間|何分|は何分|って何分)|"
@@ -105,7 +107,7 @@ def answer(text, cfg):
     if _NOT_REQUEST_RE.search(said) or _WRITE_RE.search(said):
         return None
     has_timer = _TIMER_WORD_RE.search(said)
-    if not has_timer and len(said) <= 10:
+    if not has_timer and _BARE_RE.fullmatch(said):
         # A bare 「再開して」「リセットして」 means the timer only while it has something to resume or reset.
         st = pomodoro.state(cfg)
         has_timer = st["paused"] if _RESUME_RE.search(said) else st["mode"] != "idle"

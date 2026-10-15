@@ -10,9 +10,9 @@ _REQUEST = re.compile(r'(?:リセットして|設定して|設定にして|に�
 # 「シンジケートミッションのリセット時間を1時に変更して」 (#188): changing an existing repeat's time.
 _CHANGE = re.compile(r'(?:変更(?:して|する|お願い)|変えて|変える|ずらして)(?:おいて|ほしい|ください|くれる)?[。！!？?\s]*$')
 # A bare time without 毎日/毎週: 「1時」「1時半」「午後1時30分」「13:30」.
-_TIME = re.compile(r'(?P<ampm>午前|午後)?\s*(?P<h>\d{1,2})\s*(?:時\s*(?:(?P<m>\d{1,2})\s*分|(?P<half>半))?|:(?P<m2>\d{2}))')
+_TIME = re.compile(r'(?P<ampm>午前|午後|朝|昼|夕方|夜|深夜)?\s*(?P<h>\d{1,2})\s*(?:時\s*(?:(?P<m>\d{1,2})\s*分|(?P<half>半))?|:(?P<m2>\d{2}))')
 # The name before 「のリセット時間」「の時刻」「を1時に」 when it is only part of the title: 「シンジケート」.
-_PART = re.compile(r'^\s*(?P<name>[^、。\s]{2,}?)\s*(?:の(?:リセット|繰り?返し|時刻|時間|周期)|を(?:午前|午後)?\s*\d)')
+_PART = re.compile(r'^\s*(?P<name>[^、。\s]{2,}?)\s*(?:の(?:リセット|繰り?返し|時刻|時間|周期)|を(?:午前|午後|朝|昼|夕方|夜|深夜)?\s*\d)')
 _ADD = re.compile(r'タスク(?:に|を|として)?(?:追加|登録|して)|(?:追加|登録)して')
 _STOP = re.compile(r'繰り?返し(?:を|は)?(?:解除|やめ|止め|なし)|(?:解除|やめて|停止して)')
 # Quotes around a task name: 「」『』 and double quotes, half-width or not (#87).
@@ -51,8 +51,13 @@ def _time(text):
     if not m:
         return None, None
     hour, minute = int(m['h']), 30 if m['half'] else int(m['m'] or m['m2'] or 0)
-    if m['ampm'] == '午後' and hour < 12:
+    ap = m['ampm']  # the same reading as recurring.read (#196): 夜10時 is 22:00, 午前12時 is 0:00
+    if ap in recurring._PM and hour in recurring._PM[ap]:
         hour += 12
+    elif ap in ('午前', '夜', '深夜') and hour == 12:
+        hour = 0
+    if ap in ('午前', '朝') and hour > 12:
+        return False, False
     return (hour, minute) if hour < 24 and minute < 60 else (False, False)
 
 
