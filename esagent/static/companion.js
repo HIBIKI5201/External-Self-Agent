@@ -193,7 +193,11 @@
       const timer = { voice: false, source: "timer", ukey: ev.key };
       if (ev.leveled_up) say(`なかよし度が上がった！ Lv${ev.level}「${ev.level_name}」`, { ms: 7000, ...timer, kind: "notice" });
       else if (ev.task_id) say(`おつかれさま！「${ev.task}」、終わった？`, { ...timer, kind: "question", buttons: [
-        { label: "終わった", onClick: async () => { await post(`/api/tasks/${ev.task_id}`, { status: "done" }); say("やったね！"); window.EsHooks?.refresh?.(); } },
+        { label: "終わった", onClick: async () => {
+          // Cheer only when it really was completed; a read-only task (#182) says why (#249).
+          try { await post(`/api/tasks/${ev.task_id}`, { status: "done" }); }
+          catch (e) { return say(e.message || "完了にできなかった…", { ms: 6000 }); }
+          say("やったね！"); window.EsHooks?.refresh?.(); } },
         { label: "まだ", onClick: () => say("了解。次の集中で進めよ。") }] });
       else say(ev.long ? "おつかれさま！4回目だから長めに休んでね。" : "おつかれさま！ちょっと休憩しよ。", { ...timer, kind: "notice" });
       window.EsHooks?.refresh?.();

@@ -30,6 +30,9 @@
     },
     {
       "pathPattern": "(^|/)tests/test_chat_scroll\\.(py|js)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_ui_failures\\.(py|js)$"
     }
   ],
   "source": "manual",
