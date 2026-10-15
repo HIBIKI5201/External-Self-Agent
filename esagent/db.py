@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sqlite3
+import unicodedata
 from contextlib import contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -309,7 +310,8 @@ def sync_projects(cfg):
 
 
 def ensure_project(name, kind="general"):
-    """Create a project unless one already matches. Returns True if it was created."""
+    """Create a project unless an existing one matches the name the way find_project does (so
+    「Sinfonia」 finds 「Sinfonia Studio」, #197). Returns True if it was created."""
     with connect() as con:
         if find_project(con, name):
             return False
@@ -338,20 +340,34 @@ def list_projects():
         return [dict(r) for r in con.execute("SELECT * FROM projects ORDER BY kind DESC, name")]
 
 
+# 「EsAgentカテゴリー」「Warframeのリスト」: the words around a project name are not part of it.
+_PROJECT_SUFFIX = re.compile(r"(?:の)?(?:プロジェクト|カテゴリー?|リスト|分類|タスク)$")
+
+
+def _project_key(name):
+    """Compare names without case, spaces or full/half-width differences (#197)."""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", name or "")).lower()
+
+
 def find_project(con, name):
-    """Case-insensitive exact match, then substring match in either direction."""
-    if not name:
+    """The project a name means (#197): the same name (case, spaces and width ignored) first.
+
+    Otherwise a shortened name ("Sinfonia" for "Sinfonia Studio") is accepted only when it is two
+    or more characters, covers most of the project's name and fits exactly one project. A name
+    that merely contains a project's name ("Warframeウィークリー" vs "Warframe") is another project."""
+    if not name or not name.strip():
         return None
-    key = name.strip().lower()
+    key = _project_key(name)
     rows = con.execute("SELECT * FROM projects").fetchall()
-    for r in rows:
-        if r["name"].lower() == key:
-            return r
-    for r in rows:
-        n = r["name"].lower()
-        if key in n or n in key:
-            return r
-    return None
+    for k in dict.fromkeys((key, _PROJECT_SUFFIX.sub("", key) or key)):
+        for r in rows:
+            if _project_key(r["name"]) == k:
+                return r
+    key = _PROJECT_SUFFIX.sub("", key) or key
+    if len(key) < 2:
+        return None
+    hits = [r for r in rows if key in _project_key(r["name"]) and len(key) * 2 > len(_project_key(r["name"]))]
+    return hits[0] if len(hits) == 1 else None
 
 
 # ---- tasks ------------------------------------------------------------------
