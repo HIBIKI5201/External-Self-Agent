@@ -80,7 +80,8 @@ def test_reply_to_a_line_es_said_is_answered_as_that_reply():
             sb.chat("大丈夫だよ")
         sent = chat.call_args_list[-1].args[1]
         joined = "\n".join(m["content"] for m in sent)
-        assert "（Es が自分から言ったこと・時刻）夜ふかし？ 無理しないでね。" in joined, joined
+        assert "時刻のあいさつ「夜ふかし？ 無理しないでね。」" in joined, joined
+        assert "（Es が自分から言ったこと" not in joined, joined
         assert "直前に Es が自分から言った「夜ふかし？ 無理しないでね。」への返事" in joined, joined
 
         # An old line, or one with another message after it, is only context.
