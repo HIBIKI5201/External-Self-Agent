@@ -133,3 +133,31 @@ def test_kanji_from_voice_recognition_gets_a_checked_reading():
         with patch.object(brain.llm, "chat", side_effect=brain.llm.LLMError("offline")):
             assert "読みも" in sb.chat("雪達磨")["reply"] and game.state() == before
         assert not db.list_tasks()
+
+
+def test_stop_and_moving_on_end_the_game():
+    """#156 (10/13): 「やめて」 was taken as a cancel of the last reply, and 「今からWarframeするよ」 got
+    「しりとり中だよ」 until 「しりとりをやめて」."""
+    import conversation_jobs as jobs
+    from test_conversation_jobs import body, join_workers, wait_done, A, B
+    with Sandbox(copy_real=False, mode="talk") as sb:
+        operation = lambda request: sb.chat(request["text"])
+        jobs.accept(body(A, "しりとりしよう"), sb.cfg, operation)
+        assert wait_done(A)["state"] == "done" and game.state()
+        # The screen sends a bare 「やめて」 as a cancel of the last (already answered) request.
+        stopped = jobs.accept(body(B, "やめて", relation="auto", targetId=A, targetRevision=1), sb.cfg, operation)
+        join_workers()
+        assert stopped["result"]["reply"] == "しりとりは終了だよ。" and not game.state(), stopped
+        for text in ("もうやめよう", "しりとり飽きた", "終わりにしよう"):
+            sb.chat("しりとりしよう")
+            assert sb.chat(text)["reply"] == "しりとりは終了だよ。" and not game.state(), text
+        sb.chat("しりとりしよう")
+        with patch.object(brain.llm, "chat", return_value=json.dumps({"intent": "chat", "focus": "", "actions": []})):
+            result = sb.chat("今からWarframeするよ")
+        assert result.get("intent") != "game" and not game.state(), result
+        # Not leaving: a word that fits, 「ちょっと待って」 while thinking, and requests stay in the game.
+        sb.chat("しりとりしよう")
+        # With a model, 「ちょっと待って」 may get a guessed reading (#169); either way the game goes on.
+        assert sb.chat("ちょっと待って")["intent"] == "game" and game.state()
+        assert sb.chat("全部のタスクを完了にして")["intent"] == "game" and game.state()
+        assert not db.list_tasks()
