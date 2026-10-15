@@ -5,6 +5,7 @@ import urllib.error
 from unittest.mock import patch
 
 import brain
+import skills
 import conversation_jobs as jobs
 import db
 import llm
@@ -40,6 +41,20 @@ def test_small_talk_with_ollama_down_says_ollama_is_not_running_and_logs_a_warni
         assert "Ollama に接続できません" in reply and "Ollama が起動したら" in reply, reply
         assert "履歴とタスクを確認" not in reply, reply
         assert warning.called and "ollama" in warning.call_args_list[0].args[0]
+        assert db.list_tasks(include_done=True) == tasks
+
+
+def test_skill_with_ollama_down_says_why_too():
+    with Sandbox(copy_real=False) as sb, patch.object(llm.urllib.request, "urlopen", _refused), \
+            patch.object(llm, "loaded", return_value=None):
+        tasks = db.list_tasks(include_done=True)
+        request_id = "e" * 32
+        jobs.accept({"requestId": request_id, "text": "/plan 部屋を片付ける"}, sb.cfg,
+                    lambda request: skills.run(request["text"], sb.cfg))
+        job = _wait(request_id)
+        reply = job["result"]["reply"]
+        assert job["state"] == "failed" and "Ollama に接続できません" in reply, reply
+        assert "履歴とタスクを確認" not in reply, reply
         assert db.list_tasks(include_done=True) == tasks
 
 

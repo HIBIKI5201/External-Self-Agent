@@ -189,7 +189,7 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
         raise LLMError(f"Ollama がエラーを返しました ({e.code}): {detail}")
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
         _log(cfg, body, None, started, error=str(e))
-        log.warning("ollama: cannot connect for a tools request (%s)", e)
+        log.warning("ollama: tools request failed (%s: %s)", type(e).__name__, e)
         raise LLMError("Ollama に接続できません。Ollama が起動しているか確認してください。")
     _log(cfg, body, data, started)
     jobs.check()
