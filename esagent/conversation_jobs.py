@@ -26,7 +26,7 @@ SCRATCH_TABLES = {
     "chat_requests",      # replay protection for the window's requests
     "calendar_events",    # a copy of Google Calendar, refilled by every sync
 }
-DURABLE_SETTINGS = {"pomo", "chat_mode", "voice", "pet_enabled", "conversation_game", "deleted_memory_sources",
+DURABLE_SETTINGS = {"pomo", "chat_mode", "voice", "pet_enabled", "pet_chat", "conversation_game", "deleted_memory_sources",
                     "calendar_selected", "gcal_calendar_id", "companion_sessions", "companion_minutes",
                     "companion_day", "companion_today"}
 DURABLE_SETTING_PREFIXES = ("snooze:", "task_context_corrections:")
