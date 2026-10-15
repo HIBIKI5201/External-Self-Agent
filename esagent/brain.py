@@ -2624,10 +2624,11 @@ def _chat(text, cfg, message_id=None):
                     # The tasks already changed: answering later would run the message again
                     # and repeat the change (#95). Say what was done instead.
                     reply = PARTIAL_NOTE
-    except llm.LLMError:
-        # Keep the message; the server answers it once the model is ready.
+    except llm.LLMError as e:
+        # Keep the message; the server answers it once the model is ready. The reason goes with it so
+        # a queued request can tell the user that Ollama is not running (#190).
         db.set_message_status(message_id, "pending")
-        return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": PENDING_NOTE}
+        return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": PENDING_NOTE, "error": str(e)}
 
     if late:
         reply = f"（さっきの「{text[:24]}」への返事）\n" + (reply or "")

@@ -468,7 +468,8 @@ def _run(text, cfg, message_id=None, timing=None):
             done = saved + (r.events if r else [])
             if not brain.changed(done, r.handoffs if r else ()) and not (r and r.ui):
                 db.set_message_status(message_id, "pending")  # nothing changed yet: safe to run later
-                return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": brain.PENDING_NOTE}
+                return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": brain.PENDING_NOTE,
+                        "error": str(e)}  # said as it is by a queued request (#190)
             # Part of the steps already changed tasks; running the skill again would repeat them (#95).
             db.add_message("assistant", brain.PARTIAL_NOTE)
             db.add_message("notice", "\n".join(done))

@@ -3,6 +3,7 @@ import json
 import conversation_jobs as jobs
 import contextvars
 from contextlib import contextmanager
+import logging
 import os
 import re
 import threading
@@ -13,6 +14,10 @@ import urllib.request
 
 class LLMError(Exception):
     pass
+
+
+# Failures also go to the server log (esagent.log) as WARNING, so the daily diagnosis sees them (#190).
+log = logging.getLogger("esagent.llm")
 
 
 _VALIDATION = contextvars.ContextVar("validation", default=None)
@@ -111,6 +116,7 @@ def _post(cfg, body, timeout, on_text=None):
         data = _request(cfg, body, timeout, on_text)
     except LLMError as e:
         _log(cfg, body, None, started, error=str(e))
+        log.warning("ollama: %s (%s, %d ms)", e, cfg.get("model"), (time.time() - started) * 1000)
         raise
     _log(cfg, body, data, started)
     jobs.check()
@@ -179,9 +185,11 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
         _log(cfg, body, None, started, error=f"HTTP {e.code}: {detail}")
+        log.warning("ollama: HTTP %s from tools request: %s", e.code, detail)
         raise LLMError(f"Ollama がエラーを返しました ({e.code}): {detail}")
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
         _log(cfg, body, None, started, error=str(e))
+        log.warning("ollama: tools request failed (%s: %s)", type(e).__name__, e)
         raise LLMError("Ollama に接続できません。Ollama が起動しているか確認してください。")
     _log(cfg, body, data, started)
     jobs.check()
@@ -232,6 +240,7 @@ def warm(cfg, wait=False):
             _WARM.update(state="ready", ms=round((time.time() - started) * 1000))
         except Exception as e:
             _WARM.update(state="error", error=str(e)[:200])
+            log.warning("ollama: warm-up of %s failed: %s", cfg["model"], e)
     if wait:
         run()
     else:
