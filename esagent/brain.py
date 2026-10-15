@@ -2521,7 +2521,7 @@ def _chat(text, cfg, message_id=None):
         if forget:
             db.add_message("assistant", forget)
             return {"reply": forget, "events": [], "handoffs": [], "intent": "forget"}
-        bulk = repeat_chat.bulk_repeat(text)
+        bulk = repeat_chat.bulk_repeat(text, history)
         if bulk:  # one period for a project's tasks that have none, approved first (#123)
             reply, offer = bulk
             db.add_message("assistant", reply)
