@@ -30,24 +30,15 @@ def _save(p):
     db.set_setting("pomo", json.dumps(p))
 
 
-def _drop_done_task(p):
-    """A finished (or deleted) task is no longer the timer's task (#189): the timer keeps running,
-    but the cat and the focus_end question stop naming it. Called with _lock held."""
-    t = db.get_task(int(p["task_id"])) if p.get("task_id") else None
-    if p.get("task_id") and (not t or t["status"] == "done"):
-        p["task_id"] = None
-        _save(p)
-    return p
-
-
 def _task_title(task_id):
+    """The name shown and asked about; "" once the task is finished or gone (#189). The timer keeps its
+    task_id, so the focus record still goes to that task's notes (AS-13)."""
     t = db.get_task(int(task_id)) if task_id else None
-    return t["title"] if t else ""
+    return t["title"] if t and t["status"] != "done" else ""
 
 
 def state(cfg):
-    with _lock:
-        p = _drop_done_task(_load())
+    p = _load()
     focus, _, _ = _minutes(cfg)
     if p["mode"] == "idle":
         remaining = focus * 60
@@ -146,7 +137,6 @@ def tick(cfg):
         p = _load()
         if p["mode"] == "idle" or p["paused"] or time.time() < p["ends_at"]:
             return
-        _drop_done_task(p)
         focus, short, long_ = _minutes(cfg)
         if p["mode"] == "focus":
             is_long = p["round"] % 4 == 0
@@ -159,7 +149,8 @@ def tick(cfg):
             finished = ("break", False)
     if finished[0] == "focus":
         stats = companion.focus_done(p["task_id"], focus)
-        ev = events.push("focus_end", task=_task_title(p["task_id"]), task_id=p["task_id"], long=finished[1],
+        title = _task_title(p["task_id"])  # a finished task is recorded above but not asked about (#189)
+        ev = events.push("focus_end", task=title, task_id=p["task_id"] if title else None, long=finished[1],
                          leveled_up=stats.get("leveled_up"), level=stats["level"], level_name=stats["level_name"])
         rest = "長めに休もう。" if finished[1] else "ひと休みしよ。"
         _say(cfg, ev, f"なかよし度が上がった！レベル{stats['level']}、{stats['level_name']}。" if stats.get("leveled_up")
