@@ -11,6 +11,9 @@
       "pathPattern": "(^|/)esagent/static/index\\.html$"
     },
     {
+      "pathPattern": "(^|/)tests/test_task_fold\\.js$"
+    },
+    {
       "pathPattern": "(^|/)esagent/static/companion\\.(js|css)$"
     },
     {

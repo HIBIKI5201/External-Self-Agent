@@ -229,11 +229,19 @@ class _Run:
             for t in tasks) or "(未完了タスクなし)"
 
     def t_recently_done(self, limit=10):
-        return "\n".join(f"#{t['id']} {t['title']} (完了 {t['updated_at'][:10]})"
-                         for t in db.recently_done(int(limit))) or "(なし)"
+        # Code counts today's completions from done_at; the model only reads the line (#253).
+        today = dt.date.today().isoformat()
+        done = db.done_on(today)
+        head = f"今日（{today}）完了したタスク: {len(done)} 件" + "".join(f"\n- #{t['id']} {t['title']}" for t in done)
+        ids = {t["id"] for t in done}
+        recent = [t for t in db.recently_done(int(limit)) if t["id"] not in ids]
+        return head + ("\n最近の完了:\n" + "\n".join(
+            f"#{t['id']} {t['title']} (完了 {(t['done_at'] or t['updated_at'])[:10]})" for t in recent) if recent else "")
 
     def t_get_task(self, task_id):
         t = db.get_task(int(task_id))
+        if t and t["read_only"]:
+            t["source_file"] = db.source_file(t["id"])  # where it is completed (#184)
         return json.dumps(t, ensure_ascii=False) if t else self._reject("そのタスクはありません。一覧から番号を選んでください")
 
     def t_add_task(self, title, project="", due="", notes=""):
@@ -265,7 +273,9 @@ class _Run:
         if not t:
             return self._reject("そのタスクはありません。一覧から番号を選んでください")
         if t["read_only"] and t["status"] != "done":
-            return self._reject("このタスクは読み取り専用です。完了にせず、元のファイルで done にするよう利用者に伝えてください")
+            path = db.source_file(t["id"])
+            return self._reject("このタスクは読み取り専用です。完了にせず、元のファイル" + (f"（{path}）" if path else "")
+                                + "で done にするよう利用者に伝えてください")
         db.update_task(t["id"], status="done")
         self.events.append(f"✔ #{t['id']} {t['title']} を完了にしました")
         return "完了にしました"
@@ -495,7 +505,7 @@ _BUILTIN = {
    1つ目のタスクで offer_focus を呼び、最後に「1つ目から集中タイマー始めよっか？」と聞く。"""),
     "review": ("一日の振り返り。できたことを確かめて明日の一歩を決める", "[今日の感想]", None, """\
 （引数の感想は save-args: memory により自動で保存済み。自分では保存しない）
-1. recently_done を呼び、完了日が今日のものを数える。
+1. recently_done を呼ぶ。先頭の「今日完了したタスク」の件数と名前をそのまま使う（自分で数え直したり、日付で選び直したりしない）。
 2. list_tasks を呼び、残りのタスクと、明日・明後日の締切を確認する。
 3. 今日できたことを、タスク名を出して具体的にねぎらう。何も終わっていなければ、責めずに休むことも大事だと伝える。
 4. 明日の最初の一歩を、未完了タスクの中から1つだけ提案する（15〜30分でできること）。
