@@ -27,7 +27,8 @@ def execute(request_id, text, operation):
                 if row["result"] is None:
                     return 409, {"error": "処理中にサーバーが停止したため結果を確認できません。履歴やタスクを確認してください。自動で再実行はしません。"}
                 return row["code"], json.loads(row["result"])
-            con.execute("INSERT INTO chat_requests(id, fingerprint) VALUES(?, ?)", (request_id, fingerprint))
+            con.execute("INSERT INTO chat_requests(id, fingerprint, created_at) VALUES(?, ?, ?)",
+                        (request_id, fingerprint, db.now()))
         _active.add(key)
     try:
         code, result = operation()

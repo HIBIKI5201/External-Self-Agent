@@ -46,6 +46,7 @@ def test_legacy_revision_migration_preserves_dirty_and_clean_rows():
         with db.connect() as con:
             con.execute('ALTER TABLE tasks DROP COLUMN synced_rev')
             con.execute('ALTER TABLE tasks DROP COLUMN rev')
+            con.execute('PRAGMA user_version = 0')  # a database from before the version
             con.execute("UPDATE tasks SET gtask_id='clean-id', synced_at=updated_at WHERE id=?", (clean['id'],))
             con.execute("UPDATE tasks SET gtask_id='dirty-id', synced_at='2000-01-01' WHERE id=?", (dirty['id'],))
         db.init()

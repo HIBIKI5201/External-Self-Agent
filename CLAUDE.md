@@ -25,6 +25,9 @@ E.S. Agent（External Self Agent）は、この Windows PC に常駐するロー
 
 - テストは `python tests/run.py`（全部）／`python tests/run.py --offline`（モデル不要のみ、CI と同じ）。
   PR の前に必ず全部を実行する。不具合を直したら再現テストを足す。
+- クラウドの Claude Code（Linux、tkinter なし）でも `python tests/run.py --offline` と `node tests/*.js` は動く。
+  Windows 専用のテスト（`test_pet_visibility`、`support.require_windows()` を呼ぶもの）はスキップになり、
+  モデルを使うテストは Ollama がないので実行できない。そこは CI（windows-latest）と手元の Windows で確かめる。
 - 本番の `data/esagent.db` は Google ToDo・カレンダーと同期している。**会話・同期の検証は DB のコピーで行う**。
   `tests/support.py` の `Sandbox` が、DB のコピー・偽の Google API（`FakeTasks` / `FakeCalendar`）・
   実 Google API の遮断・Ollama への送信内容の記録（`sb.llm_calls`）をまとめて用意する。

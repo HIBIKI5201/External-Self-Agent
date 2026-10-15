@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import threading
+from urllib.parse import urlsplit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "media.ps1")
@@ -15,7 +16,26 @@ NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
 _lock = threading.Lock()
 
 
+YOUTUBE_HOSTS = ("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be")
+
+
+def youtube_url(url):
+    """The URL if it is a YouTube page, else ValueError. Whatever passes is handed to the OS or to Edge,
+    so a path, file: or another app's protocol must never get through (#234). Same hosts as the window's."""
+    url = url.strip() if isinstance(url, str) else ""
+    try:
+        u = urlsplit(url)
+        port = u.port
+    except ValueError:
+        u = port = None
+    if not u or u.scheme not in ("https", "http") or (u.hostname or "") not in YOUTUBE_HOSTS \
+            or u.username or u.password or port is not None or any(c.isspace() or ord(c) < 32 for c in url):
+        raise ValueError("YouTube の URL だけ開けます。")
+    return url
+
+
 def open_window(cfg, url):
+    url = youtube_url(url)
     edge = cfg.get("edge_path")
     if not (edge and os.path.exists(edge)):
         os.startfile(url)

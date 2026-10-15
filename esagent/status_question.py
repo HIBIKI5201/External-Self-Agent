@@ -5,10 +5,12 @@ run in progress (conversation_state) and the timings stored with each message.
 """
 import datetime as dt
 import re
+import time
 
 import conversation_state
 import db
 import llm
+import timer_chat
 from task_apply import _ACTION_HINT_RE
 from task_targets import _WORD_RE, _named_tasks, _word_hit
 
@@ -40,6 +42,8 @@ def _mentions_task(text):
 
 
 def is_status_question(text):
+    if timer_chat.is_timer_text(text):
+        return False  # 「タイマー止まってる？」 asks about the focus timer (#172)
     m = _STATUS_RE.search(text)
     if m and m[0] == "どうなって" and set(_WORD_RE.findall(text)) - _WAIT_WORDS:
         return False  # 「記憶の仕組みはどうなってるの？」 asks about something else (#113)
@@ -95,6 +99,10 @@ def status_lines(now=None):
         lines.append(head + "（" + "、".join(parts) + "）。" + ("待たせてごめんね。" if total >= 60 else ""))
     elif not lines:
         lines.append("時間を測った記録がまだないので、何に時間がかかったのかはわからないんだ。")
+    err = llm.LAST_ERROR
+    if err.get("kind") == "timeout" and time.time() - err.get("at", 0) < 600:
+        lines.append(f"さっきのモデルへの要求は、返事に {err['seconds']} 秒以上かかったので打ち切ったよ"
+                     "（接続はできていて、遅かっただけ）。")
     cfg = conversation_state.STATE.cfg
     st = llm.status(cfg) if cfg else {}
     if st and not st.get("ollama"):

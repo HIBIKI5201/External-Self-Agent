@@ -120,3 +120,36 @@ vm.runInContext(liveSource, voice);
   assert.equal(voiceSubmitted.at(-1).relation, 'independent');
   console.log('voice pieces join the waiting spoken message: passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// #179: a message sent while the screen refreshes after a reply must not start a second pump loop
+// (the two loops answered the same message and one read queue[0] after the other had emptied it).
+const pumpSource = source.slice(source.indexOf('let pumping = false;'), source.indexOf('// Load the model before'));
+const said = [], reacted = [], waited = [];
+let releaseRefresh = null;
+const pumpCtx = vm.createContext({
+  queue: [{text: '最初', id: 'a'}], busy: false, offline: false,
+  thinkStart: 0, thinkStage: '', thinkDetail: '', thinkPartial: '', thinkTimer: null, stagePoll: null,
+  performance: {now: () => 0}, setInterval: () => 0, clearInterval() {}, setTimeout() {},
+  document: {querySelectorAll: () => []}, $: () => ({value: ''}),
+  window: {Es: {thinking() {}, say: text => said.push(text), react: r => reacted.push(r.reply)}},
+  renderLive() {}, saveQueue() {}, api: async () => ({}),
+  submitItem: async item => { item.jobId = item.id; item.revision = 1; },
+  waitJob: async item => { waited.push(item.text); return {state: 'done', result: {reply: item.text + 'への返事'}}; },
+  refresh: () => new Promise(resolve => { releaseRefresh = resolve; }),
+});
+vm.runInContext(pumpSource, pumpCtx);
+(async () => {
+  const first = vm.runInContext('pump()', pumpCtx);
+  while (!releaseRefresh) await new Promise(resolve => setImmediate(resolve));
+  // sendText during the refresh: push and pump, exactly as the screen does.
+  vm.runInContext('queue.push({text: "次", id: "b"}); pump()', pumpCtx);
+  let release = releaseRefresh; releaseRefresh = null; release();
+  while (!releaseRefresh) await new Promise(resolve => setImmediate(resolve));
+  release = releaseRefresh; releaseRefresh = null; release();
+  await first;
+  assert.deepEqual(said, [], 'no 送れなかった after a delivered reply');
+  assert.deepEqual(waited, ['最初', '次'], 'each message is answered once');
+  assert.deepEqual(reacted, ['最初への返事', '次への返事']);
+  assert.equal(vm.runInContext('queue.length', pumpCtx), 0);
+  console.log('message sent during refresh joins the running pump: passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

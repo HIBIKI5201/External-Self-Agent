@@ -61,7 +61,27 @@ def work_area():
     return rc.l, rc.t, rc.r, rc.b
 
 
+def hover_text(pomo):
+    """The timer's state shown while the pointer is on the cat, or "" when idle (#189)."""
+    if not pomo or pomo.get("mode", "idle") == "idle":
+        return ""
+    mins = int(pomo.get("remaining", 0) // 60) + 1
+    what = "集中" if pomo["mode"] == "focus" else "休憩"
+    paused = "（一時停止中）" if pomo.get("paused") else ""
+    task = f"（{pomo['task']}）" if pomo.get("task") else ""
+    return f"{what}{paused} あと{mins}分{task}"
+
+
+def start_label(pomo):
+    """The menu item that starts a focus session, with its length (#248): while idle, the server's
+    remaining time is the configured focus_minutes."""
+    secs = (pomo or {}).get("remaining") or 25 * 60
+    return f"集中を始める（{max(1, round(secs / 60))}分）"
+
+
 class Pet:
+    _snooze_until = 0  # 「30分かくれる」: hidden until this time, whatever the chat window does (#251)
+
     def __init__(self):
         self.root = tk.Tk()
         self.root.withdraw()
@@ -79,8 +99,10 @@ class Pet:
         self.cache, self.anim, self.frame = {}, "", 0
         self.mood, self.override, self.override_until = "idle", None, 0
         self.pomo, self.last_event, self.online, self.warned_day = {}, None, True, ""
-        self.bubble = None
+        self.bubble, self.asking = None, False
+        self.bubble_key = None
         self.voice = {}
+        self.chat_on = True  # show chat replies in the bubble while the chat window is out of sight (#121)
         self.drag = None
         self._hidden = winfocus.chat_window_visible()
         self._place()
@@ -95,7 +117,12 @@ class Pet:
 
     # ---- placement ------------------------------------------------------------------
     def _visibility_tick(self):
-        hidden = winfocus.chat_window_visible()
+        self._apply_visibility()
+        self.root.after(500, self._visibility_tick)
+
+    def _apply_visibility(self):
+        """Hidden while the chat window is shown (#35) or while snoozed (#251); one place decides."""
+        hidden = winfocus.chat_window_visible() or time.time() < self._snooze_until
         if hidden != self._hidden:
             self._hidden = hidden
             if hidden:
@@ -103,7 +130,6 @@ class Pet:
                 self.root.withdraw()
             else:
                 self.root.deiconify()
-        self.root.after(500, self._visibility_tick)
 
     def _place(self):
         try:
@@ -171,19 +197,23 @@ class Pet:
         self.root.after(random.randint(9000, 18000), self._fidget)
 
     # ---- speech bubble ------------------------------------------------------------------
-    def say(self, text, buttons=None, secs=None, voice=True, key=None, kind="feedback", source="pet", ukey=None):
+    def say(self, text, buttons=None, secs=None, voice=True, key=None, kind="feedback", source="pet", ukey=None,
+            record=True, on_click=None):
         if self._hidden:
             return  # the chat window owns companion speech while the desktop cat is hidden
         # Everything the cat says goes to the one utterance log (#139); an event's line carries its key
-        # so the server, other windows and the cat record it only once.
-        body = {"text": text, "kind": kind, "source": source, **({"key": ukey} if ukey else {})}
-        threading.Thread(target=lambda: self._quiet(lambda: api("/api/es/said", body)), daemon=True).start()
+        # so the server, other windows and the cat record it only once. A chat reply is already saved,
+        # and the timer's remaining time on hover is a display, not something Es said (#189).
+        if record:
+            body = {"text": text, "kind": kind, "source": source, **({"key": ukey} if ukey else {})}
+            threading.Thread(target=lambda: self._quiet(lambda: api("/api/es/said", body)), daemon=True).start()
         if voice and self.voice.get("enabled"):
             self._speak(text, key)
         self._close_bubble()
         b = tk.Toplevel(self.root)
         b.overrideredirect(True)
         b.attributes("-topmost", True)
+        self.bubble_key = ukey  # the question it asks, so an answer in the chat can take it down (#171)
         frame = tk.Frame(b, bg="#fffdf8", highlightbackground="#d9d2c3", highlightthickness=1)
         frame.pack()
         tk.Label(frame, text=text, bg="#fffdf8", fg="#2a2433", font=("Yu Gothic UI", 10), wraplength=230,
@@ -201,8 +231,17 @@ class Pet:
         x = min(max(l, self.root.winfo_x() + self.w // 2 - bw // 2), r - bw)
         y = max(t, self.root.winfo_y() - bh - 2)
         b.geometry(f"+{x}+{y}")
-        b.bind("<Button-1>", lambda e: self._close_bubble())
-        self.bubble = b
+        # A click anywhere on the bubble closes it, except on its buttons (#170): the toplevel is in every
+        # child's bindtags, so it sees clicks on the text too, once; closing on a button's press destroyed
+        # the bubble before the button's command could run.
+        def click(e):
+            if isinstance(e.widget, tk.Button):
+                return
+            self._close_bubble()
+            if on_click:
+                on_click()
+        b.bind("<Button-1>", click)
+        self.bubble, self.asking = b, bool(buttons)
         if not buttons:
             self.root.after(int((secs or max(4, len(text) * 0.16)) * 1000), lambda bb=b: self._close_bubble(bb))
 
@@ -221,7 +260,8 @@ class Pet:
     def _close_bubble(self, only=None):
         if self.bubble and (only is None or only is self.bubble):
             self.bubble.destroy()
-            self.bubble = None
+            self.bubble, self.asking = None, False
+            self.bubble_key = None
 
     # ---- server polling ----------------------------------------------------------------
     def _poll(self):
@@ -235,6 +275,7 @@ class Pet:
             self.online = True
             self.pomo = st["pomo"]
             self.voice = st.get("voice") or {}
+            self.chat_on = st.get("chat", True)
             self.mood = st["mood"]
             if self.last_event is None:
                 self.last_event = st["last_event"]  # don't replay what happened before we started
@@ -265,7 +306,7 @@ class Pet:
             elif ev.get("task_id"):
                 tid = ev["task_id"]
                 self.say(f"おつかれさま！{'長めに休もう。' if ev.get('long') else 'ひと休みしよ。'}\n「{ev['task']}」、終わった？",
-                         buttons=[("終わった", lambda: self._done(tid)), ("まだ", lambda: self.say("了解。次の25分で進めよ。"))],
+                         buttons=[("終わった", lambda: self._done(tid)), ("まだ", lambda: self.say("了解。次の集中で進めよ。"))],
                          kind="question", source="timer", ukey=ev.get("key"),
                          voice=False)
             else:
@@ -273,6 +314,17 @@ class Pet:
         elif kind == "break_end":
             self.say("休憩おわり。次、いく？", buttons=[("集中する", self._start), ("あとで", None)], voice=False,
                      kind="question", source="timer", ukey=ev.get("key"))
+        elif kind == "question_answered":  # answered in the chat or by voice: no second answer here (#171)
+            if ev.get("question") and ev["question"] == getattr(self, "bubble_key", None):
+                self._close_bubble()
+        elif kind == "chat_reply":
+            # The chat window is closed or minimised (otherwise the cat is hidden): show what was sent and how
+            # Es answered, so a misheard voice message is noticed (#121). Reading aloud stays with the server.
+            if not self.chat_on or getattr(self, "asking", False):
+                return  # never cover a question that is waiting for a button
+            mark = "🎙 " if ev.get("via") == "voice" else ""
+            self.say(f"{mark}送信: {ev.get('said', '')}\nEs: {ev.get('reply', '')}", voice=False, record=False,
+                     secs=max(6, len(ev.get("reply", "")) * 0.2), on_click=self._open_chat)
         elif kind == "chat_events":
             lines, key = ev.get("lines") or [], f"event:{ev['id']}"
             # The server chose and recorded the line (ev["text"]); the cat shows that same line.
@@ -331,6 +383,10 @@ class Pet:
             self.root.after(0, lambda: self.say(msg, secs=3))
         threading.Thread(target=run, daemon=True).start()
 
+    def _toggle_chat(self):
+        self.chat_on = not self.chat_on
+        self._safe(lambda: api("/api/pet/chat", {"enabled": self.chat_on}))
+
     def _disable(self):
         """Same as turning the switch off in the chat window."""
         try:
@@ -340,15 +396,15 @@ class Pet:
         self.root.destroy()
 
     def _hide(self, minutes=30):
-        self._close_bubble()
-        self.root.withdraw()
-        self.root.after(minutes * 60 * 1000, self.root.deiconify)
+        # The visibility tick brings the cat back once the time is up and the chat window is not shown.
+        self._snooze_until = time.time() + minutes * 60
+        self._apply_visibility()
 
     def _menu(self, event):
         m = tk.Menu(self.root, tearoff=0, font=("Yu Gothic UI", 10))
         mode = self.pomo.get("mode", "idle")
         if mode == "idle":
-            m.add_command(label="集中を始める（25分）", command=self._start)
+            m.add_command(label=start_label(self.pomo), command=self._start)
         else:
             m.add_command(label="再開" if self.pomo.get("paused") else "一時停止",
                           command=lambda: self._safe(lambda: api("/api/pomo", {"action": "toggle"})))
@@ -358,6 +414,7 @@ class Pet:
         m.add_command(label="BGM 再生 / 一時停止（YouTube ウィンドウ）", command=self._bgm_toggle)
         if self.voice.get("enabled"):
             m.add_command(label="読み上げを止める", command=lambda: self._safe(lambda: api("/api/voice/stop", {})))
+        m.add_command(label=("✓ " if self.chat_on else "") + "会話を吹き出しに出す", command=self._toggle_chat)
         m.add_separator()
         m.add_command(label="30分かくれる", command=self._hide)
         m.add_command(label="デスクトップから消す（チャット画面の切り替えで戻せます）", command=self._disable)
@@ -401,12 +458,10 @@ class Pet:
         self._open_chat()
 
     def _hover(self, e):
-        if self.bubble or not self.pomo or self.pomo.get("mode") == "idle":
+        text = hover_text(self.pomo)
+        if self.bubble or not text:
             return
-        mins = int(self.pomo.get("remaining", 0) // 60) + 1
-        what = "集中" if self.pomo["mode"] == "focus" else "休憩"
-        task = f"（{self.pomo['task']}）" if self.pomo.get("task") else ""
-        self.say(f"{what} あと{mins}分{task}", secs=2.5, voice=False)
+        self.say(text, secs=2.5, voice=False, record=False)
 
     @staticmethod
     def _greeting():

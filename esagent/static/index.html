@@ -160,7 +160,11 @@ aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; co
 .handoff .m { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
 .handoff .row { display: flex; gap: 6px; }
 .group { margin-bottom: 10px; }
-.group .name { font-size: 12.5px; font-weight: 600; margin: 8px 0 4px; }
+.group .name { font-size: 12.5px; font-weight: 600; margin: 8px 0 4px; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.group .name .fold { background: none; border: 0; padding: 0 2px; font: inherit; color: var(--muted); cursor: pointer; flex: none; }
+.group .name .gname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.group .name .count { color: var(--muted); font-weight: 400; flex: none; }
+.group .name .soon { color: var(--warn); flex: none; }
 .task { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: start; padding: 5px 0; border-bottom: 1px dashed var(--line); }
 .task input[type=checkbox] { margin-top: 4px; accent-color: var(--accent); }
 .task .title { word-break: break-word; }
@@ -200,6 +204,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margi
   <span class="spacer"></span>
   <button id="gconnect" class="ghost" hidden>Google ToDo に接続</button>
   <button id="gsync" class="ghost" hidden>今すぐ同期</button>
+  <button id="gkeep" class="ghost" hidden>Google に送り直す</button>
+  <button id="gdrop" class="ghost" hidden></button>
   <button id="bgmBtn" class="ghost" title="YouTube の BGM と動画・プレイリスト" aria-expanded="false">♪ BGM</button>
   <button id="adminBtn" class="ghost" title="データベースの中身と設定">管理</button>
 </header>
@@ -280,6 +286,21 @@ function setStatus(ok, text) {
 
 function today() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
 
+// Categories of the task list can be folded (#173). Only a screen preference, so it stays in this browser.
+const folded = (() => { try { return new Set(JSON.parse(localStorage.getItem("es.folded") || "[]")); } catch { return new Set(); } })();
+const saveFolded = () => { try { localStorage.setItem("es.folded", JSON.stringify([...folded])); } catch {} };
+function groupHtml(name, ts, row, t0) {
+  const shut = folded.has(name);
+  // A folded category still shows that a task in it is due today or overdue, so it is not missed.
+  const soon = shut && ts.some((t) => t.status !== "done" && t.due && t.due <= t0);
+  return `<div class="group${shut ? " folded" : ""}"><div class="name">` +
+    `<button type="button" class="fold" data-fold="${esc(name)}" aria-expanded="${shut ? "false" : "true"}" ` +
+    `title="${shut ? "開く" : "畳む"}">${shut ? "▸" : "▾"}</button><span class="gname">${esc(name)}</span>` +
+    (shut ? `<span class="count">（${ts.length}）</span>` : "") +
+    (soon ? `<span class="soon" title="今日まで・締切を過ぎたタスクがあります">⚠</span>` : "") +
+    `</div>${shut ? "" : ts.map(row).join("")}</div>`;
+}
+
 function render() {
   const l = S.llm;
   if (!l.ollama) setStatus(false, "Ollama 未起動（タスク管理だけ使えます）");
@@ -293,7 +314,7 @@ function render() {
   window.Es?.update(S);
 
   const log = $("#log");
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const atBottom = nearBottom(log);
   log.innerHTML = S.messages.length
     ? S.messages.map((m) => `<div class="msg ${esc(m.role)}${m.status === "pending" ? " pending" : ""}">${esc(m.content)}` +
         (m.status === "pending" ? `<small>⏳ 返事待ち — モデルの準備ができたら自動で返事します</small>` : "") +
@@ -301,8 +322,7 @@ function render() {
         (m.role === "assistant" ? renderRate(m) : "") + `</div>`).join("")
     : `<div class="empty">Es です。予定やタスク、困っていることを話しかけてください。<br>「/」でコマンド、コードの作業は Claude Code に引き継げます。</div>`;
   log.insertAdjacentHTML("beforeend", `<div id="live"></div>`);
-  renderLive();
-  if (atBottom || queue.length) log.scrollTop = log.scrollHeight;
+  renderLive(atBottom);
   document.querySelectorAll("#modesw [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === (S.mode || "work")));
   $("#input").placeholder = S.mode === "talk"
     ? "雑談モード：なんでも話してね（タスクの追加・完了もできます）"
@@ -336,7 +356,7 @@ function render() {
       </div>` : ""}
     </div>`;
   $("#tasks").innerHTML = Object.keys(groups).length
-    ? Object.entries(groups).map(([name, ts]) => `<div class="group"><div class="name">${esc(name)}</div>${ts.map(row).join("")}</div>`).join("")
+    ? Object.entries(groups).map(([name, ts]) => groupHtml(name, ts, row, t0)).join("")
     : `<div class="meta">まだタスクはありません</div>`;
   $("#done").innerHTML = S.done.map(row).join("");
 
@@ -371,6 +391,7 @@ function renderGoogle(g) {
   else if (g.state === "online") cls = "ok", text = `Google ToDo: 同期済み ${hhmm(g.last_sync)}${pending}`;
   else if (g.state === "offline") cls = "wait", text = `Google ToDo: オフライン（復帰したら同期）${pending}`;
   else if (g.state === "auth_error" || g.state === "error") cls = "bad", text = `Google ToDo: ${g.last_error}`;
+  else if (g.hold) cls = "bad", text = `Google ToDo: 同期を止めています。${g.hold.message}`;
   else cls = "wait", text = "Google ToDo: 同期準備中";
   $("#gstatus").className = cls;
   if (g.connected) {
@@ -382,8 +403,20 @@ function renderGoogle(g) {
   $("#gstatus").title = g.client ? "" : "secrets\\google_client.json を置くと接続できます";
   $("#gconnect").hidden = !g.client || (g.connected && g.calendar);
   $("#gconnect").textContent = g.connected ? "カレンダー連携のため再接続" : "Google ToDo に接続";
-  $("#gsync").hidden = !g.connected;
+  $("#gsync").hidden = !g.connected || !!g.hold;
+  // An account change or a mass deletion waits for the user's choice (#194).
+  $("#gkeep").hidden = $("#gdrop").hidden = !(g.connected && g.hold);
+  $("#gdrop").textContent = g.hold?.kind === "account" ? "接続をやめる" : `${g.hold?.tasks.length || 0} 件をここからも消す`;
+  $("#gdrop").dataset.action = g.hold?.kind === "account" ? "disconnect" : "delete";
 }
+
+async function resolveGoogle(action) {
+  if (action === "delete" && !confirm("Google で見えなくなったタスクを、ここからも消します。よろしいですか？")) return;
+  try { await api("/api/google/resolve", {action}); } catch (err) { alert(err.message); }
+  refresh();
+}
+$("#gkeep").addEventListener("click", () => resolveGoogle("resend"));
+$("#gdrop").addEventListener("click", () => resolveGoogle($("#gdrop").dataset.action));
 
 $("#gconnect").addEventListener("click", async () => {
   try { await api("/api/google/connect", {}); } catch (err) { alert(err.message); }
@@ -436,7 +469,7 @@ $("#log").addEventListener("click", e => {
   document.querySelectorAll("button[data-offer]").forEach(x => { x.disabled = true; });
   queue.push({text: b.textContent, at: localIso(), id: requestId(),
     choice: {offer_id: b.dataset.offer, value: b.dataset.choiceValue}});
-  saveQueue(); renderLive(); pump();
+  saveQueue(); renderLive(true); pump();
 });
 
 // Messages not yet delivered; queue[0] is in flight while busy. Saved so a reload keeps them.
@@ -459,7 +492,10 @@ saveQueue(); // persist migrated IDs before the first request, including after a
 let offline = false;
 let thinkStart = 0, thinkStage = "", thinkDetail = "", thinkPartial = "", thinkTimer = null, stagePoll = null;
 
-function renderLive() {
+// Keeps the chat at the bottom only if it was there (#247): someone reading older messages is not
+// pulled down by the 8-second refresh or the thinking timer. Sending passes follow = true.
+const nearBottom = (log) => log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+function renderLive(follow = nearBottom($("#log"))) {
   const live = $("#live");
   if (!live) return;
   let html = "";
@@ -480,11 +516,18 @@ function renderLive() {
   });
   live.innerHTML = html;
   const log = $("#log");
-  log.scrollTop = log.scrollHeight;
+  if (follow) log.scrollTop = log.scrollHeight;
 }
 
+// One pump loop at a time (#179): busy is cleared while the screen refreshes between messages,
+// and a message sent during that refresh must not start a second loop over the same queue.
+let pumping = false;
 async function pump() {
-  if (busy) return;
+  if (busy || pumping) return;
+  pumping = true;
+  try { await pumpQueue(); } finally { pumping = false; }
+}
+async function pumpQueue() {
   while (queue.length) {
     busy = true;
     document.querySelectorAll("button[data-offer]").forEach(b => { b.disabled = true; });
@@ -499,8 +542,8 @@ async function pump() {
     }, 500);
     renderLive();
     let delivered = true;
+    const item = queue[0];
     try {
-      const item = queue[0];
       await submitItem(item);
       const job = await waitJob(item);
       const r = job.result || {};
@@ -509,12 +552,12 @@ async function pump() {
       }
       offline = false;
       if (r.pending) window.Es?.say(r.note, { ms: 6000, record: false });
-      else if (!queue[0].invalidated && job.state !== "superseded") window.Es?.react(r);  // a "うん" to a focus offer is started by the server
+      else if (!item.invalidated && job.state !== "superseded") window.Es?.react(r);  // a "うん" to a focus offer is started by the server
     } catch (err) {
       if (err.offline) { offline = true; delivered = false; }   // keep it and try again
       else {
         window.Es?.say("送れなかった… " + err.message, { ms: 6000 });
-        if (!$("#input").value && queue[0]?.text) $("#input").value = queue[0].text;
+        if (!$("#input").value && item?.text) $("#input").value = item.text;
       }
     }
     clearInterval(thinkTimer); clearInterval(stagePoll);
@@ -525,7 +568,8 @@ async function pump() {
       setTimeout(pump, 3000);
       return;
     }
-    queue.shift();
+    const at = queue.indexOf(item);  // the answered message, even if the queue changed meanwhile
+    if (at >= 0) queue.splice(at, 1);
     saveQueue();
     busy = false;
     await refresh();
@@ -570,7 +614,7 @@ async function submitItem(item) {
   if (!item.delivery) {
     item.deliveryError = null;
     item.delivery = api("/api/chat/submit", {
-      text: item.text, queuedAt: item.at, requestId: item.id, choice: item.choice,
+      text: item.text, queuedAt: item.at, requestId: item.id, choice: item.choice, via: item.via,
       relation: item.relation || "independent", targetId: item.targetId, targetRevision: item.targetRevision
     }).then(job => {
       item.jobId = job.jobId; item.revision = job.revision; saveQueue(); return job;
@@ -597,14 +641,14 @@ async function joinSpoken(text) {
   try { await submitItem(prev); } catch { return false; }
   if (!prev.jobId) return false;
   const r = await api("/api/chat/submit", {text, queuedAt: localIso(), requestId: requestId(), relation: "continue",
-    targetId: prev.jobId, targetRevision: prev.revision});
+    targetId: prev.jobId, targetRevision: prev.revision, via: "voice"});
   if (r.jobId === prev.jobId) {
     prev.text += " " + text; prev.parts = (prev.parts || 1) + 1; prev.revision = r.revision; prev.lastPart = Date.now();
   } else {  // the previous one was already answered: this is a message of its own
     queue.push({text, at: localIso(), id: r.jobId, jobId: r.jobId, revision: r.revision, relation: "independent",
       via: "voice", lastPart: Date.now(), delivery: Promise.resolve(r)});
   }
-  saveQueue(); renderLive(); pump();
+  saveQueue(); renderLive(true); pump();
   return true;
 }
 
@@ -628,7 +672,7 @@ async function sendText(text, forcedRelation = null, opts = {}) {
     targetId: relation !== "independent" ? target?.id : undefined,
     targetRevision: relation !== "independent" ? target?.revision : undefined};
   if (relation !== "independent" && queue[0]) queue[0].invalidated = true;
-  queue.push(item); saveQueue(); renderLive();
+  queue.push(item); saveQueue(); renderLive(true);
   // Submission errors are held on the item until pump displays them.
   submitItem(item).catch(() => {});
   pump();
@@ -681,7 +725,9 @@ $("#input").addEventListener("keydown", (e) => {
 $("#add").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  await api("/api/tasks", { title: f.get("title"), project: f.get("project"), due: f.get("due") });
+  // A failure says why and keeps what was typed (#249).
+  try { await api("/api/tasks", { title: f.get("title"), project: f.get("project"), due: f.get("due") }); }
+  catch (err) { window.Es?.say("追加できなかった… " + err.message, { ms: 6000 }); return; }
   e.target.title.value = ""; e.target.due.value = "";
   refresh();
 });
@@ -695,6 +741,9 @@ document.addEventListener("click", async (e) => {
   }
   try {
     if (d.expand) { const id = +d.expand; openTasks.has(id) ? openTasks.delete(id) : openTasks.add(id); return render(); }
+    if (d.fold !== undefined && e.target.closest("#tasks")) {
+      folded.has(d.fold) ? folded.delete(d.fold) : folded.add(d.fold); saveFolded(); return render();
+    }
     if (d.focus) return window.Es?.focusOn(d.focus);
     if (d.savenotes) {
       const ta = document.querySelector(`[data-notes="${d.savenotes}"]`);
@@ -712,7 +761,9 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("change", async (e) => {
   const id = e.target.dataset.toggle;
   if (!id || e.target.disabled) return;
-  await api(`/api/tasks/${id}`, { status: e.target.checked ? "done" : "todo" });
+  // A refused change (a read-only task, #182) puts the box back and says why (#249).
+  try { await api(`/api/tasks/${id}`, { status: e.target.checked ? "done" : "todo" }); }
+  catch (err) { e.target.checked = !e.target.checked; window.Es?.say(err.message, { ms: 6000 }); }
   refresh();
 });
 

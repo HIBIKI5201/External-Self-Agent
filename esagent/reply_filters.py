@@ -6,6 +6,7 @@ it is written); what Es can actually do is said by code, never by the model.
 """
 import re
 
+import timer_chat
 from task_targets import _WORD_RE, _bigrams, _similarity
 
 _CLAIM_RE = re.compile(
@@ -21,8 +22,12 @@ _RECORD_RE = re.compile(r"(?:記録\s*[:：]|(?:^|\n)\s*[＋+✎✔→↺・]\s*
 # Es cannot hear (#109). Such sentences are dropped when the reply has something else to say.
 _GENERIC_CLOSER_RE = re.compile(r"(?:何でも|なんでも|いつでも|気軽に|遠慮なく|好きなだけ)[^。！!？?\n]{0,15}"
                                 r"(?:話|聞|言|相談|教え|声をかけ)|聞かせて(?:ね|ください|ほしい|欲しい)?(?:な)?[。！!〜ー♪\s]*$")
-
-
+# 「E.S. Agent は音声を直接聞くことはできないから、文字に変換して話してね」 is never true: the user's speech
+# arrives through 会話モード (#207). Unlike music, there is no question in which it is the right answer.
+_VOICE_LIMIT_RE = re.compile(r"(?:音声|声|言葉|話)(?:は|が|を)?[^。！!？?\n]{0,8}"
+                             r"(?:聞く(?:こと)?(?:は|が)?(?:でき|出来)(?:ない|ません)|直接聞(?:け|か)(?:ない|ません|ず)|"
+                             r"扱え(?:ない|ません)|受け取れ(?:ない|ません))|"
+                             r"文字に(?:変換|直)して(?:話|送|入力|書)")
 _SELF_LIMIT_RE = re.compile(r"(?:音|声|曲|音楽|BGM)(?:は|が|を)?[^。！!？?\n]{0,8}(?:聞こえ|聴こえ|聞け|聴け|出せ)(?:ない|ません)|"
                             r"画面(?:は|が|を)?[^。！!？?\n]{0,6}見(?:え|れ)(?:ない|ません)|私は(?:AI|プログラム)だから")
 
@@ -48,7 +53,7 @@ def tidy_chat_reply(reply, text, history):
         # 「何でも話してね」 is generic even next to the user's words; 「〇〇を聞かせて」 is not.
         if closer and (not closer[0].startswith("聞かせ") or not any(w in s for w in words)):
             return True
-        if _SELF_LIMIT_RE.search(s) and not _ABILITY_ASK_RE.search(text):
+        if _SELF_LIMIT_RE.search(s) and not _ABILITY_ASK_RE.search(text) or _VOICE_LIMIT_RE.search(s):
             return True
         n = _norm(s)
         return len(n) >= 6 and any(n == e or (len(_bigrams(n)) > 3 and _similarity(n, e) >= 0.8) for e in earlier)
@@ -154,8 +159,33 @@ NO_CHANGE_NOTE = "まだ何も登録・変更していないよ。登録する�
 def strip_model_records(reply):
     """Only code writes operation records, including parenthesized inline records."""
     reply = re.sub(r"[（(]記録\s*[:：][^）)\n]*[）)]", "", reply)
-    return "\n".join(line for line in reply.splitlines()
-                     if not re.match(r"\s*(?:記録\s*[:：]|[＋+✎✔→↺]\s*|・\s*#\d+)", line)).strip()
+    reply = "\n".join(line for line in reply.splitlines()
+                      if not re.match(r"\s*(?:記録\s*[:：]|[＋+✎✔→↺]\s*|・\s*#\d+)", line))
+    return _LEAD_CLOSE_RE.sub("", reply).strip()  # a 「）」 left of a record or label opens no sentence (#175)
+
+
+# The context once showed Es's own lines as 「（Es が自分から言ったこと・…）…」 assistant turns, and the
+# model copied the label, the meow after it and a bare 「）」 into its replies (#175).
+_ES_LABEL_RE = re.compile(r"[（(]\s*Es\s*が(?:少し前に)?自分から言った[^）)\n]*[）)]|参考（返事の手本ではない[^\n]*")
+_ES_LABEL_TAIL_RE = re.compile(r"[（(]\s*E(?:s[^）)\n]*)?$|参考（[^\n]*$")
+_LEAD_CLOSE_RE = re.compile(r"^[ \t　]*[）)」』][）)」』／/、。 \t　]*", re.M)
+_LEAD_MEOW_RE = re.compile(r"^(?:(?:にゃ[ーあぁ〜~]*|なになに)[？?！!…。、\s]*)+")
+ECHO_RETRY_NOTE = ("返事の案が Es の過去の発言や参考の注記の写しになっていた。注記の形式・鳴き声・過去の発言を繰り返さず、"
+                   "利用者の今の発言そのものに、自分の言葉で短く答える。")
+ECHO_FALLBACK = "うん、聞いてるよ。"
+
+
+def strip_context_echo(reply, said=()):
+    """Remove a copied context label and a leading orphan bracket (#175).
+
+    Returns (reply, echoed). echoed: nothing of the reply's own is left, it only repeats a line Es
+    said by herself (`said`), or it was a label with only a meow behind it."""
+    labelled = bool(_ES_LABEL_RE.search(reply))
+    reply = _LEAD_CLOSE_RE.sub("", _ES_LABEL_RE.sub("", reply)).strip()
+    if labelled:
+        reply = _LEAD_MEOW_RE.sub("", reply).strip()
+    n = _norm(reply)
+    return reply, not n or any(n == _norm(line) for line in said)
 
 
 def clean_model_reply(reply, events=()):
@@ -163,11 +193,15 @@ def clean_model_reply(reply, events=()):
     original = reply
     reply = strip_model_records(reply)
     sentences = re.split(r"(?<=[。！!？?\n])", reply)
-    kept = "".join(s for s in sentences if not _CLAIM_RE.search(s)).strip()
+    timer = [s for s in sentences if timer_chat.false_timer_sentence(s)]
+    kept = "".join(s for s in sentences if not _CLAIM_RE.search(s) and s not in timer).strip()
     removed = kept != original.strip()
+    kept = timer_chat.drop_foreign_lines(kept)
     kept = re.sub(r"#\d+\s*", "", kept).strip()
     if removed:
-        note = "実行した操作は下の記録を確認してね。" if events else NO_CHANGE_NOTE
+        only_timer = timer and not any(_CLAIM_RE.search(s) and s not in timer for s in sentences)
+        note = timer_chat.NO_TIMER_NOTE if only_timer else \
+            "実行した操作は下の記録を確認してね。" if events else NO_CHANGE_NOTE
         return f"{kept}\n{note}" if kept else note
     return kept
 
@@ -181,6 +215,8 @@ def visible_partial(text):
     the model's own offers or promises, which the finished reply loses too."""
     safe = strip_model_records(text)
     safe = re.sub(r"[（(]記録\s*[:：].*$", "", safe)
+    safe = _LEAD_CLOSE_RE.sub("", _ES_LABEL_TAIL_RE.sub("", _ES_LABEL_RE.sub("", safe)))
     return "".join(part for part in re.split(r"(?<=[。！!？?\n])", safe)
                    if not _CLAIM_RE.search(part) and not _MODEL_OFFER_RE.search(part)
+                   and not timer_chat.CLAIM_RE.search(part)
                    and not _PROMISE_RE.search(part.strip()))

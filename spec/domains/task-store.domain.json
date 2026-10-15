@@ -11,13 +11,16 @@
       "pathPattern": "(^|/)esagent/recurring\\.py$"
     },
     {
-      "pathPattern": "(^|/)esagent/projects\\.py$"
+      "pathPattern": "(^|/)(esagent/projects\\.py|tests/test_project_match\\.py)$"
     },
     {
-      "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|tests/test_periodic_add\\.py|spec/test/conversation-repeat-53\\.md|spec/test/periodic-add-135\\.md)$"
+      "pathPattern": "(^|/)(esagent/repeat_chat\\.py|tests/test_repeat_chat\\.py|tests/test_periodic_add\\.py|tests/test_repeat_time_change\\.py|spec/test/conversation-repeat-53\\.md|spec/test/periodic-add-135\\.md|tests/test_repeat_time\\.py|tests/test_repeat_wording\\.py)$"
     },
     {
       "pathPattern": "(^|/)(esagent/linked_todos\\.py|tests/test_linked_todos\\.py|tests/test_read_only_tasks\\.py)$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_offline_(repeat|rules)\\.py$"
     }
   ],
   "source": "manual",

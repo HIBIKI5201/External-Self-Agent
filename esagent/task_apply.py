@@ -25,9 +25,9 @@ _ACTION_HINT_RE = re.compile(r"タスク(を|に)?(作|して|化)|作ろう|追
 # stand-in model, which completed tasks named for other reasons).
 _COMPLETE_HINT_RE = re.compile(r"完了|終わ|おわ|済|すんだ|片付|かたづ|できた|出来た|やった|やり終|出した|提出し|"
                                r"送った|送信した|チェック|done|Done|DONE")
-
-
-_EXPLICIT_ADD_RE = re.compile(r"タスク(を|に)?(作|追加|登録|して|化)|(追加|登録)して")
+# 「入れてくれる？」「増やしてほしい」「追加しといて」 are requests as well (#178).
+_EXPLICIT_ADD_RE = re.compile(r"タスク(を|に)?(作|追加|登録|して|化|入れ|増や)|(追加|登録)(して|しといて|しておいて)|"
+                              r"(?:っ?ていう|という)タスクを")
 
 
 _REFERENCE_RE = re.compile(r"上記|上の|それぞれ|それら|これら|さっき|今の|前の|今言った")
@@ -71,10 +71,33 @@ def _renamed_to(title, said):
     return bool(title) and re.search(re.escape(title) + r"[」』\"”\s]*(?:に|へ)\s*(?:して|変え|変更|直し|直す|する)", said) is not None
 
 
-def _literal_add_title(text):
+# 「入れてくれる？」「増やしてほしい」「追加しといて」: the request forms of an add (#178).
+_ADD_TAIL = (r'(?:して|しといて|しておいて|て|といて|ておいて)'
+             r'(?:くれる|くれない|くれ|もらえる|もらえない|ほしい|欲しい|おいて|ください|ね|よ)?(?:[？?]|かな)?[。！!\s]*')
+_LITERAL_ADD_RE = re.compile(
+    r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?'
+    r'(?:をタスクに(?:追加|登録|入れ|し)|を(?:追加|登録)|'
+    r'(?:っ?ていう|という)タスクを\s*(?:(?P<project>[^「」『』"、。\s]{1,30}?)\s*(?:に|へ)\s*)?(?:追加|登録|入れ|増や))' + _ADD_TAIL)
+
+
+def _literal_add(text):
+    """(title, project) of an add request that says the name itself, or None. The project only when
+    the user named an existing one (「〇〇っていうタスクをWarframeに増やしてほしい」)."""
+    match = _LITERAL_ADD_RE.fullmatch(text)
+    if not match:
+        return None  # 「金曜までに頑張る」 is talk; only the request forms are added without the model
+    project = ""
+    if match["project"]:
+        project = next((p["name"] for p in db.list_projects() if p["name"] and p["name"].lower() == match["project"].lower()), "")
+        if not project:
+            return None
+    title = _literal_add_title(text, match)
+    return (title, project) if title else None
+
+
+def _literal_add_title(text, match=None):
     # 「〇〇を追加して」 too: the model once made the name 「〇〇を追加」 (#115).
-    match = re.fullmatch(r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?(?:をタスクに(?:追加して|登録して|して|入れて)|'
-                         r'を(?:追加して|登録して))(?:おいて|ください|ね)?[。！!\s]*', text)
+    match = match or _LITERAL_ADD_RE.fullmatch(text)
     if not match:
         deadline = re.fullmatch(r"\s*(?P<date>[^。、\n]{1,60}?)までに(?P<title>[^。、\n]{1,100}?)[。！!\s]*", text)
         if not deadline or not (annotate_dates(deadline["date"], dt.date.today()) != deadline["date"] or re.search(r"\d{4}-\d{2}-\d{2}", deadline["date"])):
@@ -213,6 +236,9 @@ def _apply_current(actions, cfg, user_text="", context_text=""):
             rule = recurring.parse(user_text) or recurring.parse(context_text)
             if rule:
                 t = recurring.set_rule(t["id"], rule)
+            elif recurring.read(user_text)[1]:  # 「毎週月曜」 without a time: not saved as 0:00 (#196)
+                events.append(f"⚠ #{t['id']} {t['title']} の繰り返しは、時刻が読み取れなかったので設定していません"
+                              f"（「/repeat {t['id']} 毎週月曜9時」のように指定できます）")
             known_ids.add(t["id"])
             touched = t
             events.append(f"＋ #{t['id']} {t['title']}"

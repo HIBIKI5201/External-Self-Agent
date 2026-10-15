@@ -79,3 +79,38 @@ def test_http_rates_only_replies():
                 assert e.code == 400
         finally:
             app.shutdown(); app.server_close(); thread.join(timeout=2)
+
+
+def test_clear_does_not_hand_a_rating_to_a_new_reply():
+    """#232: /clear emptied messages, ids started from 1 again and an old 👎 showed on a new reply."""
+    with Sandbox(copy_real=False) as sb:
+        db.add_message("user", "古い質問")
+        old = db.add_message("assistant", "古い返事")
+        feedback.rate(old, rating=-1, cfg=sb.cfg)
+        db.clear_messages()
+        db.add_message("user", "新しい質問")
+        new = db.add_message("assistant", "新しい返事")
+        assert new > old, (old, new)
+        import utterances
+        assert utterances.record("にゃ", kind="notice") > new
+        assert feedback.ratings([old, new]) == {}
+        row = feedback.rate(new, rating=1, cfg=sb.cfg)
+        assert row["reply"] == "新しい返事" and row["rating"] == 1
+        assert {r["reply"]: r["rating"] for r in feedback.listing()} == {"古い返事": -1, "新しい返事": 1}
+
+
+def test_rating_left_on_a_reused_id_is_kept_apart():
+    """A DB that was cleared before #232 can already hold a rating whose id now names another reply."""
+    with Sandbox(copy_real=False) as sb:
+        old = db.add_message("assistant", "古い返事")
+        feedback.rate(old, rating=-1, cfg=sb.cfg)
+        with db.connect() as con:  # what /clear did before the fix
+            con.execute("DELETE FROM messages")
+        reused = db.add_message("assistant", "新しい返事")
+        assert reused == old
+        assert feedback.ratings([reused]) == {}
+        row = feedback.rate(reused, rating=1, cfg=sb.cfg)
+        assert row["reply"] == "新しい返事" and row["rating"] == 1
+        with db.connect() as con:
+            kept = {r["reply"]: r["rating"] for r in con.execute("SELECT reply, rating FROM reply_feedback")}
+        assert kept == {"古い返事": -1, "新しい返事": 1}, kept
