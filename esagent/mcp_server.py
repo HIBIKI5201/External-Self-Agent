@@ -25,7 +25,7 @@ TOOLS = [
     },
     {
         "name": "get_task",
-        "description": "タスク1件の詳細（メモを含む）を返す。",
+        "description": "タスク1件の詳細（メモを含む）を返す。読み取り専用のタスクは source_file に完了をつける元のファイルが入る。",
         "inputSchema": {"type": "object", "properties": {"task_id": {"type": "integer"}},
                         "required": ["task_id"]},
     },
@@ -80,7 +80,10 @@ def call_tool(name, args):
     if name == "list_tasks":
         return db.list_tasks(include_done=bool(args.get("include_done")), project=args.get("project"))
     if name == "get_task":
-        return db.get_task(args["task_id"]) or {"error": "task not found"}
+        t = db.get_task(args["task_id"])
+        if t and t["read_only"]:
+            t["source_file"] = db.source_file(t["id"])  # where it is completed (#184)
+        return t or {"error": "task not found"}
     if name == "add_task":
         return db.add_task(args["title"], project=args.get("project"), due=args.get("due"),
                            notes=args.get("notes", ""))
