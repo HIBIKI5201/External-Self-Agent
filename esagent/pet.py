@@ -80,6 +80,8 @@ def start_label(pomo):
 
 
 class Pet:
+    _snooze_until = 0  # 「30分かくれる」: hidden until this time, whatever the chat window does (#251)
+
     def __init__(self):
         self.root = tk.Tk()
         self.root.withdraw()
@@ -115,7 +117,12 @@ class Pet:
 
     # ---- placement ------------------------------------------------------------------
     def _visibility_tick(self):
-        hidden = winfocus.chat_window_visible()
+        self._apply_visibility()
+        self.root.after(500, self._visibility_tick)
+
+    def _apply_visibility(self):
+        """Hidden while the chat window is shown (#35) or while snoozed (#251); one place decides."""
+        hidden = winfocus.chat_window_visible() or time.time() < self._snooze_until
         if hidden != self._hidden:
             self._hidden = hidden
             if hidden:
@@ -123,7 +130,6 @@ class Pet:
                 self.root.withdraw()
             else:
                 self.root.deiconify()
-        self.root.after(500, self._visibility_tick)
 
     def _place(self):
         try:
@@ -390,9 +396,9 @@ class Pet:
         self.root.destroy()
 
     def _hide(self, minutes=30):
-        self._close_bubble()
-        self.root.withdraw()
-        self.root.after(minutes * 60 * 1000, self.root.deiconify)
+        # The visibility tick brings the cat back once the time is up and the chat window is not shown.
+        self._snooze_until = time.time() + minutes * 60
+        self._apply_visibility()
 
     def _menu(self, event):
         m = tk.Menu(self.root, tearoff=0, font=("Yu Gothic UI", 10))
