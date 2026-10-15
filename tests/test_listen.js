@@ -1,6 +1,6 @@
 // 会話モード (#89): telling Es's own voice (heard through the mic) from the user's words.
 const assert = require('node:assert/strict');
-const { isEcho, words, silenceFor, fixHeard, makeVad } = require('../esagent/static/listen.js');
+const { isEcho, words, silenceFor, fixHeard, makeVad, sureness, unsure } = require('../esagent/static/listen.js');
 
 const es = ['今は手をつけるべきタスクがありません。新しくやりたいことがあれば教えてください。'];
 
@@ -57,6 +57,15 @@ play(-12, 20); play(-30, 20);    // a sentence over the music
 assert.equal(heardOver.length, 1, JSON.stringify(heardOver));
 
 // Run the actual page code with browser events and a deterministic clock.
+// #174: a game or a video near the mic comes out as an odd sentence with a low confidence.
+assert.equal(sureness([]), null);
+assert.equal(sureness([['こんにちは', 0], ['', 0.9]]), null, 'no value (0) is unknown, not low');
+assert.ok(Math.abs(sureness([['あいう', 0.9], ['え', 0.1]]) - 0.7) < 1e-9, 'weighted by length');
+assert.equal(unsure([['お客様どうぞご紹介', 0.31]], 0.5), true);
+assert.equal(unsure([['洗濯をタスクに追加して', 0.88]], 0.5), false);
+assert.equal(unsure([['洗濯を', 0]], 0.5), false, 'an engine without confidence still sends');
+assert.equal(unsure([['お客様', 0.2]], 0), false, 'threshold 0 turns the check off');
+
 const vm = require('node:vm');
 const fs = require('node:fs');
 function page(startErrors = 0) {
@@ -175,6 +184,16 @@ async function lifecycle() {
   assert.equal(hidden.sessions.length, 1);
   hidden.docEvents.visibilitychange();
   assert.equal(hidden.sessions.length, 2, 'back in front: listening again');
-  console.log('test_listen.js ok (echo + lifecycle + midway pause + microphone + stall)');
+  // #174: a low-confidence line is not sent and says so; a sure one is sent as usual.
+  const noisy = page(); await noisy.toggle();
+  const sure = (t, c) => Object.assign([{ transcript: t, confidence: c }], { isFinal: true });
+  noisy.sessions[0].onresult({ results: [sure('旅行したいんだお客様どうぞご紹介', 0.3)] }); await noisy.tick(1500);
+  assert.deepEqual(noisy.sent, [], 'a low-confidence line must not be sent');
+  assert.match(noisy.line.textContent, /聞き取れなかったので送っていません/);
+  assert.ok(noisy.posts.includes('/api/listen/log'), 'the drop is noted in the server log');
+  noisy.sessions[0].onresult({ results: [sure('旅行したいんだお客様どうぞご紹介', 0.3), sure('洗濯をタスクに追加して', 0.9)] });
+  await noisy.tick(1500);
+  assert.deepEqual(noisy.sent, ['洗濯をタスクに追加して'], 'the next sentence starts fresh');
+  console.log('test_listen.js ok (echo + lifecycle + midway pause + microphone + stall + confidence)');
 }
 lifecycle().catch(error => { console.error(error); process.exitCode = 1; });

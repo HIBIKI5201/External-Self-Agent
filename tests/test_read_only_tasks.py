@@ -56,6 +56,7 @@ def test_existing_links_are_marked_by_the_migration():
         t = _linked(sb)
         with db.connect() as con:
             con.execute("ALTER TABLE tasks DROP COLUMN read_only")
+            con.execute("PRAGMA user_version = 0")  # a database from before the version
         db.init()
         assert db.get_task(t["id"])["read_only"] == 1
 
@@ -142,6 +143,7 @@ def test_rows_from_before_the_file_column_learn_their_file():
         t = _linked(sb)
         with db.connect() as con:
             con.execute("ALTER TABLE linked_items DROP COLUMN file")
+            con.execute("PRAGMA user_version = 0")  # a database from before the version
         db.init()
         assert db.source_file(t["id"]) is None and "元のファイルの done" in db.read_only_reply(t)
         linked_todos.run_once(sb.cfg, force=True)

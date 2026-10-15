@@ -6,6 +6,7 @@ unsynced changes and is pushed the next time Google is reachable. When both side
 changed, the later edit wins.
 """
 import datetime as dt
+import json
 import logging
 import threading
 import time
@@ -24,6 +25,13 @@ _wake = threading.Event()
 _cfg = {}  # the server's live config (start() binds it)
 
 SyncError = gapi.SyncError
+
+# A sync that would delete this many synced tasks at once (or half of them) waits for the user (#194).
+MASS_DELETE = 10
+
+
+class Held(Exception):
+    """The sync stopped before touching local tasks; the user chooses what to do (google_hold)."""
 
 
 def _req(method, path, params=None, body=None):
@@ -52,9 +60,42 @@ def _l_time(s):
     return dt.datetime.fromisoformat(s).astimezone()
 
 
+NOTES_MAX = 8000                      # Google Tasks keeps at most about 8,192 characters of notes
+NOTES_MORE = "\n…（続きは E.S. Agent に）"  # ends notes that were cut to fit (#195)
+
+
+def _g_notes(notes):
+    """The notes as sent to Google: cut to NOTES_MAX with a mark, so the cut is visible there."""
+    notes = notes or ""
+    if len(notes) <= NOTES_MAX:
+        return notes
+    return notes[:NOTES_MAX - len(NOTES_MORE)] + NOTES_MORE
+
+
+def _norm_notes(s):
+    return (s or "").replace("\r\n", "\n").rstrip()
+
+
+def _pulled_notes(local, remote):
+    """Notes to keep when Google's copy of a task wins (#195).
+
+    Google only holds the first NOTES_MAX characters of long notes. If its notes still end with the
+    mark we put on the cut (or are the plain [:8000] cut sent before #195), the user changed
+    something else there (completed it, moved the due date) and our full notes stay, even when they
+    were edited here since the cut was sent. Only notes rewritten without the mark replace them."""
+    local, remote = local or "", remote or ""
+    if len(local) <= NOTES_MAX or _norm_notes(remote) == _norm_notes(local):
+        return remote
+    if _norm_notes(remote).endswith(NOTES_MORE):
+        return local
+    if len(remote) == NOTES_MAX and local.startswith(remote):
+        return local  # cut before #195, without the mark
+    return remote
+
+
 def _body(t):
     done = t["status"] == "done"
-    body = {"title": t["title"], "notes": (t["notes"] or "")[:8000], "due": _g_due(t["due"]),
+    body = {"title": t["title"], "notes": _g_notes(t["notes"]), "due": _g_due(t["due"]),
             "status": "completed" if done else "needsAction"}
     if not done:
         body["completed"] = None
@@ -117,8 +158,62 @@ def _list_for(project_id, project_list, default_id):
 
 def _delete_local(task_id):
     with db.connect() as con:
+        row = con.execute("SELECT title FROM tasks WHERE id = ?", (task_id,)).fetchone()
         con.execute("DELETE FROM handoffs WHERE task_id = ?", (task_id,))
         con.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    if row:  # a record in the chat, so a task never disappears silently (#194)
+        db.add_message("notice", f"🗑 #{task_id} {row['title']} を Google で削除されたため消しました")
+
+
+# ---- account changes and mass deletions (#194) ------------------------------
+
+def hold():
+    """{"kind": "account" | "delete", "message": …, "tasks": [ids]} while a sync waits for the user."""
+    try:
+        return json.loads(db.get_setting("google_hold") or "null")
+    except ValueError:
+        return None
+
+
+def _hold(kind, message, tasks=()):
+    db.set_setting("google_hold", json.dumps({"kind": kind, "message": message, "tasks": list(tasks)},
+                                             ensure_ascii=False))
+    raise Held(message)
+
+
+def _forget(task_ids=None):
+    """Drop the Google ids so these tasks (all when None) are sent again as new ones."""
+    with db.connect() as con:
+        where, args = ("", []) if task_ids is None else (
+            f" WHERE id IN ({','.join('?' * len(task_ids))})", list(task_ids))
+        con.execute("UPDATE tasks SET gtask_id = NULL, glist_id = NULL, g_updated = NULL, synced_at = NULL"
+                    + where, args)
+        if task_ids is None:
+            con.execute("UPDATE projects SET glist_id = NULL")
+
+
+def resolve(action):
+    """The user's answer to a hold: "resend" keeps the local tasks and sends them to Google again,
+    "delete" (mass deletion only) deletes them here, "disconnect" (account change only) stops syncing."""
+    h = hold()
+    if not h:
+        return {"ok": True}
+    if h["kind"] == "account" and action == "resend":
+        _forget()
+        db.set_setting("google_account", "")
+    elif h["kind"] == "account" and action == "disconnect":
+        gauth.disconnect()
+    elif h["kind"] == "delete" and action == "resend":
+        _forget(h["tasks"])
+    elif h["kind"] == "delete" and action == "delete":
+        for task_id in h["tasks"]:
+            if (db.get_task(task_id) or {}).get("gtask_id"):  # not one sent again since
+                _delete_local(task_id)
+    else:
+        raise ValueError(f"unknown action for {h['kind']}: {action}")
+    db.set_setting("google_hold", "")
+    request()
+    return {"ok": True}
 
 
 def _apply_remote(local, g, list_id, project_id):
@@ -131,12 +226,16 @@ def _apply_remote(local, g, list_id, project_id):
         # #182: only the file it was read from completes a read-only task. Keep ours and leave the
         # task unsynced, so the next push puts the check in Google back the way it was.
         status, pushed = local["status"], 0
+    notes = _pulled_notes(local["notes"], g.get("notes"))
+    if _norm_notes(_g_notes(notes)) != _norm_notes(g.get("notes")):
+        pushed = 0  # our full notes stayed but were edited since the cut was sent: send the new cut
     ts = db.now()
     with db.connect() as con:
         con.execute(
             "UPDATE tasks SET title = ?, notes = ?, due = ?, status = ?, project_id = ?, glist_id = ?, "
             "g_updated = ?, updated_at = ?, synced_at = ?, rev = rev + 1, synced_rev = rev + ? WHERE id = ? AND rev = ?",
-            ((g.get("title") or "").strip() or local["title"], g.get("notes") or "", _l_due(g), status,
+            ((g.get("title") or "").strip() or local["title"], notes,
+             _l_due(g), status,
              project_id, list_id, g["updated"], ts, ts, pushed, local["id"], local["rev"]))
 
 
@@ -202,6 +301,14 @@ def sync_once():
     stats = {"pulled": 0, "pushed": 0, "deleted": 0}
     lists = list(_paged("/users/@me/lists", {"maxResults": 100}))
     default_id = _req("GET", "/users/@me/lists/@default")["id"]
+    # The default list's id differs between Google accounts: a reconnect to another account must not
+    # read every synced task as deleted (#194). Reconnecting to the earlier account lifts the hold;
+    # a mass-deletion hold is worked out again below.
+    db.set_setting("google_hold", "")
+    known = db.get_setting("google_account")
+    if known and known != default_id:
+        _hold("account", "前回と別の Google アカウントに接続されています。ローカルのタスクはそのままです。"
+                         "新しいアカウントに送り直すか、接続をやめるかを選んでください。")
     list_project = _link_lists(lists, default_id)
     project_list = {pid: lid for lid, pid in list_project.items() if pid is not None}
 
@@ -220,9 +327,17 @@ def sync_once():
             g = _req("POST", f"/lists/{list_id}/tasks", body=_body(t))
             _mark_synced(t["id"], g, list_id, t["updated_at"], t["rev"])
             stats["pushed"] += 1
-        elif t["gtask_id"] not in seen:  # gone from Google entirely (e.g. its list was deleted)
-            _delete_local(t["id"])
-            stats["deleted"] += 1
+    db.set_setting("google_account", default_id)
+    # Gone from Google entirely (e.g. its list was deleted). Many at once looks like a different
+    # account or a mistake, so those wait for the user instead (#194).
+    synced = [t for t in rows if t["gtask_id"]]
+    gone = [t for t in synced if t["gtask_id"] not in seen]
+    if len(gone) >= MASS_DELETE or (len(gone) >= 2 and len(gone) * 2 >= len(synced)):
+        _hold("delete", f"Google から {len(gone)} 件のタスクが見えなくなりました。まとめて消す前に確認させてください。"
+                        "Google に送り直すか、ここからも消すかを選んでください。", [t["id"] for t in gone])
+    for t in gone:
+        _delete_local(t["id"])
+        stats["deleted"] += 1
     return stats
 
 
@@ -243,6 +358,7 @@ def status():
     s["state"] = db.get_setting("google_state", "idle")
     s["last_sync"] = db.get_setting("google_last_sync")
     s["last_error"] = db.get_setting("google_last_error", "")
+    s["hold"] = hold()
     s["cal_error"] = db.get_setting("google_cal_error", "")
     s["cal_last_sync"] = db.get_setting("google_cal_last_sync")
     with db.connect() as con:
@@ -279,6 +395,9 @@ def run_once():
             log.info("google sync: %s", stats)
         _sync_calendar()
         return "online"
+    except Held as e:
+        _set(state="held", last_error=str(e))
+        return "held"
     except gauth.OfflineError:
         _set(state="offline")
         return "offline"

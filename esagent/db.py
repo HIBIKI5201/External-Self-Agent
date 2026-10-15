@@ -4,7 +4,10 @@ import json
 import os
 import re
 import sqlite3
-from contextlib import contextmanager
+import tempfile
+import threading
+import unicodedata
+from contextlib import closing, contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
@@ -104,16 +107,40 @@ CREATE TABLE IF NOT EXISTS memories(
     content TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-"""
 
-SCHEMA += """
 CREATE TABLE IF NOT EXISTS conversation_jobs (
     id TEXT PRIMARY KEY, revision INTEGER NOT NULL, state TEXT NOT NULL, text TEXT NOT NULL,
     result TEXT, committed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
 );
+-- Ratings of Es's replies (#144, feedback.py).
+CREATE TABLE IF NOT EXISTS reply_feedback(
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL UNIQUE,
+    rating INTEGER NOT NULL DEFAULT 0,
+    rewrite TEXT NOT NULL DEFAULT '',
+    reply TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    context TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+-- Events of the chosen Google calendars (#157, calendar_view.py).
+CREATE TABLE IF NOT EXISTS calendar_events(
+    cal_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    cal_name TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    location TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(cal_id, event_id)
+);
 """
 
-# Columns added after the first release; init() adds any that are missing.
+# Columns added before the schema had a version; version 1 adds any that are missing.
 MIGRATIONS = {
     "projects": [("glist_id", "TEXT"), ("description", "TEXT")],
     "messages": [("status", "TEXT"),  # "pending" = waiting for the model to be ready
@@ -167,9 +194,29 @@ def load_config():
 
 
 def save_config(cfg):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    write_atomic(CONFIG_PATH, json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+
+
+_write_lock = threading.Lock()
+
+
+def write_atomic(path, text):
+    """Replace a whole file so that a crash or shutdown leaves the old or the new contents, never a
+    half-written one (#233): config.json is read when the server starts, the Google token every hour."""
+    with _write_lock:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=os.path.basename(path) + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def valid_datetime(value):
@@ -202,8 +249,7 @@ def _connect():
     os.makedirs(DATA_DIR, exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=30)  # several background threads write; wait rather than fail
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA foreign_keys=ON")
+    con.execute("PRAGMA foreign_keys=ON")  # per connection; WAL is kept in the file, set by init()
     try:
         yield con
         con.commit()
@@ -224,26 +270,99 @@ def connect():
             jobs.note_commit(statements)
 
 
+def _statements(script):
+    """Split a schema script into statements, so they can run inside one transaction
+    (executescript would first commit whatever is open)."""
+    out, current = [], ""
+    for line in script.splitlines(keepends=True):
+        current += line
+        if sqlite3.complete_statement(current):
+            out.append(current.strip())
+            current = ""
+    return out
+
+
+def _v1_baseline(con):
+    """Everything the database had before it carried a version: every table, and the columns added
+    since the first release (old databases are missing some)."""
+    for statement in _statements(SCHEMA):
+        con.execute(statement)
+    for table, cols in MIGRATIONS.items():
+        have = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in have:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+                if table == "tasks" and name == "synced_rev":
+                    con.execute("UPDATE tasks SET synced_rev = rev WHERE gtask_id IS NOT NULL "
+                                "AND synced_at IS NOT NULL AND updated_at = synced_at")
+                if table == "tasks" and name == "done_at":  # the best guess there is for old rows
+                    con.execute("UPDATE tasks SET done_at = updated_at WHERE status = 'done'")
+                if table == "tasks" and name == "read_only":
+                    con.execute("UPDATE tasks SET read_only = 1 WHERE id IN "
+                                "(SELECT task_id FROM linked_items WHERE task_id IS NOT NULL)")
+    con.execute("CREATE INDEX IF NOT EXISTS messages_event_key ON messages(event_key)")
+    # Every way a task is completed (chat, screen, Google, linked files, repeats) goes through an
+    # UPDATE or INSERT of status, so the database itself keeps done_at (#253).
+    for statement in _statements(DONE_AT_TRIGGERS):
+        con.execute(statement)
+
+
+def _v2_chat_request_age(con):
+    """chat_requests learns when each request came, so finished ones can be removed (#239).
+    Rows from before are dated now: they leave KEEP_DAYS after this upgrade."""
+    if "created_at" not in {r["name"] for r in con.execute("PRAGMA table_info(chat_requests)")}:
+        con.execute("ALTER TABLE chat_requests ADD COLUMN created_at TEXT")
+    con.execute("UPDATE chat_requests SET created_at = ? WHERE created_at IS NULL", (now(),))
+
+
+# Applied in order; PRAGMA user_version is the number of steps a database has had. Append new
+# steps (type changes, indexes, data moves) here; never edit or reorder a released one.
+VERSIONS = [_v1_baseline, _v2_chat_request_age]
+KEEP_DAYS = 7  # finished chat requests and conversation jobs are kept this long
+
+
+def schema_version(con):
+    return con.execute("PRAGMA user_version").fetchone()[0]
+
+
 def init():
+    """Bring the database to the current schema, once per process start (#239)."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
+        con.execute("PRAGMA journal_mode=WAL")  # kept in the file; connections need not set it again
     with connect() as con:
-        con.executescript(SCHEMA)
-        for table, cols in MIGRATIONS.items():
-            have = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
-            for name, decl in cols:
-                if name not in have:
-                    con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
-                    if table == "tasks" and name == "synced_rev":
-                        con.execute("UPDATE tasks SET synced_rev = rev WHERE gtask_id IS NOT NULL "
-                                    "AND synced_at IS NOT NULL AND updated_at = synced_at")
-                    if table == "tasks" and name == "done_at":  # the best guess there is for old rows
-                        con.execute("UPDATE tasks SET done_at = updated_at WHERE status = 'done'")
-                    if table == "tasks" and name == "read_only":
-                        con.execute("UPDATE tasks SET read_only = 1 WHERE id IN "
-                                    "(SELECT task_id FROM linked_items WHERE task_id IS NOT NULL)")
-        con.execute("CREATE INDEX IF NOT EXISTS messages_event_key ON messages(event_key)")
-        # Every way a task is completed (chat, screen, Google, linked files, repeats) goes through an
-        # UPDATE or INSERT of status, so the database itself keeps done_at (#253).
-        con.executescript(DONE_AT_TRIGGERS)
+        if schema_version(con) < len(VERSIONS):
+            # The chat server and the MCP server may start together: the second waits here and
+            # then finds the steps already done.
+            con.execute("BEGIN IMMEDIATE")
+            done = schema_version(con)
+            for number, step in enumerate(VERSIONS[done:], done + 1):
+                step(con)
+                con.execute(f"PRAGMA user_version = {number}")
+    prune()
+
+
+def prune(days=KEEP_DAYS):
+    """Remove what only matters for a short while, so these tables do not grow forever (#239):
+    finished chat requests and conversation jobs older than `days`, and hashes of deleted memories'
+    source messages once those messages are gone."""
+    cutoff = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="milliseconds")
+    import hashlib
+    with connect() as con:
+        con.execute("DELETE FROM chat_requests WHERE result IS NOT NULL AND created_at < ?", (cutoff,))
+        con.execute("DELETE FROM conversation_jobs WHERE state IN ('done', 'failed', 'cancelled') "
+                    "AND updated_at < ?", (cutoff,))
+        row = con.execute("SELECT value FROM settings WHERE key = 'deleted_memory_sources'").fetchone()
+        try:
+            hashes = set(json.loads(row["value"] or "[]")) if row else set()
+        except (ValueError, TypeError):
+            return
+        if hashes:
+            alive = {hashlib.sha256(r[0].encode("utf-8")).hexdigest()
+                     for r in con.execute("SELECT content FROM messages WHERE role = 'user'")}
+            if hashes - alive:
+                con.execute("UPDATE settings SET value = ? WHERE key = 'deleted_memory_sources'",
+                            (json.dumps(sorted(hashes & alive)),))
 
 
 def get_setting(key, default=None):
@@ -309,7 +428,8 @@ def sync_projects(cfg):
 
 
 def ensure_project(name, kind="general"):
-    """Create a project unless one already matches. Returns True if it was created."""
+    """Create a project unless an existing one matches the name the way find_project does (so
+    「Sinfonia」 finds 「Sinfonia Studio」, #197). Returns True if it was created."""
     with connect() as con:
         if find_project(con, name):
             return False
@@ -338,20 +458,34 @@ def list_projects():
         return [dict(r) for r in con.execute("SELECT * FROM projects ORDER BY kind DESC, name")]
 
 
+# 「EsAgentカテゴリー」「Warframeのリスト」: the words around a project name are not part of it.
+_PROJECT_SUFFIX = re.compile(r"(?:の)?(?:プロジェクト|カテゴリー?|リスト|分類|タスク)$")
+
+
+def _project_key(name):
+    """Compare names without case, spaces or full/half-width differences (#197)."""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", name or "")).lower()
+
+
 def find_project(con, name):
-    """Case-insensitive exact match, then substring match in either direction."""
-    if not name:
+    """The project a name means (#197): the same name (case, spaces and width ignored) first.
+
+    Otherwise a shortened name ("Sinfonia" for "Sinfonia Studio") is accepted only when it is two
+    or more characters, covers most of the project's name and fits exactly one project. A name
+    that merely contains a project's name ("Warframeウィークリー" vs "Warframe") is another project."""
+    if not name or not name.strip():
         return None
-    key = name.strip().lower()
+    key = _project_key(name)
     rows = con.execute("SELECT * FROM projects").fetchall()
-    for r in rows:
-        if r["name"].lower() == key:
-            return r
-    for r in rows:
-        n = r["name"].lower()
-        if key in n or n in key:
-            return r
-    return None
+    for k in dict.fromkeys((key, _PROJECT_SUFFIX.sub("", key) or key)):
+        for r in rows:
+            if _project_key(r["name"]) == k:
+                return r
+    key = _PROJECT_SUFFIX.sub("", key) or key
+    if len(key) < 2:
+        return None
+    hits = [r for r in rows if key in _project_key(r["name"]) and len(key) * 2 > len(_project_key(r["name"]))]
+    return hits[0] if len(hits) == 1 else None
 
 
 # ---- tasks ------------------------------------------------------------------
@@ -369,6 +503,14 @@ def set_read_only(task_id, read_only=True):
 def get_task(task_id):
     with connect() as con:
         return _task(con, task_id)
+
+
+def first_overdue(today):
+    """The title of the open task whose due date passed longest ago, or "" (the cat asks every second, #241)."""
+    with connect() as con:
+        row = con.execute("SELECT title FROM tasks WHERE status != 'done' AND due IS NOT NULL AND due != '' "
+                          "AND due < ? ORDER BY due, id LIMIT 1", (today,)).fetchone()
+    return row["title"] if row else ""
 
 
 def list_tasks(include_done=False, project=None):
@@ -447,18 +589,20 @@ def update_task(task_id, title=None, status=None, due=None, project=None, notes_
         if (task.get("read_only") and source != "linked" and status in STATUSES and status != task["status"]
                 and "done" in (status, task["status"])):
             raise ReadOnlyTask(task)
+        # Only fields whose value changes are written: an unchanged update keeps rev and updated_at,
+        # so it neither syncs to Google again nor reorders "recently done" (#200).
         sets, args = [], []
-        if title:
+        if title and title.strip() != task["title"]:
             sets.append("title = ?"); args.append(title.strip())
-        if status in STATUSES:
+        if status in STATUSES and status != task["status"]:
             sets.append("status = ?"); args.append(status)
-        if due is not None:
+        if due is not None and valid_date(due) != (task["due"] or None):
             sets.append("due = ?"); args.append(valid_date(due))
         if project:
             p = find_project(con, project)
-            if p:
+            if p and p["id"] != task["project_id"]:
                 sets.append("project_id = ?"); args.append(p["id"])
-        if notes is not None:
+        if notes is not None and notes.strip() != (task["notes"] or ""):
             sets.append("notes = ?"); args.append(notes.strip())
         elif notes_append:
             stamp = dt.datetime.now().strftime("%m/%d %H:%M")
@@ -473,11 +617,18 @@ def update_task(task_id, title=None, status=None, due=None, project=None, notes_
 
 # ---- messages ---------------------------------------------------------------
 
+# /clear empties the table, and SQLite would then number messages from 1 again, so ratings that keep a
+# message id would land on a different reply (#232). New ids continue after the highest one ever used.
+NEW_MESSAGE_ID = ("(SELECT MAX(COALESCE((SELECT MAX(id) FROM messages), 0), COALESCE((SELECT CAST(value AS INTEGER) "
+                  "FROM settings WHERE key = 'messages_last_id'), 0)) + 1)")
+
+
 def add_message(role, content, status=None):
     with connect() as con:
         import conversation_jobs as jobs
         request_id, revision = jobs.message_metadata()
-        cur = con.execute("INSERT INTO messages(role, content, created_at, status, request_id, request_revision) VALUES(?, ?, ?, ?, ?, ?)",
+        cur = con.execute(f"INSERT INTO messages(id, role, content, created_at, status, request_id, request_revision) "
+                          f"VALUES({NEW_MESSAGE_ID}, ?, ?, ?, ?, ?, ?)",
                           (role, content, now(), status, request_id, revision))
         return cur.lastrowid
 
@@ -537,6 +688,8 @@ def clear_messages():
     import conversation_jobs as jobs
     jobs.clear_pending()
     with connect() as con:
+        con.execute(f"INSERT INTO settings(key, value) VALUES('messages_last_id', {NEW_MESSAGE_ID} - 1) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         con.execute("DELETE FROM messages")
         con.execute("DELETE FROM settings WHERE key = 'conversation_game'")
 

@@ -61,8 +61,7 @@ def _load_token():
 
 def _save_token(tok):
     os.makedirs(SECRETS_DIR, exist_ok=True)
-    with open(TOKEN_PATH, "w", encoding="utf-8") as f:
-        json.dump(tok, f)
+    db.write_atomic(TOKEN_PATH, json.dumps(tok))
 
 
 def status():

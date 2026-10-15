@@ -6,7 +6,7 @@
 (() => {
   // How long a pause ends what you are saying (#116, config listen_silence_ms / listen_incomplete_ms):
   // longer when the words so far stop in the middle of a sentence (「〜を」「〜とかの」「〜けど」).
-  let timing = { silence: 1200, incomplete: 3000 };
+  let timing = { silence: 1200, incomplete: 3000, confidence: 0.5 };
   const ECHO_SECS = 8;       // Es's lines this recent can come back through the mic
   const MAX_FAILS = 3;       // give up after this many network errors in a row
   const STALL_MS = 20000;    // a session with no result, end or error for this long is reopened (#168)
@@ -47,6 +47,20 @@
     }
     return { final, interim };
   }
+
+  // How sure the recogniser was of what it wrote (#174): the mean of the final results' confidence,
+  // weighted by their length. Games and videos in the room come out as odd sentences with a low value.
+  // A result with no value (0 or missing; some engines give none) does not count; none at all is null.
+  function sureness(parts) {
+    let sum = 0, chars = 0;
+    for (const [text, conf] of parts || []) {
+      const n = String(text || "").trim().length;
+      if (!n || !(conf > 0)) continue;
+      sum += conf * n; chars += n;
+    }
+    return chars ? sum / chars : null;
+  }
+  const unsure = (parts, min = timing.confidence) => { const c = sureness(parts); return c !== null && c < (min || 0); };
 
   // Particles and connectives a sentence does not end with. 「〜して」「〜なの」 can end a request or a
   // question, so て and a lone の are not on the list.
@@ -99,13 +113,14 @@
     };
   }
 
-  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor, fixHeard, makeVad }; return; }
+  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor, fixHeard, makeVad, sureness, unsure }; return; }
 
   // ---- the page -----------------------------------------------------------------------
   const $ = (s) => document.querySelector(s);
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("es-listen") : null;
   let rec = null, on = false, heard = "", timer = null, restart = null, epoch = 0;
+  let parts = [];  // [final text, confidence] of what is being said, for sureness (#174)
   let fails = 0, barged = false, checking = false;
   // The microphone Edge listens with (#93): the Windows default input device, named by the track the
   // permission check opened. Shown only on this screen; never stored or sent.
@@ -236,10 +251,16 @@
 
   async function finish() {
     timer = null;
-    const text = heard.trim();
-    heard = ""; barged = false;
+    const text = heard.trim(), said = parts;
+    heard = ""; parts = []; barged = false;
     if (!on) return;
     if (!text) return show("聞いています…");
+    if (unsure(said)) {  // probably not you: a game or a video near the mic (#174)
+      const c = sureness(said);
+      note("unsure", c.toFixed(2));
+      dlog("unsure", { chars: text.length, confidence: Math.round(c * 100) / 100 });
+      return show("聞き取れなかったので送っていません：", `「${text}」（もう一度話すか、入力欄に書いてね）`);
+    }
     const turn = epoch;
     const echo = isEcho(text, await esLines());
     if (!on || turn !== epoch) return;
@@ -279,7 +300,11 @@
       lastHeard = lastSign = Date.now();
       const w = words(e.results, done);
       dlog("result", { final: !!w.final, chars: (w.final + w.interim).length });
-      for (let i = done; i < e.results.length; i++) if (e.results[i].isFinal) done = i + 1;
+      for (let i = done; i < e.results.length; i++) {
+        if (!e.results[i].isFinal) continue;
+        parts.push([e.results[i][0].transcript, e.results[i][0].confidence]);
+        done = i + 1;
+      }
       heard += w.final;
       const now = (heard + w.interim).trim();
       if (!now) return;
@@ -323,7 +348,7 @@
     on = false;
     epoch++;
     clearTimeout(restart); restart = null;
-    clearTimeout(timer); timer = null; heard = "";
+    clearTimeout(timer); timer = null; heard = ""; parts = [];
     clearTimeout(quiet); quiet = null;
     clearTimeout(stallWatch); stallWatch = null;
     stopEar();

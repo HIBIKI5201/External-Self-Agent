@@ -6,15 +6,36 @@ A DB transaction and cancellation share a lock: committed operations are never u
 import contextvars
 from contextlib import contextmanager
 import json
+import logging
 import re
 import threading
 
 import db
 
+log = logging.getLogger("esagent")
 CURRENT = contextvars.ContextVar("conversation_job", default=None)
 _LOCK = threading.RLock()
 _LIVE = {}  # (database path, id) -> revision; scoped to this server process
-_WRITING = re.compile(r"^(?:INSERT(?: OR \w+)? INTO|UPDATE|DELETE FROM)\s+(tasks|memories|projects|handoffs)\b", re.I)
+# Whether a write inside a request means "something already happened" (a correction must then not rerun
+# the request). Every table and settings key is listed; a write to one that is not listed counts as
+# committed and is logged, so a new table or key is never silently treated as nothing done (#236).
+DURABLE_TABLES = {"tasks", "memories", "projects", "handoffs", "linked_items", "reply_feedback"}
+SCRATCH_TABLES = {
+    "messages",           # the conversation itself; only /clear (DELETE) is durable
+    "conversation_jobs",  # this bookkeeping
+    "chat_requests",      # replay protection for the window's requests
+    "calendar_events",    # a copy of Google Calendar, refilled by every sync
+}
+DURABLE_SETTINGS = {"pomo", "chat_mode", "pending_mode", "voice", "pet_enabled", "pet_chat", "conversation_game", "deleted_memory_sources",
+                    "calendar_selected", "gcal_calendar_id", "companion_sessions", "companion_minutes",
+                    "companion_day", "companion_today"}
+DURABLE_SETTING_PREFIXES = ("snooze:", "task_context_corrections:")
+SCRATCH_SETTINGS = {"pending_focus", "pending_feature", "active_offer", "last_advice", "task_context_draft",
+                    "messages_last_id", "bgm_sync", "calendar_list", "calendar_sync", "google_state", "google_last_sync",
+                    "google_last_error", "google_cal_last_sync", "google_cal_error"}
+SCRATCH_SETTING_PREFIXES = ("linked:", "google_")
+_WRITE = re.compile(r"^(INSERT(?: OR \w+)? INTO|REPLACE INTO|UPDATE(?: OR \w+)?|DELETE FROM)\s+[\"`\[]?(\w+)", re.I)
+_SETTING_KEY = re.compile(r"(?:VALUES\s*\(\s*|\bkey\s*=\s*)'((?:[^']|'')*)'", re.I)
 ID = re.compile(r"[A-Za-z0-9_-]{16,80}")
 # continue: the next piece of the same spoken message (#116), joined to it while it is not done.
 MODES = {"independent", "correction", "append", "cancel", "topic", "auto", "continue"}
@@ -71,13 +92,48 @@ def scope(request_id, revision):
         CURRENT.reset(marker)
 
 
-def note_commit(statements):
+def _setting_durable(key):
+    if key in DURABLE_SETTINGS or key.startswith(DURABLE_SETTING_PREFIXES):
+        return True
+    if key in SCRATCH_SETTINGS or key.startswith(SCRATCH_SETTING_PREFIXES):
+        return False
+    return None
+
+
+def durable(sql):
+    """True if this statement writes something a rerun must not repeat, False if not, None if not a write."""
+    m = _WRITE.match(sql.strip())
+    if not m:
+        return None
+    op, table = m[1].upper(), m[2].lower()
+    if table == "messages":
+        return op.startswith("DELETE")
+    if table == "settings":
+        keys = [k.replace("''", "'") for k in _SETTING_KEY.findall(sql)]
+        found = [_setting_durable(k) for k in keys]
+        if keys and None not in found:
+            return any(found)
+        log.warning("settings write not classified for corrections: %s", keys or sql[:80])
+        return True
+    if table in DURABLE_TABLES:
+        return True
+    if table in SCRATCH_TABLES:
+        return False
+    log.warning("table not classified for corrections: %s", table)
+    return True
+
+
+def mark_committed():
+    """For writes that never pass through the database, such as adding a Google Calendar event."""
+    note_commit([], force=True)
+
+
+def note_commit(statements, force=False):
     token = CURRENT.get()
-    written = any(_WRITING.search(sql.strip()) or re.match(r"DELETE FROM messages", sql.strip(), re.I) or
-                  (re.search(r"\bsettings\b", sql, re.I) and
-                   re.search(r"(?:VALUES\s*\(\s*|key\s*=\s*)'(?:pomo|chat_mode|voice)'", sql, re.I))
-                  for sql in statements)
-    if token and written:
+    if not token:
+        return
+    written = force or any(durable(sql) for sql in statements)
+    if written:
         token["committed"] = True
         # This is part of the same transaction boundary; retain it even after cancellation.
         with detached(), db.connect() as con:
@@ -177,9 +233,15 @@ def accept(body, cfg, operation):
                 db.add_message("assistant", note)
                 return {"jobId": target, "revision": expected, "state": "cancelled", "result": {"reply": note, "events": [], "handoffs": []}}
             if mode == "cancel":
-                note = "依頼の残りの処理と読み上げを取り消したよ。"
-                if previous["committed"]:
-                    note += "既に反映した操作は元に戻していないので、履歴とタスクを確認してね。"
+                import conversation_game
+                in_flight = previous["state"] in ("queued", "running")
+                ended = conversation_game.end_on_cancel()
+                if ended and not in_flight:
+                    note = "しりとりは終了だよ。"  # nothing left to cancel: the game is what to stop (#156)
+                else:
+                    note = "依頼の残りの処理と読み上げを取り消したよ。" + ("しりとりも終了したよ。" if ended else "")
+                    if previous["committed"]:
+                        note += "既に反映した操作は元に戻していないので、履歴とタスクを確認してね。"
                 result = {"reply": note, "events": [], "handoffs": [], "cancelled": True}
                 with db.connect() as con:
                     con.execute("UPDATE conversation_jobs SET state='cancelled', result=? WHERE id=?",
@@ -216,7 +278,7 @@ def accept(body, cfg, operation):
 
 
 def _work(request_id, revision, body, cfg, operation):
-    result, stopped, token = None, False, None
+    result, stopped, token, reason = None, False, None, ""
     try:
         with scope(request_id, revision) as token:
             with boundary(), db.connect() as con:
@@ -225,7 +287,7 @@ def _work(request_id, revision, body, cfg, operation):
             check()
             if result.get("pending"):
                 # Async requests must not leak into the legacy automatic pending rerun loop.
-                raise Stopped()
+                raise Stopped(result.get("error") or "")
             with boundary():
                 with db.connect() as con:
                     con.execute("UPDATE conversation_jobs SET state='done',result=?,updated_at=? WHERE id=? AND revision=?",
@@ -239,8 +301,8 @@ def _work(request_id, revision, body, cfg, operation):
                 voice.reply(cfg, result, key=f"job:{request_id}:{revision}")
                 import events
                 events.chat_reply(body.get("said") or body.get("text"), result, via=body.get("via"))
-    except Stopped:
-        stopped = True
+    except Stopped as e:
+        stopped, reason = True, (e.args[0] if e.args else "")
     except Exception:
         result = {"reply": "処理結果を確認できません。履歴とタスクを確認してください。", "events": [], "handoffs": [], "failed": True}
         with detached(), _LOCK:
@@ -251,8 +313,7 @@ def _work(request_id, revision, body, cfg, operation):
     finally:
         with detached(), _LOCK:
             if stopped and _LIVE.get(_key(request_id)) == revision:
-                result = {"reply": "処理を完了できませんでした。自動再実行はせず、履歴とタスクを確認してください。",
-                          "events": [], "handoffs": [], "failed": True}
+                result = {"reply": stopped_reply(reason), "events": [], "handoffs": [], "failed": True}
                 with db.connect() as con:
                     con.execute("UPDATE conversation_jobs SET state='failed',result=? WHERE id=? AND revision=?",
                                 (json.dumps(result, ensure_ascii=False), request_id, revision))
@@ -260,6 +321,16 @@ def _work(request_id, revision, body, cfg, operation):
                 with db.connect() as con:
                     con.execute("UPDATE messages SET status='cancelled' WHERE request_id=? AND request_revision=? AND (role IN ('assistant','es') OR status='pending')",
                                 (request_id, revision))
+
+
+def stopped_reply(reason=""):
+    """The reply of a request that ended without one. A model error (cannot connect, a reply cut at the
+    time limit, #190/#198) is said as it is: the conversation stopped before any task change, so it does
+    not ask to check the tasks."""
+    if reason:
+        when = "Ollama が起動したら、" if "接続できません" in reason else ""
+        return f"{reason}\nこの発言にはまだ返事できていないよ。{when}もう一度送ってね。"
+    return "処理を完了できませんでした。自動再実行はせず、履歴とタスクを確認してください。"
 
 
 def clear_pending():

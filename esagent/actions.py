@@ -142,7 +142,9 @@ def run_action(action, args, cfg):
             reply = "使い方: /done 番号 または /done タスク名"
         elif not task:
             reply = _not_found(args, cands)
-        elif task["read_only"] and task["status"] != "done":
+        elif task["status"] == "done":  # nothing to change: do not claim it was done now (#200)
+            reply = f"#{task['id']} {task['title']} はもう完了になってるよ。"
+        elif task["read_only"]:
             reply = db.read_only_reply(task)
         else:
             db.update_task(task["id"], status="done")
@@ -188,8 +190,10 @@ def run_action(action, args, cfg):
             recurring.set_rule(task["id"], None)
             reply = f"#{task['id']} {task['title']} の繰り返しをやめました。"
         else:
-            rule = recurring.parse(rule_text)
-            if not rule:
+            rule, problem = recurring.read(rule_text)
+            if problem:
+                reply = f"{problem}繰り返しは変えていません。"
+            elif not rule:
                 reply = f"「{rule_text}」を読めませんでした。「毎週月曜9時」「毎日5時」のように書いてください。"
             else:
                 t = recurring.set_rule(task["id"], rule)
@@ -226,7 +230,8 @@ def run_action(action, args, cfg):
         linked = linked_todos.describe(linked_todos.run_once(cfg, force=True))  # before Google, so new tasks go too
         result = gsync.run_once()
         reply = {"online": "同期しました。", "offline": "オフラインなので、つながったら同期します。",
-                 "disconnected": "Google に接続されていません。", "busy": "ちょうど同期中です。"}.get(
+                 "disconnected": "Google に接続されていません。", "busy": "ちょうど同期中です。",
+                 "held": f"同期を止めています（#194）。{db.get_setting('google_last_error', '')} 画面上の Google のボタンで選べます。"}.get(
             result, f"同期でエラーが出ました: {db.get_setting('google_last_error', '')}")
         if linked:
             reply += "\n" + linked

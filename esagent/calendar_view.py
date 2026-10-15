@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.parse
 
+import conversation_jobs as jobs
 import db
 import gapi
 import gauth
@@ -24,19 +25,6 @@ LONG_DAYS = 366         # all-day and multi-day events this far ahead
 SYNC_MINUTES = 15
 WRITABLE = ("owner", "writer")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS calendar_events(
-    cal_id TEXT NOT NULL,
-    event_id TEXT NOT NULL,
-    cal_name TEXT NOT NULL DEFAULT '',
-    title TEXT NOT NULL DEFAULT '',
-    start TEXT NOT NULL,
-    end TEXT NOT NULL,
-    all_day INTEGER NOT NULL DEFAULT 0,
-    location TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY(cal_id, event_id)
-);
-"""
 _lock = threading.Lock()
 
 
@@ -50,10 +38,6 @@ def _req(method, path, params=None, body=None):
 
 def _quote(value):
     return urllib.parse.quote(value, safe="")
-
-
-def _init(con):
-    con.executescript(SCHEMA)
 
 
 def ready():
@@ -102,7 +86,6 @@ def select(ids):
     ids = [i for i in ids if isinstance(i, str) and i in known]
     db.set_setting("calendar_selected", json.dumps(ids))
     with db.connect() as con:
-        _init(con)
         if ids:
             con.execute(f"DELETE FROM calendar_events WHERE cal_id NOT IN ({','.join('?' * len(ids))})", ids)
         else:
@@ -152,7 +135,6 @@ def sync():
                 if not token:
                     break
         with db.connect() as con:
-            _init(con)
             con.execute("DELETE FROM calendar_events")
             con.executemany("INSERT OR REPLACE INTO calendar_events VALUES(?, ?, ?, ?, ?, ?, ?, ?)", rows)
         db.set_setting("calendar_sync", json.dumps({"at": db.now(), "error": "", "count": len(rows)}))
@@ -162,7 +144,6 @@ def sync():
 def events(first, last):
     """Kept events that touch the days first..last (dates), in order."""
     with db.connect() as con:
-        _init(con)
         rows = con.execute("SELECT * FROM calendar_events WHERE substr(start, 1, 10) <= ? AND end >= ? "
                            "ORDER BY start, title", (last.isoformat(), first.isoformat())).fetchall()
     out = []
@@ -199,11 +180,11 @@ def add(cal_id, title, date, start_time="", end_time="", cfg=None):
     else:
         body = {"summary": title, "start": {"date": day.isoformat()}, "end": {"date": (day + dt.timedelta(days=1)).isoformat()}}
     ev = _req("POST", f"/calendars/{_quote(cal_id)}/events", None, body)
+    jobs.mark_committed()  # the event exists now, even though only a cache row is written below (#236)
     row = _row(cal, {**body, **ev, "start": ev.get("start", body["start"]), "end": ev.get("end", body["end"])},
                dt.date.today())
     if row and cal["selected"]:
         with db.connect() as con:
-            _init(con)
             con.execute("INSERT OR REPLACE INTO calendar_events VALUES(?, ?, ?, ?, ?, ?, ?, ?)", row)
     return {"id": ev.get("id"), "calendar": cal["name"], "title": title}
 
@@ -234,6 +215,13 @@ def start():
 WEEKDAYS = "月火水木金土日"
 _ASK = re.compile(r"予定|スケジュール|何が(?:ある|あった)|なにが(?:ある|あった)|空いて|あいて|埋まって")
 _Q = re.compile(r"(?:予定|スケジュール)[。！!\s]*$|[？?]|教えて|ある$|あるかな|あったっけ|だっけ|かな|どう|見せて|空いてる$|って$")
+# A request (add, remember, plan with me…) or the user telling their own plan (「遊ぶ予定なんだ」) is not a
+# schedule question, even with 「予定」 and a 「？」: it goes on to the task, advice and memory flows (#193).
+# 「明日の予定ですが…」 (の予定) still asks.
+_NOT_ASK = re.compile(r"追加|登録|入れて|タスク|覚えて|忘れないで|メモ|何から|なにから|どうすれば|どうしたら|相談|"
+                      r"立て|組(?:み|ん|も)|決め|変更|延期|ずら|消して|削除|"
+                      r"(?<!の)予定(?:なんだ|なので|なのに|だけど|だから|だよ|だった|だ(?:[。！!、,\s]|$))|"
+                      r"(?<!の)予定(?:です|でした)[。！!\s]*$")
 
 
 def span(text, today=None):
@@ -295,7 +283,7 @@ def _line(e):
 
 def answer(text):
     """The kept events for a schedule question, or None when the message is not one."""
-    if len(text) > 60 or not _ASK.search(text) or not _Q.search(text.strip()):
+    if len(text) > 60 or not _ASK.search(text) or not _Q.search(text.strip()) or _NOT_ASK.search(text):
         return None
     found = span(text)
     if not found:

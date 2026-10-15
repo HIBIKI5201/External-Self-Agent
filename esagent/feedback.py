@@ -13,27 +13,8 @@ import os
 
 import db
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS reply_feedback(
-    id INTEGER PRIMARY KEY,
-    message_id INTEGER NOT NULL UNIQUE,
-    rating INTEGER NOT NULL DEFAULT 0,
-    rewrite TEXT NOT NULL DEFAULT '',
-    reply TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    context TEXT NOT NULL,
-    model TEXT NOT NULL DEFAULT '',
-    prompt_version TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-"""
 MODEL_INTENTS = ("chat", "advise")  # replies the model wrote; the rest are built by code
 CONTEXT_TURNS = 6
-
-
-def _init(con):
-    con.executescript(SCHEMA)
 
 
 def prompt_version():
@@ -44,7 +25,6 @@ def prompt_version():
 def rate(message_id, rating=None, rewrite=None, cfg=None):
     """Save or change the rating of one assistant message. Returns the row, or None if it is not a reply."""
     with db.connect() as con:
-        _init(con)
         msg = con.execute("SELECT * FROM messages WHERE id = ? AND role = 'assistant'", (int(message_id),)).fetchone()
         if not msg:
             return None
@@ -54,6 +34,10 @@ def rate(message_id, rating=None, rewrite=None, cfg=None):
         context = [{"role": r["role"], "content": r["content"]} for r in reversed(before)]
         kind = "chat" if (msg["intent"] or "chat") in MODEL_INTENTS else "template"
         now = db.now()
+        # A rating made before /clear stopped reusing message ids (#232) can hold this id for another
+        # reply. Keep it, under a number no message will have, and start a new one for this reply.
+        con.execute("UPDATE reply_feedback SET message_id = -id WHERE message_id = ? AND reply != ?",
+                    (msg["id"], msg["content"]))
         con.execute(
             "INSERT INTO reply_feedback(message_id, rating, rewrite, reply, kind, context, model, prompt_version, "
             "created_at, updated_at) VALUES(?, 0, '', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO NOTHING",
@@ -74,21 +58,19 @@ def ratings(message_ids):
     if not ids:
         return {}
     with db.connect() as con:
-        _init(con)
-        rows = con.execute(f"SELECT message_id, rating, rewrite FROM reply_feedback WHERE message_id IN "
+        rows = con.execute(f"SELECT f.message_id, f.rating, f.rewrite FROM reply_feedback f JOIN messages m "
+                           f"ON m.id = f.message_id AND m.content = f.reply WHERE f.message_id IN "
                            f"({','.join('?' * len(ids))})", ids).fetchall()
     return {r["message_id"]: {"rating": r["rating"], "rewritten": bool(r["rewrite"])} for r in rows}
 
 
 def listing(limit=20):
     with db.connect() as con:
-        _init(con)
         return [dict(r) for r in con.execute("SELECT * FROM reply_feedback ORDER BY id DESC LIMIT ?", (limit,))]
 
 
 def delete(feedback_id):
     with db.connect() as con:
-        _init(con)
         return con.execute("DELETE FROM reply_feedback WHERE id = ?", (int(feedback_id),)).rowcount > 0
 
 
@@ -98,7 +80,6 @@ def export(include_templates=False, out_dir=None):
     os.makedirs(out_dir, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     with db.connect() as con:
-        _init(con)
         rows = [dict(r) for r in con.execute("SELECT * FROM reply_feedback ORDER BY id")]
     rows = [r for r in rows if include_templates or r["kind"] == "chat"]
     sft, dpo = [], []
