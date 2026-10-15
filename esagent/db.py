@@ -463,18 +463,20 @@ def update_task(task_id, title=None, status=None, due=None, project=None, notes_
         if (task.get("read_only") and source != "linked" and status in STATUSES and status != task["status"]
                 and "done" in (status, task["status"])):
             raise ReadOnlyTask(task)
+        # Only fields whose value changes are written: an unchanged update keeps rev and updated_at,
+        # so it neither syncs to Google again nor reorders "recently done" (#200).
         sets, args = [], []
-        if title:
+        if title and title.strip() != task["title"]:
             sets.append("title = ?"); args.append(title.strip())
-        if status in STATUSES:
+        if status in STATUSES and status != task["status"]:
             sets.append("status = ?"); args.append(status)
-        if due is not None:
+        if due is not None and valid_date(due) != (task["due"] or None):
             sets.append("due = ?"); args.append(valid_date(due))
         if project:
             p = find_project(con, project)
-            if p:
+            if p and p["id"] != task["project_id"]:
                 sets.append("project_id = ?"); args.append(p["id"])
-        if notes is not None:
+        if notes is not None and notes.strip() != (task["notes"] or ""):
             sets.append("notes = ?"); args.append(notes.strip())
         elif notes_append:
             stamp = dt.datetime.now().strftime("%m/%d %H:%M")
