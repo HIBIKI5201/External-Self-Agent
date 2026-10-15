@@ -35,3 +35,25 @@ def test_unknown_english_name_gets_only_its_word_meaning():
         assert "わからない" in r["reply"] and "調べて" in r["reply"], r["reply"]
         for word in INVENTED:
             assert word not in r["reply"], r["reply"]
+
+
+def test_outside_world_now_is_not_confirmed():
+    """#208: 「プライムセールやってんの？今。」 got 「うん、プライムセールやってるね～」."""
+    from unittest.mock import patch
+    import llm
+    with Sandbox(copy_real=False) as sb, patch.object(llm, "chat", side_effect=AssertionError("no model")):
+        r = sb.chat("ええ。プライムセールやってんの？今。 悲しい。")
+        assert r["intent"] == "outside" and "プライムセール" in r["reply"] and "確かめられない" in r["reply"], r
+        assert "やってるね" not in r["reply"] and "/claude 調べて" in r["reply"], r
+        assert "天気" in sb.chat("明日の天気どうなってる？")["reply"]
+    for text in ("セールでゲーム買った", "今日はセール品を買いに行く", "ニュース見た",
+                 "ナイトウェーブの配信のタスクを追加して", "Warframeのメンテ終わってる？"):
+        assert brain._outside_fact_flow(text) is None, text
+    assert "outside this PC" in brain.PERSONA
+
+
+@needs_llm
+def test_real_model_does_not_confirm_a_sale():
+    with Sandbox(copy_real=False) as sb:
+        r = sb.chat("ブラックフライデーって今どんな感じ？")
+        assert not any(w in r["reply"] for w in ("やってるね", "開催中", "始まってる")), r["reply"]
