@@ -79,8 +79,9 @@ class Pet:
         self.cache, self.anim, self.frame = {}, "", 0
         self.mood, self.override, self.override_until = "idle", None, 0
         self.pomo, self.last_event, self.online, self.warned_day = {}, None, True, ""
-        self.bubble = None
+        self.bubble, self.asking = None, False
         self.voice = {}
+        self.chat_on = True  # show chat replies in the bubble while the chat window is out of sight (#121)
         self.drag = None
         self._hidden = winfocus.chat_window_visible()
         self._place()
@@ -171,13 +172,15 @@ class Pet:
         self.root.after(random.randint(9000, 18000), self._fidget)
 
     # ---- speech bubble ------------------------------------------------------------------
-    def say(self, text, buttons=None, secs=None, voice=True, key=None, kind="feedback", source="pet", ukey=None):
+    def say(self, text, buttons=None, secs=None, voice=True, key=None, kind="feedback", source="pet", ukey=None,
+            record=True, on_click=None):
         if self._hidden:
             return  # the chat window owns companion speech while the desktop cat is hidden
         # Everything the cat says goes to the one utterance log (#139); an event's line carries its key
-        # so the server, other windows and the cat record it only once.
-        body = {"text": text, "kind": kind, "source": source, **({"key": ukey} if ukey else {})}
-        threading.Thread(target=lambda: self._quiet(lambda: api("/api/es/said", body)), daemon=True).start()
+        # so the server, other windows and the cat record it only once. A chat reply is already saved.
+        if record:
+            body = {"text": text, "kind": kind, "source": source, **({"key": ukey} if ukey else {})}
+            threading.Thread(target=lambda: self._quiet(lambda: api("/api/es/said", body)), daemon=True).start()
         if voice and self.voice.get("enabled"):
             self._speak(text, key)
         self._close_bubble()
@@ -201,8 +204,12 @@ class Pet:
         x = min(max(l, self.root.winfo_x() + self.w // 2 - bw // 2), r - bw)
         y = max(t, self.root.winfo_y() - bh - 2)
         b.geometry(f"+{x}+{y}")
-        b.bind("<Button-1>", lambda e: self._close_bubble())
-        self.bubble = b
+        click = (lambda e: (self._close_bubble(), on_click())) if on_click else (lambda e: self._close_bubble())
+        b.bind("<Button-1>", click)
+        for child in frame.winfo_children():
+            if isinstance(child, tk.Label):
+                child.bind("<Button-1>", click)
+        self.bubble, self.asking = b, bool(buttons)
         if not buttons:
             self.root.after(int((secs or max(4, len(text) * 0.16)) * 1000), lambda bb=b: self._close_bubble(bb))
 
@@ -221,7 +228,7 @@ class Pet:
     def _close_bubble(self, only=None):
         if self.bubble and (only is None or only is self.bubble):
             self.bubble.destroy()
-            self.bubble = None
+            self.bubble, self.asking = None, False
 
     # ---- server polling ----------------------------------------------------------------
     def _poll(self):
@@ -235,6 +242,7 @@ class Pet:
             self.online = True
             self.pomo = st["pomo"]
             self.voice = st.get("voice") or {}
+            self.chat_on = st.get("chat", True)
             self.mood = st["mood"]
             if self.last_event is None:
                 self.last_event = st["last_event"]  # don't replay what happened before we started
@@ -273,6 +281,14 @@ class Pet:
         elif kind == "break_end":
             self.say("休憩おわり。次、いく？", buttons=[("集中する", self._start), ("あとで", None)], voice=False,
                      kind="question", source="timer", ukey=ev.get("key"))
+        elif kind == "chat_reply":
+            # The chat window is closed or minimised (otherwise the cat is hidden): show what was sent and how
+            # Es answered, so a misheard voice message is noticed (#121). Reading aloud stays with the server.
+            if not self.chat_on or getattr(self, "asking", False):
+                return  # never cover a question that is waiting for a button
+            mark = "🎙 " if ev.get("via") == "voice" else ""
+            self.say(f"{mark}送信: {ev.get('said', '')}\nEs: {ev.get('reply', '')}", voice=False, record=False,
+                     secs=max(6, len(ev.get("reply", "")) * 0.2), on_click=self._open_chat)
         elif kind == "chat_events":
             lines, key = ev.get("lines") or [], f"event:{ev['id']}"
             # The server chose and recorded the line (ev["text"]); the cat shows that same line.
@@ -331,6 +347,10 @@ class Pet:
             self.root.after(0, lambda: self.say(msg, secs=3))
         threading.Thread(target=run, daemon=True).start()
 
+    def _toggle_chat(self):
+        self.chat_on = not self.chat_on
+        self._safe(lambda: api("/api/pet/chat", {"enabled": self.chat_on}))
+
     def _disable(self):
         """Same as turning the switch off in the chat window."""
         try:
@@ -358,6 +378,7 @@ class Pet:
         m.add_command(label="BGM 再生 / 一時停止（YouTube ウィンドウ）", command=self._bgm_toggle)
         if self.voice.get("enabled"):
             m.add_command(label="読み上げを止める", command=lambda: self._safe(lambda: api("/api/voice/stop", {})))
+        m.add_command(label=("✓ " if self.chat_on else "") + "会話を吹き出しに出す", command=self._toggle_chat)
         m.add_separator()
         m.add_command(label="30分かくれる", command=self._hide)
         m.add_command(label="デスクトップから消す（チャット画面の切り替えで戻せます）", command=self._disable)
