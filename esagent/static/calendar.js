@@ -27,16 +27,45 @@
     });
   }
 
-  async function load() {
+  // The 5-minute reload rebuilt the pane while the user was typing an event, so the input vanished (#250).
+  // An automatic reload only refreshes the data while a field of the pane has the focus.
+  function typing() {
+    const root = $("#cal"), el = document.activeElement;
+    return !!(root && el && el !== root && root.contains(el) && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName));
+  }
+
+  async function load(auto = false) {
     const first = gridStart(), last = new Date(first); last.setDate(first.getDate() + 41);
     try { data = await api(`/api/calendar?from=${iso(first)}&to=${iso(last)}`); }
     catch (e) { data = { ...data, error: e.message }; }
+    if (auto && typing()) { stale = true; return; }
     render();
+  }
+  let stale = false;
+
+  // What the user has typed into the add form, and whether the calendar list is open, survive a redraw.
+  function keep(root) {
+    const form = root.querySelector("#cal-add");
+    const fields = form ? Object.fromEntries(["title", "start", "end", "calendar"]
+      .map((n) => [n, form.querySelector(`[name="${n}"]`)?.value || ""])) : {};
+    return { fields, choosing: !!root.querySelector("details.cal-choose")?.open };
+  }
+
+  function restore(root, kept) {
+    const form = root.querySelector("#cal-add");
+    if (form) for (const [n, v] of Object.entries(kept.fields)) {
+      const el = form.querySelector(`[name="${n}"]`);
+      if (el && v && (n !== "calendar" || [...(el.options || [])].some((o) => o.value === v))) el.value = v;
+    }
+    const choose = root.querySelector("details.cal-choose");
+    if (choose && kept.choosing) choose.open = true;
   }
 
   function render() {
     const root = $("#cal");
     if (!root) return;
+    stale = false;
+    const kept = keep(root);
     root.classList.toggle("closed", !open);
     const head = `<div class="cal-head"><h2 id="cal-toggle"><span class="caret">▾</span> カレンダー</h2>` +
       (data.ready ? `<span class="cal-nav"><button type="button" class="ghost" data-move="-1" title="前の月">‹</button>` +
@@ -73,6 +102,7 @@
       `<details class="cal-choose"><summary>表示するカレンダー</summary>${choose}</details>` +
       (data.sync?.error ? `<p class="cal-note error">${esc(data.sync.error)}</p>` : data.sync?.at ? `<p class="cal-note">読み込み ${esc(data.sync.at.slice(5, 16).replace("T", " "))}</p>` : "") +
       (data.error ? `<p class="cal-note error">${esc(data.error)}</p>` : "") + `</div>`;
+    restore(root, kept);
     bind();
   }
 
@@ -108,5 +138,12 @@
     });
   }
 
-  window.EsCalendar = { init() { render(); load(); setInterval(load, 5 * 60 * 1000); }, reload: load };
+  window.EsCalendar = {
+    init() {
+      render(); load(); setInterval(() => load(true), 5 * 60 * 1000);
+      // A reload skipped while typing is drawn once the focus leaves the pane.
+      $("#cal")?.addEventListener("focusout", () => setTimeout(() => { if (stale && !typing()) render(); }, 0));
+    },
+    reload: load,
+  };
 })();

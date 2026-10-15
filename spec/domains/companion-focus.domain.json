@@ -5,7 +5,7 @@
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)(tests/test_pet_visibility\\.py|tests/test_pet_bubble\\.py|spec/test/pet-visibility-35\\.md)$"
+      "pathPattern": "(^|/)(tests/test_pet_visibility\\.py|tests/test_pet_bubble\\.py|tests/test_pet_events\\.py|tests/test_pet_chat\\.py|tests/test_focus_timer_rules\\.py|spec/test/pet-visibility-35\\.md)$"
     },
     {
       "pathPattern": "(^|/)esagent/pet\\.py$"

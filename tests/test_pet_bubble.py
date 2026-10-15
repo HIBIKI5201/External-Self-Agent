@@ -58,3 +58,17 @@ def test_clicking_the_bubble_text_still_closes_it_without_an_action():
             assert done == []
     finally:
         cat.root.destroy()
+
+
+def test_clicking_a_chat_bubble_opens_the_chat_once():
+    cat = _cat()
+    try:
+        with patch.object(pet, "api"), patch.object(pet, "work_area", return_value=(0, 0, 1920, 1080)):
+            opened = []
+            cat.say("送信: こんにちは\nEs: やあ", voice=False, record=False, on_click=lambda: opened.append(1))
+            bubble = cat.bubble
+            _click(_find(bubble, tk.Label))
+            assert opened == [1], opened
+            assert cat.bubble is None and not bubble.winfo_exists()
+    finally:
+        cat.root.destroy()

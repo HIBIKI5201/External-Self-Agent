@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 
 POLL = frozenset(("/api/pet", "/api/events", "/api/state", "/api/progress",
                   "/api/pomo", "/api/voice", "/api/chat/job", "/api/health"))
+# The player reports its state every 5 seconds while something plays: half the log before #209.
+POLL_POST = frozenset(("/api/playback/state",))
 ROUTES = POLL | frozenset(("/api/chat", "/api/chat/submit", "/api/chat/bypass", "/api/commands",
     "/api/tasks", "/api/calendar", "/api/calendar/connect", "/api/calendar/select", "/api/calendar/sync", "/api/calendar/add", "/api/listen/log", "/api/listen/diag", "/api/es/said", "/api/warm", "/api/feedback", "/api/voice/say", "/api/voice/test", "/api/voice/stop", "/api/focus/done",
     "/api/playback/open", "/api/playback/state", "/api/bgm/sync", "/api/bgm/window", "/api/media", "/api/bgm", "/api/mode", "/api/pet/enabled",
@@ -16,7 +18,7 @@ ROUTES = POLL | frozenset(("/api/chat", "/api/chat/submit", "/api/chat/bypass", 
     "/api/youtube/connect", "/api/youtube/playlists", "/api/youtube/items", "/api/youtube/search",
     "/api/admin/tables", "/api/admin/table", "/api/admin/config", "/api/admin/projects",
     "/api/admin/project", "/api/admin/project/draft", "/", "/index.html", "/admin",
-    "/youtube-setup", "/oauth/callback"))
+    "/youtube-setup", "/oauth/callback", "/favicon.ico"))
 INTERVAL = 300
 
 
@@ -61,9 +63,9 @@ class Traffic:
             status = int(status)
         except (ValueError, TypeError):
             status = 0
-        if method == "GET" and status == 200 and path in POLL:
+        if status == 200 and (method == "GET" and path in POLL or method == "POST" and path in POLL_POST):
             with self.lock:
-                self.counts[path] = self.counts.get(path, 0) + 1
+                self.counts[(method, path)] = self.counts.get((method, path), 0) + 1
             return
         level = logging.ERROR if status >= 500 else logging.WARNING if status >= 400 else logging.INFO
         self.logger.log(level, "HTTP %s %s %d", method, path, status)
@@ -77,7 +79,7 @@ class Traffic:
             # A delayed checkpoint cannot prove continuous coverage over a long gap.
             window = min(600, max(0, round(elapsed, 3))) if elapsed <= 600 else 0
             self.logger.info("log heartbeat window_seconds=%s", window)
-            for path, count in sorted(self.counts.items()):
-                self.logger.info("poll summary GET %s 200 count=%d window_seconds=%s", path, count, window)
+            for (method, path), count in sorted(self.counts.items()):
+                self.logger.info("poll summary %s %s 200 count=%d window_seconds=%s", method, path, count, window)
             self.counts.clear()
             self.since = now
