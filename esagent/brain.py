@@ -936,7 +936,9 @@ _ADD_HINT_RE = re.compile(r"追加|登録|まで|締め?切|〆|しなきゃ|し
                           r"面接|説明会|試験|ある$|あります|やる$|やらな|入れて|メモして|"
                           r"タスク(を|に)?(作|追加|登録|して|化)|作ろう|作って")
 _SUMMARY_RE = re.compile(r"理解|まとめ|整理|一覧|全体|把握|状況")
-_EXPLICIT_ADD_RE = re.compile(r"タスク(を|に)?(作|追加|登録|して|化)|(追加|登録)して")
+# 「入れてくれる？」「増やしてほしい」「追加しといて」 are requests as well (#178).
+_EXPLICIT_ADD_RE = re.compile(r"タスク(を|に)?(作|追加|登録|して|化|入れ|増や)|(追加|登録)(して|しといて|しておいて)|"
+                              r"(?:っ?ていう|という)タスクを")
 _CLAIM_RE = re.compile(
     r"(?:追加|登録|作成|更新|完了に|変更|分類|移動|設定|削除|選択|保存|開始|スタート)"
     r"(?:しました|します(?:ね|よ)?|しておきました|しておいた(?:よ)?|した(?:よ)?(?!ら|場合|とき|時|方|ほう)|しといた|済み)"
@@ -1020,10 +1022,33 @@ def _budget(cfg):
     return cfg.get("history_tokens", 2000)
 
 
-def _literal_add_title(text):
+# 「入れてくれる？」「増やしてほしい」「追加しといて」: the request forms of an add (#178).
+_ADD_TAIL = (r'(?:して|しといて|しておいて|て|といて|ておいて)'
+             r'(?:くれる|くれない|くれ|もらえる|もらえない|ほしい|欲しい|おいて|ください|ね|よ)?(?:[？?]|かな)?[。！!\s]*')
+_LITERAL_ADD_RE = re.compile(
+    r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?'
+    r'(?:をタスクに(?:追加|登録|入れ|し)|を(?:追加|登録)|'
+    r'(?:っ?ていう|という)タスクを\s*(?:(?P<project>[^「」『』"、。\s]{1,30}?)\s*(?:に|へ)\s*)?(?:追加|登録|入れ|増や))' + _ADD_TAIL)
+
+
+def _literal_add(text):
+    """(title, project) of an add request that says the name itself, or None. The project only when
+    the user named an existing one (「〇〇っていうタスクをWarframeに増やしてほしい」)."""
+    match = _LITERAL_ADD_RE.fullmatch(text)
+    if not match:
+        return None  # 「金曜までに頑張る」 is talk; only the request forms are added without the model
+    project = ""
+    if match["project"]:
+        project = next((p["name"] for p in db.list_projects() if p["name"] and p["name"].lower() == match["project"].lower()), "")
+        if not project:
+            return None
+    title = _literal_add_title(text, match)
+    return (title, project) if title else None
+
+
+def _literal_add_title(text, match=None):
     # 「〇〇を追加して」 too: the model once made the name 「〇〇を追加」 (#115).
-    match = re.fullmatch(r'\s*[「『"]?(?P<title>[^「」『』"\n]{1,100}?)[」』"]?(?:をタスクに(?:追加して|登録して|して|入れて)|'
-                         r'を(?:追加して|登録して))(?:おいて|ください|ね)?[。！!\s]*', text)
+    match = match or _LITERAL_ADD_RE.fullmatch(text)
     if not match:
         deadline = re.fullmatch(r"\s*(?P<date>[^。、\n]{1,60}?)までに(?P<title>[^。、\n]{1,100}?)[。！!\s]*", text)
         if not deadline or not (annotate_dates(deadline["date"], dt.date.today()) != deadline["date"] or re.search(r"\d{4}-\d{2}-\d{2}", deadline["date"])):
@@ -1115,6 +1140,14 @@ def _action_errors(actions, text, context=''):
 def _route(cfg, text, today, history):
     feedback = []
     context = _reference_context(text, history)
+    literal = _literal_add(text)
+
+    def as_literal(result):
+        # 「〇〇をタスクに入れてくれる？」: the model answered it as talk or proposed nothing to add (#178).
+        if not literal or any(a.get("type") == "add_task" for a in result[2] if isinstance(a, dict)):
+            return result
+        action = {"type": "add_task", "task_id": 0, "title": literal[0], "project": literal[1], "due": "", "notes": ""}
+        return ("add", result[1] or literal[1], [action]) if not _action_errors([action], text, context) else result
     for attempt in range(3):
         if attempt:
             _progress['detail'] = '確認して書き直し中'
@@ -1127,13 +1160,13 @@ def _route(cfg, text, today, history):
             except (ValueError, TypeError, AttributeError):
                 errors = ['指定されたJSONオブジェクト・intent・focus・actionsの形式で返してください']
         if not errors:
-            return result
+            return as_literal(result)
         available = '\n'.join(f"#{t['id']} {t['title']}" for t in db.list_tasks()) or '(なし)'
         feedback += [{'role': 'user', 'content': '検証で不合格: ' + ' / '.join(errors)
                      + '。操作はまだ実行していません。全体を修正してください。'
                      + '依頼された操作がない・対象が一覧にない場合は actions を [] にしてください。'
                      + f'\n元の依頼: {text}\n現在のタスク一覧（この番号だけを使う）:\n{available}'}]
-    return 'update', '', []  # the operation template honestly reports that nothing was applied
+    return as_literal(('update', '', []))  # the operation template honestly reports that nothing was applied
 
 
 _PRONOUN_RE = re.compile(r"それ|これ|あれ|その|この|そっち|こっち|そう(?:して|する|しよう|で|にして)")
@@ -1835,12 +1868,13 @@ NO_TARGET_NOTE = "何も変更していないよ。"
 _LOOKUP_FIELDS = (("title", r"タイトル|名前|名称"), ("due", r"締め?切|期限|期日|いつまで"),
                   ("notes", r"メモ|詳細|補足"), ("status", r"状態|ステータス|完了か|終わってるか|進み具合"))
 _LOOKUP_ASK_RE = re.compile(r"教えて|見せて|一覧|表で|表に|知りたい|確認したい|書いてある|どうなって|だっけ|[？?]|何[？?]?$")
-_WRITE_ASK_RE = re.compile(r"(?:に|へ)(?:して|変えて|変更して|延ばして|戻して|ずらして)|変更して|追記して|追加して|登録して|"
-                           r"書いて(?!ある|いる|る)|直して|残して|完了にして|消して")
+_WRITE_ASK_RE = re.compile(r"(?:(?:に|へ)(?:して|変えて|変更して|延ばして|戻して|ずらして)|変更して|追記して|追加して|登録して|"
+                           r"書いて(?!ある|いる|る)|直して|残して|完了にして|消して)(?!くれ(?:た|てた|てる))")
 _PLURAL_REF_RE = re.compile(r"それぞれ|両方|二つ|2つ|ふたつ|これら|それら|今の(?:タスク|二つ|2つ)")
 _STATUS_LABELS = {"todo": "未完了", "doing": "作業中", "delegated": "Claude Code に依頼中", "done": "完了"}
-_DID_RE = re.compile(r"(?:変え|変更し|更新し|追加し|追加され|登録し|登録され|完了にし|操作し|いじっ|書き換え)た(?![いら])"
-                     r"(?:項目|こと|もの|の|か|って|[？?\s]|$)|操作を(?:説明|教えて|振り返)|何を(?:変え|変更し|し)たの")
+_DID_RE = re.compile(r"(?:変え|変更し|更新し|追加し|追加され|登録し|登録され|完了にし|操作し|いじっ|書き換え)"
+                     r"(?:てくれ)?た(?![いら])"
+                     r"(?:項目|こと|もの|の|か|って|[？?\s]|$|(?<=てくれた)。)|操作を(?:説明|教えて|振り返)|何を(?:変え|変更し|し)たの")
 
 
 _STATE_ASK_RE = re.compile(r"どうなって|どういう状況|どんな状況|状況は|進捗|進み具合|どこまで")
@@ -1937,7 +1971,8 @@ def _action_log_flow(text, history):
 
     The model denied a change it had just made. The records (notice messages) say what ran; this
     message itself never changes anything, which the reply says separately."""
-    if not _DID_RE.search(text) or _WRITE_ASK_RE.search(text) or not re.search(r"[？?]|教えて|説明|だけ|か$|の$", text):
+    if not _DID_RE.search(text) or _WRITE_ASK_RE.search(text) or \
+            not re.search(r"[？?]|教えて|説明|だけ|か$|の$|てくれた[。！!\s]*$", text):
         return None
     done = [line for m in history[-30:] if m["role"] == "notice"
             for line in m["content"].splitlines() if line[:1] in "＋✎✔→↺"]
@@ -2113,6 +2148,46 @@ def _register_feature(cfg, wish, statements):
     return reply, events
 
 
+_DONE_ASK_RE = re.compile(
+    r"(?:(?:タスク|それ|これ|あれ|その(?:タスク|やつ|件)|あの(?:タスク|やつ|件)|さっきの(?:タスク|やつ|件)?)(?:は|も|を)?[。、,\s]*)?"
+    r"(?:もう)?(?:(?:終わった|おわった|終わりました|完了した|済んだ|すんだ|できた|出来た)(?:よ|ー|〜|わ)*|"
+    r"(?:終わった|おわった|完了|済み)(?:ことに|に)(?:して|しといて|しておいて|しといてね)(?:ください|ほしい|ね)?|"
+    r"完了(?:に)?(?:して|しといて|しておいて))[。！!\s]*")
+
+
+def _complete_recent_flow(text, history):
+    """「タスク。終わったことにしといて。」 names no task: the one just talked about is asked about
+    before it is completed (#178). Returns (reply, offer payload) or None."""
+    said = text.strip()
+    if not _DONE_ASK_RE.fullmatch(said):
+        return None
+    every = db.list_tasks(include_done=True)
+    if _named_tasks(said, every) or _numbered_tasks(said):
+        return None
+    cands = [t for t in _recent_tasks(history, every, latest=True) if t["status"] != "done"]
+    if not cands:
+        return None
+    if len(cands) > 1:
+        return _which_task(cands), None
+    task = cands[0]
+    return (f"「{task['title']}」を完了にする？「うん」かボタンで完了にするよ。まだ何も変更していないよ。",
+            {"task_id": task["id"], "title": task["title"]})
+
+
+def _finish_complete(payload):
+    task = db.get_task(payload.get("task_id", 0))
+    if not task or task["title"] != payload.get("title"):
+        return "対象のタスクが変わっているので、完了にしていないよ。タスク名で教えてね。", []
+    if task["status"] == "done":
+        return f"「{task['title']}」はもう完了になってるよ。", []
+    if task["read_only"]:
+        return db.read_only_reply(task), []
+    task = db.update_task(task["id"], status="done")
+    nxt = _next_suggestion(task.get("project_id"), task["id"])
+    tail = f"次は「{nxt['title']}」はどうですか？" if nxt else "残りのタスクはありません！"
+    return f"お疲れさまです！「{task['title']}」を完了にしておきました。{tail}", [f"✔ #{task['id']} {task['title']} を完了にしました"]
+
+
 def _choice_reply(selected, cfg, message_id=None):
     mid = message_id or db.add_message('user', selected['label'])
     _progress['message_id'] = mid
@@ -2148,6 +2223,8 @@ def _choice_reply(selected, cfg, message_id=None):
         reply, events = _finish_project_add(payload, value, cfg)
     elif kind == 'repeat_bulk' and value == 'accept':
         reply, events = repeat_chat.finish_bulk(payload)
+    elif kind == 'complete' and value == 'accept':
+        reply, events = _finish_complete(payload)
     elif kind == 'repeat_add' and value in ('accept', 'plain', 'rule'):
         reply, events = repeat_chat.finish_add(payload, value, selected.get('rule'))
     else:
@@ -2551,6 +2628,14 @@ def _chat(text, cfg, message_id=None):
             if offer:
                 choices.publish("repeat_add", offer)
             return {"reply": reply, "events": events, "handoffs": [], "intent": "repeat"}
+        recent_done = None if write_guard.analyze(annotated, db.list_tasks(include_done=True)).hold \
+            else _complete_recent_flow(text, history)
+        if recent_done:
+            reply, offer = recent_done
+            db.add_message("assistant", reply)
+            if offer:
+                choices.publish("complete", offer)
+            return {"reply": reply, "events": [], "handoffs": [], "intent": "proposal"}
         guarded = _guarded_write_flow(text, annotated, history)
         if guarded:
             reply, events = guarded

@@ -68,7 +68,7 @@
       "pathPattern": "(^|/)(tests/test_colloquial_requests\\.py|spec/test/colloquial-requests-104\\.md)$"
     },
     {
-      "pathPattern": "(^|/)(tests/test_literal_task_corrections\\.py|spec/test/literal-task-corrections-105\\.md)$"
+      "pathPattern": "(^|/)(tests/test_literal_task_corrections\\.py|tests/test_request_phrasings\\.py|spec/test/literal-task-corrections-105\\.md)$"
     },
     {
       "pathPattern": "(^|/)(tests/test_task_status_question\\.py|spec/test/task-status-question-134\\.md)$"
