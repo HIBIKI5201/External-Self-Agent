@@ -18,6 +18,7 @@ sys.path.insert(0, HERE)
 
 import admin  # noqa: E402
 import brain  # noqa: E402
+import conversation_state  # noqa: E402
 import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
@@ -34,6 +35,7 @@ import timer_chat  # noqa: E402
 import projects  # noqa: E402
 import recurring  # noqa: E402
 import skills  # noqa: E402
+import status_question  # noqa: E402
 import youtube  # noqa: E402
 import choices  # noqa: E402
 import task_context  # noqa: E402
@@ -47,7 +49,7 @@ import playback
 
 STATIC = os.path.join(HERE, "static")
 CFG = db.load_config()
-brain._status_cfg = CFG
+conversation_state.configure(CFG)
 log = logging.getLogger("esagent")
 traffic = runtime_log.Traffic(log)
 
@@ -76,7 +78,7 @@ def state():
 
 def pet_state():
     """What the desktop cat should look like right now."""
-    prog = brain.progress()
+    prog = conversation_state.snapshot()
     pomo = pomodoro.state(CFG)
     llm_ok = llm.status(CFG).get("model", False)
     overdue = db.first_overdue(db.now()[:10])
@@ -258,10 +260,10 @@ GET = _table({
     "/api/voice": Route(lambda q: voice.status(CFG)),
     "/api/events": Route(_events),
     "/api/pet": Route(lambda q: pet_state()),
-    "/api/progress": Route(lambda q: brain.progress()),
+    "/api/progress": Route(lambda q: conversation_state.snapshot()),
     # messages the window sends without queueing (#23)
-    "/api/chat/bypass": Route(lambda q: {"pattern": brain._STATUS_RE.pattern,
-                                                    "exclude": f"{brain._TASK_REF_RE.pattern}|{timer_chat.TIMER_TEXT}"}),
+    "/api/chat/bypass": Route(lambda q: {"pattern": status_question._STATUS_RE.pattern,
+                                         "exclude": f"{status_question._TASK_REF_RE.pattern}|{timer_chat.TIMER_TEXT}"}),
     "/api/commands": Route(lambda q: skills.catalog()),
     "/api/admin/tables": Route(lambda q: {"tables": admin.tables(), "db": db.DB_PATH}),
     "/api/admin/table": Route(_admin_table),

@@ -2,6 +2,7 @@
 from unittest.mock import patch
 from support import Sandbox
 import brain
+import conversation_state
 import db
 import pomodoro
 import skills
@@ -107,11 +108,11 @@ def test_completed_focus_selection_is_not_automatically_reexecuted():
 
 def test_progress_does_not_show_generated_records_or_operation_claims():
     brain._partial("応援しているよ。\n記録: ＋ #9 架空\n選択しておきました。")
-    assert brain._progress["partial"].strip() == "応援しているよ。"
+    assert conversation_state.partial().strip() == "応援しているよ。"
     brain._partial("応援しているよ。（記録: ・ #9 未完")
-    assert brain._progress["partial"] == "応援しているよ。"
-    assert not brain._RECORD_RE.search(brain._progress["partial"])
-    brain._progress["partial"] = ""
+    assert conversation_state.partial() == "応援しているよ。"
+    assert not brain._RECORD_RE.search(conversation_state.partial())
+    conversation_state.set_partial("")
 
 
 def test_game_requires_ending_before_focus_operation():

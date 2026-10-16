@@ -5,6 +5,7 @@ import time
 from unittest.mock import patch
 
 import brain
+import conversation_state
 import db
 import llm
 from markers import needs_llm
@@ -59,12 +60,11 @@ def test_status_question_is_not_blocked_by_a_running_reply():
         release = threading.Event()
 
         def long_reply():
-            with brain._lock:
-                brain._stage("返事を考え中")
-                brain._progress["text"] = "長い相談"
+            with conversation_state.running("返事を考え中"):
+                conversation_state.begin_message("長い相談", None)
                 held.set()
                 release.wait(10)
-                brain._stage(None)
+                conversation_state.end_message()
         th = threading.Thread(target=long_reply)
         th.start()
         held.wait(5)
