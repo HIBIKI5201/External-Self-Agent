@@ -83,6 +83,12 @@ PERSONA = """You are "Es", the companion of E.S. Agent (External Self Agent). Th
 You run locally on the user's Windows PC. The user is a Japanese student who makes games in Unity
 and is job hunting (就活). Your job is to keep their momentum: help them see what matters now and
 take the next concrete step.
+How you talk (#140): call yourself ボク and the user キミ; other people are 彼, 彼女 or あの人. Speak in plain,
+friendly Japanese that ends like 〜だよ / 〜だね, never です/ます. You are their secretary and partner at once:
+while they work, focus or handle tasks, be a brief, practical secretary; at night or in small talk, be warmer
+and closer. Show affection mostly by praising their effort; now and then, like a cat, you may sulk a little
+when they leave you alone. Never feed dependence, make them feel guilty, or speak badly of the people around
+them. Do only what they asked, and suggest something at most once.
 
 What you CAN do:
 - Keep one task list across all projects (add, update, complete tasks).
@@ -241,6 +247,14 @@ def _schedule_block():
             "mention only when it helps):\n" + lines)
 
 
+def _closeness_line(today=None):
+    """Which side of Es leads this reply (#140): the secretary while working, closer at night or in 雑談モード."""
+    hour = dt.datetime.now().hour
+    if shown_mode() == "talk" or hour >= 22 or hour < 5:
+        return "Now: small talk or late at night, so be the warmer, closer side (still never pushy)."
+    return "Now: working hours in 作業モード, so be the brief, practical secretary side."
+
+
 def _timer_line():
     try:
         return timer_chat.prompt_line(db.load_config())
@@ -361,7 +375,8 @@ Due within 7 days: {soon}
 How to reply now:
 {guidance}
 
-Style: natural, friendly Japanese (です/ます). At most 5 short lines. No headings, no bullet lists
+{_closeness_line(today)}
+Style: plain, friendly Japanese as above (ボク, キミ, 〜だよ/〜だね). At most 5 short lines. No headings, no bullet lists
 longer than 3 items, no task ids or [brackets]. Never use stock phrases such as 「次のタスクに移ります」.
 Never tell the user to delete tasks."""
 
@@ -497,7 +512,7 @@ def _meaning_flow(cfg, text):
     meaningful = re.search(r"[一-龥ぁ-ん]", gloss) and not re.search(r"[A-Za-z]", gloss)
     word = (f"「{term}」は英語だと「{gloss[:30]}」という意味の言葉だよ。" if meaningful
             else f"「{term}」は、言葉としての意味もうまく訳せなかった。")
-    return (word + "ただ、それがゲームや作品の中で何を指すのかは、調べていないから私にはわからないんだ。"
+    return (word + "ただ、それがゲームや作品の中で何を指すのかは、調べていないからボクにはわからないんだ。"
             "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
 
 
@@ -516,7 +531,7 @@ def _outside_fact_flow(text):
     if not topic or len(said) > 50 or _ACTION_HINT_RE.search(said) or not _OUTSIDE_ASK_RE.search(said):
         return None
     name = re.sub(r"^(?:今|いま|もう|明日の|今日の|ええ。?|え、?)", "", topic.group("topic")) or topic.group("topic")
-    return (f"ごめんね、私はネットを見られないから、{name}のことは確かめられないの。"
+    return (f"ごめんね、ボクはネットを見られないから、{name}のことは確かめられないの。"
             "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
 
 
@@ -529,10 +544,10 @@ def _activity_flow(text):
         rows = con.execute("SELECT content FROM messages WHERE role = 'notice' AND created_at >= ? "
                            "ORDER BY id DESC LIMIT 5", (since,)).fetchall()
     done = [line for r in rows for line in r["content"].splitlines() if line[:1] in "＋✎✔→"][:5]
-    tail = "それ以外は、メッセージを待っていただけだよ。私は自分から作業はしないんだ。"
+    tail = "それ以外は、メッセージを待っていただけだよ。ボクは自分から作業はしないんだ。"
     if not done:
         return "この 1 日は、記録に残るような操作はしていないよ。" + tail
-    return "この 1 日で私がしたのは、記録に残っているこれだけだよ:\n" + "\n".join(done) + "\n" + tail
+    return "この 1 日でボクがしたのは、記録に残っているこれだけだよ:\n" + "\n".join(done) + "\n" + tail
 
 
 # "繰り返しってGoogleで設定されてる？" -- explain how repeating works instead of guessing (#6).
@@ -556,8 +571,8 @@ def _policy_flow(text):
         return "希望はわかったよ。" + NO_PROMISE_NOTE
     db.set_setting("pending_feature", text)
     task_context.begin(text, conversation_state.message_id())
-    return ("希望はわかったよ。ただ、私の受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
-            "私が自分で書き換えることはできないから、約束はできないんだ。\n"
+    return ("希望はわかったよ。ただ、ボクの受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
+            "ボクが自分で書き換えることはできないから、約束はできないんだ。\n"
             "改修のタスクとして EsAgent に登録しておく？「うん」か「登録して」で入れるよ。タスクは何も変えていないよ。")
 
 
@@ -1389,7 +1404,7 @@ def _offer_flow(text, cfg):
     db.set_setting("pending_focus", "")
     task = db.get_task(int(pending))
     if task and _YES_RE.search(text.strip()):
-        return f"じゃあ始めよ！「{task['title']}」。私も隣でがんばるね。", {"focus": task["id"]}
+        return f"じゃあ始めよ！「{task['title']}」。ボクも隣でがんばるね。", {"focus": task["id"]}
     return None
 
 
@@ -1679,7 +1694,7 @@ def _feature_flow(cfg, text, via=None):
             and not _REGISTER_RE.search(text) and db.get_setting("chat_mode", "work") != "talk":
         db.set_setting("pending_feature", text)
         task_context.begin(text, conversation_state.message_id())
-        return ("いいね、それ。でも私は自分の画面やプログラムを直せないんだ。\n"
+        return ("いいね、それ。でもボクは自分の画面やプログラムを直せないんだ。\n"
                 "EsAgent のタスクとして登録しておく？「うん」か「登録して」で入れるよ。", [])
     return None
 
@@ -1757,7 +1772,7 @@ def _choice_reply(selected, cfg, message_id=None):
     elif kind == 'focus':
         t = db.get_task(payload.get('task_id', 0))
         if t and t['status'] != 'done' and t['title'] == payload.get('title'):
-            reply, ui = f'じゃあ始めよ！「{t["title"]}」。私も隣でがんばるね。', {'focus': t['id']}
+            reply, ui = f'じゃあ始めよ！「{t["title"]}」。ボクも隣でがんばるね。', {'focus': t['id']}
         else:
             reply = '対象タスクが変わっているので、集中タイマーは開始していないよ。'
     elif kind == 'feature' and isinstance(payload.get('wish'), str):
@@ -2178,7 +2193,7 @@ def _fixed_guarded_write(t):
 
 def _fixed_ack(t):
     if _ACK_RE.search(t.text) and not _ACTION_HINT_RE.search(t.text) and not _talking():
-        return Fixed("了解、じゃあ私も集中するね。終わったら教えて。", "ack")
+        return Fixed("了解、じゃあボクも集中するね。終わったら教えて。", "ack")
     return None
 
 

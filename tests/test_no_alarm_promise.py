@@ -19,7 +19,7 @@ def test_wake_up_request_gets_no_promise_and_no_model_call():
     with Sandbox(copy_real=False) as sb:
         with patch.object(llm, "chat", side_effect=AssertionError("no model")):
             r = sb.chat("えこ、 7時半に起こして。")
-        assert "機能は、まだ私にはない" in r["reply"] and "7時半" in r["reply"], r
+        assert "機能は、まだボクにはない" in r["reply"] and "7時半" in r["reply"], r
         assert "起こしてあげる" not in r["reply"] and brain.NO_CHANGE_NOTE not in r["reply"], r
 
 
@@ -33,4 +33,4 @@ def test_model_promise_to_wake_is_removed():
         with patch.object(llm, "chat", side_effect=lambda cfg, m, schema=None, **k:
                           route if schema else "いいね！明日は10時にお知らせするね。"):
             r = sb.chat("明日のことを話そう")
-        assert "お知らせするね" not in r["reply"] and "機能は、まだ私にはない" in r["reply"], r
+        assert "お知らせするね" not in r["reply"] and "機能は、まだボクにはない" in r["reply"], r

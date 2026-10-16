@@ -70,7 +70,7 @@ def test_explicit_end_switch_restart_and_exhaustion():
         saved = game.state()
         assert json.loads(db.get_setting("conversation_game")) == saved
         game.save({**saved, "next": "を"})
-        assert "私の負け" in game._answer(game.state()) and not game.state()
+        assert "ボクの負け" in game._answer(game.state()) and not game.state()
         assert not db.list_tasks()
 
 
@@ -92,12 +92,12 @@ def test_everyday_start_phrasings_keep_the_state():
         r = sb.chat("しりとりしよう、りから始めて")
         assert game.state()["used"][0].startswith("り") and game.state()["turn"] == "user", r
         r = sb.chat("しりとりしよう。俺からね")
-        assert "あなたから" in r["reply"] and game.state()["turn"] == "user" and game.state()["next"] == "", r
+        assert "キミから" in r["reply"] and game.state()["turn"] == "user" and game.state()["next"] == "", r
         r = sb.chat("リンゴ")
         assert r["intent"] == "game" and game.state()["turn"] == "user" and len(game.state()["used"]) == 2, r
         # The logged conversation: the user hands the turn over, Es answers with a word.
         r = sb.chat("俺が回答したら、次は君がしゃべるんだよ。")
-        assert "今はあなたの番" in r["reply"], r
+        assert "今はキミの番" in r["reply"], r
     for text in ("しりとりしてたの忘れた。", "しりとりはしない", "しりとりのルールって何？"):
         assert game.start(text) is None, text
 
