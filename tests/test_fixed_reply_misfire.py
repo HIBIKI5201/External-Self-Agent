@@ -16,7 +16,7 @@ def model(reply="うんうん。"):
 
 def test_small_talk_does_not_hit_fixed_replies():
     with Sandbox(copy_real=False) as sb:
-        for text, fixed in (("人間が寝てる時にやってるような感じでさ", "私も集中する"),
+        for text, fixed in (("人間が寝てる時にやってるような感じでさ", "ボクも集中する"),
                             ("自分でしゃべるけどね、これ", "自分で進める"),
                             ("ゾーラっていう名前のアビリティを使ってるよ", "まだ聞いてない"),
                             ("記憶ってすごいね", "/remember"),
@@ -31,7 +31,7 @@ def test_the_real_targets_still_work():
     with Sandbox(copy_real=False) as sb:
         db.add_task("合成の資料")
         with patch.object(llm, "chat", side_effect=AssertionError("no model")):
-            assert "私も集中する" in sb.chat("もう始めてるよ")["reply"]
+            assert "ボクも集中する" in sb.chat("もう始めてるよ")["reply"]
             assert "自分で進める" in sb.chat("資料は自分で直すね")["reply"]
             assert "まだ聞いてない" in sb.chat("前の合言葉は何だっけ？")["reply"]
             assert "/remember" in sb.chat("記憶の仕組みはどうなってるの？")["reply"]
@@ -40,7 +40,7 @@ def test_the_real_targets_still_work():
 def test_talk_mode_leaves_non_operation_replies_to_the_conversation():
     with Sandbox(copy_real=False, mode="talk") as sb:
         db.add_task("合成の資料")
-        for text, fixed in (("もう始めてるよ", "私も集中する"), ("資料は自分で直すね", "自分で進める"),
+        for text, fixed in (("もう始めてるよ", "ボクも集中する"), ("資料は自分で直すね", "自分で進める"),
                             ("勝手に話題を変更しないでほしい", "改修のタスク")):
             with model() as chat:
                 r = sb.chat(text)

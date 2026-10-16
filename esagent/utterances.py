@@ -14,7 +14,7 @@ import threading
 
 import db
 
-SOURCES = ("pet", "window", "timer", "task", "bgm", "clock", "system")
+SOURCES = ("pet", "window", "timer", "task", "bgm", "clock", "care", "system")
 # notice: told something / question: asked something / murmur: a meow or a one-word reaction /
 # feedback: the result of a button the user pressed in that window.
 KINDS = ("notice", "question", "murmur", "feedback")
@@ -61,7 +61,8 @@ def reaction(lines):
 
 
 WHERE = {"pet": "デスクトップの猫", "window": "チャット画面の猫", "timer": "集中タイマー", "task": "タスク完了",
-         "bgm": "BGM", "clock": "時刻のあいさつ", "system": "お知らせ"}
+         "bgm": "BGM", "clock": "時刻のあいさつ",
+         "care": "気づかいのひと言", "system": "お知らせ"}
 NOTE_HEAD = "参考（返事の手本ではない。この形式や言葉を返事に写さない）: Es はこの間に自分から次のことを言った。"
 
 

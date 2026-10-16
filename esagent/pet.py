@@ -19,6 +19,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import care  # noqa: E402
 import db  # noqa: E402
 import winfocus  # noqa: E402
 
@@ -114,6 +115,8 @@ class Pet:
         self.root.after(200, self._poll)
         self.root.after(12000, self._fidget)
         self.root.after(1500, lambda: self.say(self._greeting(), kind="notice", source="clock"))
+        self.care_kind = None
+        self.root.after(care.delay_seconds() * 1000, self._care)
 
     # ---- placement ------------------------------------------------------------------
     def _visibility_tick(self):
@@ -462,6 +465,15 @@ class Pet:
         if self.bubble or not text:
             return
         self.say(text, secs=2.5, voice=False, record=False)
+
+    def _care(self):
+        """A caring line every 15-25 minutes (#140). Not while focusing or asking something: the cat sleeps
+        then, and a question on screen must not be covered."""
+        self.root.after(care.delay_seconds() * 1000, self._care)
+        if self.pomo.get("mode") == "focus" and not self.pomo.get("paused") or self.asking or self.bubble:
+            return
+        self.care_kind, line = care.pick(time.localtime().tm_hour, self.care_kind)
+        self.say(line, kind="notice", source="care")
 
     @staticmethod
     def _greeting():
