@@ -23,6 +23,20 @@ import db  # noqa: E402
 REAL_DB = db.DB_PATH
 
 
+class SkipModule(Exception):
+    """Raised at import time by a test module that cannot run here; tests/run.py counts it as skipped."""
+
+
+def require_windows():
+    """Call at the top of a test module that needs tkinter or the Windows API (pet.py, winfocus.py)."""
+    if sys.platform != "win32":
+        raise SkipModule("Windows のみ")
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        raise SkipModule("tkinter がない")
+
+
 def ollama_ready(cfg=None):
     cfg = cfg or db.load_config()
     try:
@@ -74,6 +88,7 @@ class Sandbox:
         import handoff
         import llm
         handoff.HANDOFF_DIR = os.path.join(self.dir, "handoffs")
+        llm._STATUS.clear()  # the model's state as another test's fake Ollama answered it
         self._patches = [(gsync, "run_once", gsync.run_once), (gapi, "request", gapi.request),
                          (llm, "_post", llm._post), (llm, "chat_tools", llm.chat_tools), (gsync, "_req", gsync._req), (gsync, "_paged", gsync._paged)]
         self.sync_once = gsync.run_once      # the real sync, for tests that use FakeTasks
@@ -124,10 +139,12 @@ class Sandbox:
 class FakeTasks:
     """In-memory Google Tasks API, wired in place of gsync._req / gsync._paged."""
 
-    def __init__(self):
+    def __init__(self, account="L0"):
+        # The default list's id stands for the Google account (#194): FakeTasks("B") is another account.
         self.n = itertools.count(1)
-        self.lists = {"L0": {"id": "L0", "title": "マイタスク"}}
-        self.tasks = {"L0": {}}
+        self.default = account
+        self.lists = {account: {"id": account, "title": "マイタスク"}}
+        self.tasks = {account: {}}
         self.offline = False
 
     def stamp(self):
@@ -142,7 +159,7 @@ class FakeTasks:
         if path == "/users/@me/lists" and method == "GET":
             return {"items": list(self.lists.values())}
         if path == "/users/@me/lists/@default":
-            return self.lists["L0"]
+            return self.lists[self.default]
         if path == "/users/@me/lists" and method == "POST":
             i = f"L{next(self.n)}"
             self.lists[i] = {"id": i, "title": body["title"]}

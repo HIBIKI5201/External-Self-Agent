@@ -2,7 +2,9 @@
 
 Every tests/test_*.py module may define functions named test_*. A function marked with
 @needs_llm needs Ollama with the configured model; those are skipped with --offline (CI) or
-when Ollama is not ready. Exit code is non-zero if anything fails.
+when Ollama is not ready. A module that raises support.SkipModule on import (Windows-only
+tests on Linux) is skipped; any other import error counts as one failure and the run goes on.
+Exit code is non-zero if anything fails.
 """
 import importlib
 import os
@@ -26,7 +28,19 @@ def main():
     for fname in sorted(os.listdir(HERE)):
         if not (fname.startswith("test_") and fname.endswith(".py")):
             continue
-        mod = importlib.import_module(fname[:-3])
+        try:
+            mod = importlib.import_module(fname[:-3])
+        except support.SkipModule as e:
+            skipped += 1
+            print(f"  -  {fname[:-3]}（{e}のためスキップ）")
+            continue
+        except Exception as e:
+            if args and not any(a in fname[:-3] for a in args):
+                continue
+            failed += 1
+            print(f"  ❌ {fname[:-3]}: 読み込めない: {e!r}")
+            traceback.print_exc()
+            continue
         for name in sorted(n for n in dir(mod) if n.startswith("test_")):
             fn = getattr(mod, name)
             label = f"{fname[:-3]}.{name}"
@@ -46,6 +60,9 @@ def main():
                 fn()
                 passed += 1
                 print(f"  ✅ {label}  {time.time() - start:.1f}s")
+            except support.SkipModule as e:
+                skipped += 1
+                print(f"  -  {label}（{e}のためスキップ）")
             except Exception as e:
                 failed += 1
                 print(f"  ❌ {label}: {e}")

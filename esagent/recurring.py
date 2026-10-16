@@ -10,23 +10,64 @@ import re
 import db
 
 WEEKDAYS = "月火水木金土日"
-_RULE_RE = re.compile(
-    r"毎日\s*(?P<dh>\d{1,2})\s*(?:時|:)\s*(?P<dm>\d{2})?|"
-    r"毎週\s*(?P<wd>[月火水木金土日])曜?日?\s*(?:の)?\s*(?:(?P<wh>\d{1,2})\s*(?:時|:)\s*(?P<wm>\d{2})?)?")
+# 「午後9時」「朝9時」「9時半」「9時15分」「21:30」 (#196). The time is optional here so that a day
+# without one (「毎週月曜」) is found and asked about instead of being saved as 0:00.
+_TIME = (r"(?P<ap>午前|午後|朝|昼|夕方|夜|深夜)?\s*(?:(?P<h>\d{1,2})\s*(?:時|:)\s*"
+         r"(?:(?P<half>半)|(?P<m>\d{1,2})\s*分?)?)?")
+_RULE_RE = re.compile(r"(?:毎日|毎週\s*(?P<wd>[月火水木金土日])曜?日?)\s*(?:の|に)?\s*" + _TIME)
+_LEFT_RE = re.compile(r"\s*(?:\d+\s*(?:時|:|分)?|半|:)")
+_PM = {"午後": range(1, 12), "夕方": range(1, 12), "昼": range(1, 6), "夜": range(6, 12)}
+ASK_TIME = "何時にリセットするか教えてね（例: 毎週月曜9時、毎日午後9時半）。"
+
+
+def read(text):
+    """(rule, problem): 'weekly 0 21:00' or 'daily 05:30', and why nothing was read (#196).
+
+    problem is None when the text names no period at all. Otherwise it is a sentence to show:
+    no time (Es does not pick one, #135), or a part that could not be read as a time."""
+    m = find(text)
+    return _read_match(_untagged(text), m) if m else (None, None)
+
+
+def _untagged(text):
+    return re.sub(r"\(=\d{4}-\d{2}-\d{2}\)", "", text or "")  # drop brain.annotate_dates tags
+
+
+def find(text):
+    """The part of the (date-tag free) text that sets a period, skipping a bare 「毎日」."""
+    text = _untagged(text)
+    return next((m for m in _RULE_RE.finditer(text) if _read_match(text, m) != (None, None)), None)
+
+
+def _read_match(text, m):
+    left = _LEFT_RE.match(text, m.end())
+    if left:  # 「毎週月曜の朝」「毎日5時半30分」: something time-like that was not read
+        return None, f"「{text[m.start():left.end()].strip()}」を時刻として読めなかったよ。「午後9時半」「21:30」のように教えてね。"
+    if m.group("h") is None:
+        if m.group("ap"):
+            return None, f"「{m.group(0).strip()}」を時刻として読めなかったよ。「午後9時半」「21:30」のように教えてね。"
+        # A bare 「毎日」 is everyday speech (「毎日やってる」), not a period being set.
+        return None, ASK_TIME if m.group("wd") else None
+    hour, minute = int(m.group("h")), 30 if m.group("half") else int(m.group("m") or 0)
+    ap = m.group("ap")
+    if ap in _PM and hour in _PM[ap]:
+        hour += 12
+    elif ap in ("午前", "夜", "深夜") and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59 or (ap in ("午前", "朝") and hour > 12):
+        return None, f"「{m.group(0).strip()}」は時刻にできないよ。0〜23時・0〜59分で指定してね。"
+    when = f"{hour:02d}:{minute:02d}"
+    return (f"weekly {WEEKDAYS.index(m.group('wd'))} {when}" if m.group("wd") else f"daily {when}"), None
+
+
+def mentioned(text):
+    """True when the text sets a period, readable or not (「毎週月曜」 without a time counts)."""
+    return read(text) != (None, None)
 
 
 def parse(text):
-    """'毎週月曜9時' -> 'weekly 0 09:00', '毎日5時' -> 'daily 05:00', else None."""
-    text = re.sub(r"\(=\d{4}-\d{2}-\d{2}\)", "", text or "")  # drop brain.annotate_dates tags
-    m = _RULE_RE.search(text)
-    if not m:
-        return None
-    if m.group("dh"):
-        rule = f"daily {int(m.group('dh')):02d}:{int(m.group('dm') or 0):02d}"
-        return rule if valid_rule(rule) else None
-    hour = int(m.group("wh") or 0)
-    rule = f"weekly {WEEKDAYS.index(m.group('wd'))} {hour:02d}:{int(m.group('wm') or 0):02d}"
-    return rule if valid_rule(rule) else None
+    """'毎週月曜の午後9時' -> 'weekly 0 21:00', '毎日5時半' -> 'daily 05:30', else None (see read)."""
+    return read(text)[0]
 
 
 def valid_rule(rule):

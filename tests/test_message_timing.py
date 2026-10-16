@@ -4,6 +4,7 @@ import threading
 from unittest.mock import patch
 
 import brain
+import conversation_state
 import db
 import llm
 import skills
@@ -70,7 +71,7 @@ def test_skill_processing_start_is_after_lock_wait():
         with patch.object(skills, 'load', return_value={'synthetic': skill}), \
                 patch.object(skills, '_procedure', return_value=('done', skills._Run(sb.cfg))), \
                 patch.object(db, 'add_message', added):
-            with brain._lock:
+            with conversation_state.lock:
                 worker = threading.Thread(target=lambda: skills.run('/synthetic', sb.cfg))
                 worker.start()
                 assert entered.wait(3)

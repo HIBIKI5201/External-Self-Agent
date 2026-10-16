@@ -59,3 +59,46 @@ def test_warm_loads_once_and_status_tells_it():
     finally:
         llm._WARM.clear(); llm._WARM.update(saved)
         server.shutdown(); server.server_close()
+
+
+def test_status_asks_ollama_at_most_once_per_ttl():
+    """#241: the cat polls every second and each poll asked Ollama twice (/api/tags and /api/ps)."""
+    server = HTTPServer(("127.0.0.1", 0), FakeOllama)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    cfg = {"ollama_url": f"http://127.0.0.1:{server.server_port}", "model": "qwen3:8b"}
+    saved_ttl = llm.STATUS_TTL
+    try:
+        llm._STATUS.clear()
+        FakeOllama.loaded, FakeOllama.calls = True, []
+        answers = [llm.status(cfg) for _ in range(10)]
+        assert len(FakeOllama.calls) == 2, FakeOllama.calls
+        assert all(a == {"ollama": True, "model": True, "name": "qwen3:8b", "loaded": True, "warming": False}
+                   for a in answers), answers
+        answers[0]["model"] = False  # a caller changing its copy does not change the next answer
+        assert llm.status(cfg)["model"] is True
+        assert llm.status(dict(cfg, model="other:1b"))["model"] is False  # another model is asked anew
+        llm.STATUS_TTL = 0
+        llm.status(cfg)
+        assert len(FakeOllama.calls) == 5, FakeOllama.calls
+    finally:
+        llm.STATUS_TTL = saved_ttl
+        llm._STATUS.clear()
+        server.shutdown(); server.server_close()
+
+
+def test_cat_finds_the_oldest_overdue_task_without_listing_all():
+    from support import Sandbox
+    import db
+    with Sandbox(copy_real=False):
+        today = db.now()[:10]
+        assert db.first_overdue(today) == ""
+        db.add_task("締切なし")
+        db.add_task("先の締切", due="2999-01-01")
+        db.add_task("昨日の締切", due="2000-01-02")
+        done = db.add_task("済んだ締切", due="1999-01-01")
+        db.update_task(done["id"], status="done")
+        db.add_task("一番古い締切", due="2000-01-01")
+        assert db.first_overdue(today) == "一番古い締切"
+        import server
+        assert server.pet_state()["overdue"] == "一番古い締切"

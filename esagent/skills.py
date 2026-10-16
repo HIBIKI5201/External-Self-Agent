@@ -28,12 +28,15 @@ import re
 
 import actions
 import brain
+import conversation_state
+import dates
 import db
 import conversation_jobs as jobs
 import llm
 import projects
 import choices
 import task_context
+import task_targets
 import write_guard
 
 SKILLS_DIR = os.path.join(db.ROOT, "skills")
@@ -229,8 +232,14 @@ class _Run:
             for t in tasks) or "(未完了タスクなし)"
 
     def t_recently_done(self, limit=10):
-        return "\n".join(f"#{t['id']} {t['title']} (完了 {t['updated_at'][:10]})"
-                         for t in db.recently_done(int(limit))) or "(なし)"
+        # Code counts today's completions from done_at; the model only reads the line (#253).
+        today = dt.date.today().isoformat()
+        done = db.done_on(today)
+        head = f"今日（{today}）完了したタスク: {len(done)} 件" + "".join(f"\n- #{t['id']} {t['title']}" for t in done)
+        ids = {t["id"] for t in done}
+        recent = [t for t in db.recently_done(int(limit)) if t["id"] not in ids]
+        return head + ("\n最近の完了:\n" + "\n".join(
+            f"#{t['id']} {t['title']} (完了 {(t['done_at'] or t['updated_at'])[:10]})" for t in recent) if recent else "")
 
     def t_get_task(self, task_id):
         t = db.get_task(int(task_id))
@@ -244,7 +253,7 @@ class _Run:
             return self._reject(err)
         if not title.strip():
             return self._reject('タイトルが空です。具体的な内容を指定してください')
-        dup = brain._duplicate_of(title)
+        dup = task_targets._duplicate_of(title)
         if dup:
             return f"#{dup['id']}「{dup['title']}」が既にあるので追加しませんでした"
         t = db.add_task(title, project=project or None, due=due, notes=notes)
@@ -322,7 +331,7 @@ In the reply, never show task ids, # numbers, [brackets] or memo text; just the 
 
 Today is {today.isoformat()} ({brain.WEEKDAYS[today.weekday()]}), now {dt.datetime.now():%H:%M}.
 Calendar:
-{brain._calendar(today)}
+{dates._calendar(today)}
 
 Things the user asked you to remember:
 {memories}
@@ -370,7 +379,7 @@ def _steps(cfg, messages, tools, run):
                     a = json.loads(a)
                 except json.JSONDecodeError:
                     a = {'invalid_json': True}
-            brain._progress["detail"] = _TOOL_LABELS.get(name, name)
+            conversation_state.set_detail(_TOOL_LABELS.get(name, name))
             result = run.call(name, a)
             if run.error:
                 rejected.append(run.error)
@@ -383,7 +392,7 @@ def _steps(cfg, messages, tools, run):
                 if run.events:
                     reply += '\n完了した操作は下の記録を確認してください。'
                 break
-            brain._progress['detail'] = '確認して書き直し中'
+            conversation_state.set_detail('確認して書き直し中')
     else:
         # Out of steps: write the reply from what has been gathered so far rather than failing.
         messages.append({"role": "user", "content": "ここまでの結果をもとに、ユーザーへの返事を書いてください。"})
@@ -430,16 +439,13 @@ def _run(text, cfg, message_id=None, timing=None):
 
     if skill.get("action"):
         if skill["action"] == "next":  # uses the model, so share the chat's lock and progress
-            with brain._lock:
+            with conversation_state.running("次にやることを考え中"):
                 timing["started_at"] = db.now()
-                brain._stage("次にやることを考え中")
                 try:
                     reply, handoffs = actions.run_action(skill["action"], args, cfg)
                 except llm.LLMError:
                     db.set_message_status(message_id, "pending")
                     return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": brain.PENDING_NOTE}
-                finally:
-                    brain._stage(None)
         else:
             reply, handoffs = actions.run_action(skill["action"], args, cfg)
         if reply is None:
@@ -451,9 +457,8 @@ def _run(text, cfg, message_id=None, timing=None):
     if skill.get("save-args") == "memory" and args.strip():
         memo = f"{dt.date.today().isoformat()}: {args.strip()}"
         saved.append(f"・ 覚えました（#{db.add_memory(memo)}）: {memo}")
-    with brain._lock:
+    with conversation_state.running(f"/{skill['name']} を実行中"):
         timing["started_at"] = db.now()
-        brain._stage(f"/{skill['name']} を実行中")
         try:
             reply, r = _procedure(skill, args.strip(), cfg, message_id)
             r.events[:0] = saved
@@ -462,14 +467,14 @@ def _run(text, cfg, message_id=None, timing=None):
             done = saved + (r.events if r else [])
             if not brain.changed(done, r.handoffs if r else ()) and not (r and r.ui):
                 db.set_message_status(message_id, "pending")  # nothing changed yet: safe to run later
-                return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": brain.PENDING_NOTE}
+                return {"reply": "", "events": [], "handoffs": [], "pending": True, "note": brain.PENDING_NOTE,
+                        "error": str(e)}  # said as it is by a queued request (#190)
             # Part of the steps already changed tasks; running the skill again would repeat them (#95).
-            db.add_message("assistant", brain.PARTIAL_NOTE)
+            note = brain.partial_note(e)
+            db.add_message("assistant", note)
             db.add_message("notice", "\n".join(done))
-            return {"reply": brain.PARTIAL_NOTE, "events": done, "handoffs": r.handoffs if r else [],
+            return {"reply": note, "events": done, "handoffs": r.handoffs if r else [],
                     "ui": r.ui if r else {}, "intent": "skill", "partial": True}
-        finally:
-            brain._stage(None)
     reply = brain.clean_model_reply(reply, r.events)
     if "タイマー" in reply and not db.get_setting("pending_focus"):
         # The model often asks "集中タイマー始めよっか？" without calling offer_focus: register
@@ -499,7 +504,7 @@ _BUILTIN = {
    1つ目のタスクで offer_focus を呼び、最後に「1つ目から集中タイマー始めよっか？」と聞く。"""),
     "review": ("一日の振り返り。できたことを確かめて明日の一歩を決める", "[今日の感想]", None, """\
 （引数の感想は save-args: memory により自動で保存済み。自分では保存しない）
-1. recently_done を呼び、完了日が今日のものを数える。
+1. recently_done を呼ぶ。先頭の「今日完了したタスク」の件数と名前をそのまま使う（自分で数え直したり、日付で選び直したりしない）。
 2. list_tasks を呼び、残りのタスクと、明日・明後日の締切を確認する。
 3. 今日できたことを、タスク名を出して具体的にねぎらう。何も終わっていなければ、責めずに休むことも大事だと伝える。
 4. 明日の最初の一歩を、未完了タスクの中から1つだけ提案する（15〜30分でできること）。

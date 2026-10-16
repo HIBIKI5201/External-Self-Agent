@@ -5,13 +5,16 @@
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)(tests/test_pet_visibility\\.py|spec/test/pet-visibility-35\\.md)$"
+      "pathPattern": "(^|/)(tests/test_pet_visibility\\.py|tests/test_pet_bubble\\.py|tests/test_pet_events\\.py|tests/test_pet_chat\\.py|tests/test_focus_timer_rules\\.py|tests/test_timer_hover\\.py|spec/test/pet-visibility-35\\.md)$"
     },
     {
       "pathPattern": "(^|/)esagent/pet\\.py$"
     },
     {
       "pathPattern": "(^|/)esagent/pomodoro\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/timer_chat\\.py|tests/test_timer_chat\\.py)$"
     },
     {
       "pathPattern": "(^|/)esagent/events\\.py$"
@@ -21,6 +24,9 @@
     },
     {
       "pathPattern": "(^|/)esagent/static/cat/"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_focus_length\\.(py|js)$"
     }
   ],
   "source": "manual",

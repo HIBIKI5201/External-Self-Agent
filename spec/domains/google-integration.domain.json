@@ -5,7 +5,7 @@
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)(tests/test_sync_revisions\\.py|spec/test/sync-revisions-33\\.md)$"
+      "pathPattern": "(^|/)(tests/test_sync_revisions\\.py|tests/test_long_notes_sync\\.py|spec/test/sync-revisions-33\\.md|tests/test_google_account\\.py)$"
     },
     {
       "pathPattern": "(^|/)esagent/gauth\\.py$"
@@ -20,7 +20,7 @@
       "pathPattern": "(^|/)esagent/gcal\\.py$"
     },
     {
-      "pathPattern": "(^|/)(esagent/calendar_view\\.py|esagent/static/calendar\\.js|tests/test_calendar_view\\.py|spec/test/calendar-view-157\\.md)$"
+      "pathPattern": "(^|/)(esagent/calendar_view\\.py|esagent/static/calendar\\.js|tests/test_calendar_pane\\.js|tests/test_calendar_days\\.js|tests/test_calendar_view\\.py|spec/test/calendar-view-157\\.md)$"
     },
     {
       "pathPattern": "(^|/)esagent/youtube\\.py$"
@@ -30,6 +30,12 @@
     },
     {
       "pathPattern": "(^|/)spec/test/youtube-2026-10-08\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_offline_google\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_sync_trigger\\.py$"
     }
   ],
   "source": "manual",

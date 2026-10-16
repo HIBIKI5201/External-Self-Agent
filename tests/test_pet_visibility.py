@@ -1,8 +1,12 @@
 """Automatic pet hiding is independent of enabled settings and foreground focus (#35)."""
 from unittest.mock import Mock, patch
 
-import pet
-import winfocus
+import support
+
+support.require_windows()  # pet.py needs tkinter, winfocus.py needs ctypes.windll
+
+import pet  # noqa: E402
+import winfocus  # noqa: E402
 
 
 def test_chat_window_visibility_handles_minimized_multiple_and_other_windows():
@@ -56,3 +60,35 @@ def test_pet_hides_and_restores_without_rewriting_settings_or_replaying_bubbles(
         cat._visibility_tick()
         cat.root.deiconify.assert_called_once()
 
+
+
+def test_snooze_survives_the_chat_window_and_waits_for_it_to_close():
+    """「30分かくれる」 is not undone by opening and closing the chat window, and does not bring the
+    cat back over a shown chat window (#251)."""
+    cat = pet.Pet.__new__(pet.Pet)
+    cat.root = Mock()
+    cat._hidden = False
+    cat.bubble = None
+    now = [1000.0]
+    with patch.object(pet.time, 'time', lambda: now[0]):
+        with patch.object(winfocus, 'chat_window_visible', return_value=False):
+            cat._hide()
+            assert cat._hidden
+            cat.root.withdraw.assert_called_once()
+            cat.say('締切の知らせ')  # no bubble while snoozed
+        with patch.object(winfocus, 'chat_window_visible', return_value=True):
+            cat._visibility_tick()  # the chat window opens...
+        with patch.object(winfocus, 'chat_window_visible', return_value=False):
+            cat._visibility_tick()  # ...and closes: still snoozed
+            assert cat._hidden
+            cat.root.deiconify.assert_not_called()
+        now[0] += 30 * 60 + 1
+        with patch.object(winfocus, 'chat_window_visible', return_value=True):
+            cat._visibility_tick()  # time is up, but the chat window is shown
+            assert cat._hidden
+            cat.root.deiconify.assert_not_called()
+        with patch.object(winfocus, 'chat_window_visible', return_value=False):
+            cat._visibility_tick()
+            assert not cat._hidden
+            cat.root.deiconify.assert_called_once()
+    cat.root.after.assert_called_with(500, cat._visibility_tick)

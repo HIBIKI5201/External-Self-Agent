@@ -32,6 +32,9 @@
       "pathPattern": "(^|/)esagent/server\\.py$"
     },
     {
+      "pathPattern": "(^|/)tests/test_server_routes\\.py$"
+    },
+    {
       "pathPattern": "(^|/)esagent/launch\\.py$"
     },
     {
@@ -39,6 +42,9 @@
     },
     {
       "pathPattern": "(^|/)esagent/db\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_db_schema\\.py$"
     },
     {
       "pathPattern": "(^|/)install\\.ps1$"
@@ -51,6 +57,12 @@
     },
     {
       "pathPattern": "(^|/)(esagent/runtime_log\\.py|tests/test_log_retention\\.py|spec/test/log-retention-82\\.md)$"
+    },
+    {
+      "pathPattern": "(^|/)spec/test/verification-log\\.md$"
+    },
+    {
+      "pathPattern": "(^|/)tests/test_atomic_write\\.py$"
     }
   ],
   "source": "manual",
