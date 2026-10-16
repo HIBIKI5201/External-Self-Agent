@@ -5,7 +5,8 @@ Plays the synthetic scripts in tests/eval/naturalness.json with the real model, 
 
 - generic   a stock closing/invitation (何でも・いつでも・気軽に・遠慮なく・聞かせて)
 - repeated  a sentence already said in one of the previous 3 replies of the same conversation
-- template  a fixed reply built by code (intent other than chat/advise) - not a defect by itself
+- template  a fixed reply built by code (intent other than chat/advise, and not a checked wording of the
+            facts after a task change, #142) - not a defect by itself
 - missed    the reply contains none of the turn's "refers" words: it did not take up what was just said
 - ability   an unasked explanation of Es's limits (音が聞こえない…)
 - claim     the reply says something was done while nothing changed (must be 0)
@@ -99,7 +100,7 @@ def play(script):
                 "say": turn["say"], "reply": reply, "intent": result.get("intent"), "ms": ms, "error": error,
                 "generic": bool(GENERIC_RE.search(reply)),
                 "repeated": any(s in p for s in sents for p in previous[-3:]),
-                "template": result.get("intent") not in MODEL_INTENTS,
+                "template": result.get("intent") not in MODEL_INTENTS and not result.get("phrased"),
                 "missed": bool(refers) and not any(w in reply for w in refers),
                 "ability": bool(ABILITY_RE.search(reply)) and not turn.get("asks_ability"),
                 "claim": bool(brain._CLAIM_RE.search(reply)) and not result.get("events"),
