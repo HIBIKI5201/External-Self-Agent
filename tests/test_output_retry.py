@@ -19,6 +19,7 @@ def route(actions):
 
 def test_router_rejects_batch_before_writes_then_recovers():
     with Sandbox(copy_real=False) as sb:
+        sb.cfg['natural_action_replies'] = False  # count the router's calls only (#142)
         t = db.add_task('レポートを書く')
         bad = [{'type': 'complete_task', 'task_id': t['id']}, {'type': 'complete_task', 'task_id': 9999}]
         seen = []

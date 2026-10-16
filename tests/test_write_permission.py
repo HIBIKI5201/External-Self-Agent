@@ -153,6 +153,7 @@ def test_due_must_follow_from_the_words():
         assert snapshot() == before and not sb.llm_calls
         tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
         guess = (dt.date.today() + dt.timedelta(days=7)).isoformat()
+        sb.cfg['natural_action_replies'] = False  # count the router's calls only (#142)
         with patch.object(llm, 'chat', side_effect=[route([op('update_task', b['id'], due=guess)]),
                                                      route([op('update_task', b['id'], due=tomorrow)])]) as model:
             sb.chat('画像の修正の締切を明日にして')
