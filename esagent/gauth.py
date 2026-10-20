@@ -41,7 +41,11 @@ log = logging.getLogger("esagent.gauth")
 
 
 class AuthError(Exception):
-    """Google rejected us: the user must (re)connect."""
+    """Google rejected us: the user must (re)connect. code: Google's "error" value, or the HTTP status."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 class OfflineError(Exception):
@@ -147,18 +151,20 @@ def status():
             "calendar_view": set(CALENDAR_VIEW_SCOPES).issubset(granted)}
 
 
-def _post_form(url, fields):
+def _post_form(url, fields, parse_json=True):
+    """POST a form. parse_json=False: success is the HTTP status alone (revoke answers with an empty body)."""
     req = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode("ascii"),
                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
-            return json.load(r)
+            return json.load(r) if parse_json else None
     except urllib.error.HTTPError as e:
         try:
             err = json.load(e)
         except Exception:
             err = {}
-        raise AuthError(f"{err.get('error', e.code)}: {err.get('error_description', '')}".strip(": "))
+        code = err.get("error") or e.code
+        raise AuthError(f"{code}: {err.get('error_description', '')}".strip(": "), code=code)
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
         raise OfflineError(str(e))
 
@@ -247,7 +253,8 @@ def access_token():
 def disconnect():
     """Forget the token here, then ask Google to revoke it (#235), so "切断" also ends the permission on
     Google's side. The local file goes first: offline, the app is still disconnected. Returns
-    {"revoked": True/False}; False when there was no token or Google could not be reached."""
+    {"revoked": True/False}; False when there was no token, Google could not be reached, or Google
+    refused for another reason than the token being invalid already (then the permission may remain)."""
     with _lock:  # a refresh in progress must not write the token back after it is gone
         tok = _load_token()
         if os.path.exists(TOKEN_PATH):
@@ -256,10 +263,13 @@ def disconnect():
     if not secret:
         return {"revoked": False}
     try:
-        _post_form(REVOKE_URL, {"token": secret})
+        _post_form(REVOKE_URL, {"token": secret}, parse_json=False)
     except OfflineError as e:
         log.warning("google revoke: offline (%s); the permission stays until it is removed on Google's side", e)
         return {"revoked": False}
-    except AuthError as e:  # invalid_token: already revoked or expired
-        log.info("google revoke: %s", e)
+    except AuthError as e:
+        if e.code != "invalid_token":  # 429, 5xx…: the permission may still be there
+            log.warning("google revoke failed (%s); the permission stays until it is removed on Google's side", e)
+            return {"revoked": False}
+        log.info("google revoke: %s", e)  # already revoked or expired
     return {"revoked": True}

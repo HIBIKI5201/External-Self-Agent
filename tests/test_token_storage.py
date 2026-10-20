@@ -1,6 +1,8 @@
 """The Google token is stored encrypted with DPAPI, and 切断 revokes it at Google (#235)."""
+import io
 import json
 import os
+import urllib.error
 import sys
 import tempfile
 import time
@@ -80,17 +82,17 @@ def test_disconnect_removes_the_file_then_revokes_at_google():
     with _token_folder() as path:
         gauth._save_token(TOKEN)
         sent = []
-        with patch.object(gauth, "_post_form", lambda url, fields: sent.append((url, fields)) or {}):
+        with patch.object(gauth, "_post_form", lambda url, fields, parse_json=True: sent.append((url, fields, parse_json))):
             assert gauth.disconnect() == {"revoked": True}
         assert not os.path.exists(path)
-        assert sent == [(gauth.REVOKE_URL, {"token": "refresh-secret"})]
+        assert sent == [(gauth.REVOKE_URL, {"token": "refresh-secret"}, False)]
 
 
 def test_disconnect_offline_still_disconnects_here():
     with _token_folder() as path:
         gauth._save_token(TOKEN)
 
-        def offline(url, fields):
+        def offline(url, fields, parse_json=True):
             assert not os.path.exists(path), "the local token must go before Google is asked"
             raise gauth.OfflineError("no network")
         with patch.object(gauth, "_post_form", offline):
@@ -117,3 +119,39 @@ def test_token_is_kept_when_encryption_fails():
     with _token_folder() as path, patch.object(gauth, "_dpapi", broken):
         gauth._save_token(TOKEN)
         assert json.loads(_text(path)) == TOKEN  # the sign-in is not lost
+
+
+class _Empty(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_revoke_success_with_an_empty_body_disconnects_cleanly():
+    """Google answers revoke with 200 and no body; parsing it as JSON used to raise after the file was gone."""
+    with _token_folder() as path:
+        gauth._save_token(TOKEN)
+        with patch("urllib.request.urlopen", lambda req, timeout=None: _Empty(b"")):
+            assert gauth.disconnect() == {"revoked": True}
+        assert not os.path.exists(path)
+
+
+def _http_error(status, body):
+    return urllib.error.HTTPError(gauth.REVOKE_URL, status, "error", {}, io.BytesIO(body))
+
+
+def test_revoke_refused_for_another_reason_is_not_reported_as_revoked():
+    with _token_folder() as path:
+        gauth._save_token(TOKEN)
+        with patch("urllib.request.urlopen", side_effect=_http_error(503, b"")):
+            assert gauth.disconnect() == {"revoked": False}
+        assert not os.path.exists(path)
+
+
+def test_token_already_invalid_counts_as_revoked():
+    with _token_folder():
+        gauth._save_token(TOKEN)
+        with patch("urllib.request.urlopen", side_effect=_http_error(400, b'{"error": "invalid_token"}')):
+            assert gauth.disconnect() == {"revoked": True}
