@@ -143,7 +143,8 @@ def test_dates_weekdays_and_times_must_come_from_the_facts():
 def test_real_model_wording_after_add_and_complete_is_checked():
     """With the real model, every reply is either a checked wording or the template; never a false claim."""
     with Sandbox(copy_real=False) as sb:
-        r = sb.chat("明日までにES 提出")
+        # 「未分類でいい」 skips the category question (#115), so the add happens in one turn.
+        r = sb.chat("明日までにES 提出を未分類でいいから追加して")
         t = next(t for t in db.list_tasks() if "ES" in t["title"])
         assert r["reply"] and ("「" + t["title"] + "」" in r["reply"] if r.get("phrased") else "登録しました" in r["reply"])
         r = sb.chat(f"{t['title']}、終わったよ")
