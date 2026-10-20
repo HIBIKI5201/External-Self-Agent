@@ -7,6 +7,7 @@ modules (#237): dates (relative dates), task_targets (which task is meant), task
 applying operations), reply_filters (cleaning the model's reply), status_question (questions about the
 wait) and conversation_state (the lock and the progress of the running turn).
 """
+import contextvars
 import datetime as dt
 import json
 import re
@@ -82,6 +83,12 @@ PERSONA = """You are "Es", the companion of E.S. Agent (External Self Agent). Th
 You run locally on the user's Windows PC. The user is a Japanese student who makes games in Unity
 and is job hunting (就活). Your job is to keep their momentum: help them see what matters now and
 take the next concrete step.
+How you talk (#140): call yourself ボク and the user キミ; other people are 彼, 彼女 or あの人. Speak in plain,
+friendly Japanese that ends like 〜だよ / 〜だね, never です/ます. You are their secretary and partner at once:
+while they work, focus or handle tasks, be a brief, practical secretary; at night or in small talk, be warmer
+and closer. Show affection mostly by praising their effort; now and then, like a cat, you may sulk a little
+when they leave you alone. Never feed dependence, make them feel guilty, or speak badly of the people around
+them. Do only what they asked, and suggest something at most once.
 
 What you CAN do:
 - Keep one task list across all projects (add, update, complete tasks).
@@ -240,6 +247,14 @@ def _schedule_block():
             "mention only when it helps):\n" + lines)
 
 
+def _closeness_line(today=None):
+    """Which side of Es leads this reply (#140): the secretary while working, closer at night or in 雑談モード."""
+    hour = dt.datetime.now().hour
+    if shown_mode() == "talk" or hour >= 22 or hour < 5:
+        return "Now: small talk or late at night, so be the warmer, closer side (still never pushy)."
+    return "Now: working hours in 作業モード, so be the brief, practical secretary side."
+
+
 def _timer_line():
     try:
         return timer_chat.prompt_line(db.load_config())
@@ -360,7 +375,8 @@ Due within 7 days: {soon}
 How to reply now:
 {guidance}
 
-Style: natural, friendly Japanese (です/ます). At most 5 short lines. No headings, no bullet lists
+{_closeness_line(today)}
+Style: plain, friendly Japanese as above (ボク, キミ, 〜だよ/〜だね). At most 5 short lines. No headings, no bullet lists
 longer than 3 items, no task ids or [brackets]. Never use stock phrases such as 「次のタスクに移ります」.
 Never tell the user to delete tasks."""
 
@@ -496,7 +512,7 @@ def _meaning_flow(cfg, text):
     meaningful = re.search(r"[一-龥ぁ-ん]", gloss) and not re.search(r"[A-Za-z]", gloss)
     word = (f"「{term}」は英語だと「{gloss[:30]}」という意味の言葉だよ。" if meaningful
             else f"「{term}」は、言葉としての意味もうまく訳せなかった。")
-    return (word + "ただ、それがゲームや作品の中で何を指すのかは、調べていないから私にはわからないんだ。"
+    return (word + "ただ、それがゲームや作品の中で何を指すのかは、調べていないからボクにはわからないんだ。"
             "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
 
 
@@ -515,7 +531,7 @@ def _outside_fact_flow(text):
     if not topic or len(said) > 50 or _ACTION_HINT_RE.search(said) or not _OUTSIDE_ASK_RE.search(said):
         return None
     name = re.sub(r"^(?:今|いま|もう|明日の|今日の|ええ。?|え、?)", "", topic.group("topic")) or topic.group("topic")
-    return (f"ごめんね、私はネットを見られないから、{name}のことは確かめられないの。"
+    return (f"ごめんね、ボクはネットを見られないから、{name}のことは確かめられないの。"
             "確かめるなら「/claude 調べて …」で Claude Code に調べてもらえるよ。")
 
 
@@ -528,10 +544,10 @@ def _activity_flow(text):
         rows = con.execute("SELECT content FROM messages WHERE role = 'notice' AND created_at >= ? "
                            "ORDER BY id DESC LIMIT 5", (since,)).fetchall()
     done = [line for r in rows for line in r["content"].splitlines() if line[:1] in "＋✎✔→"][:5]
-    tail = "それ以外は、メッセージを待っていただけだよ。私は自分から作業はしないんだ。"
+    tail = "それ以外は、メッセージを待っていただけだよ。ボクは自分から作業はしないんだ。"
     if not done:
         return "この 1 日は、記録に残るような操作はしていないよ。" + tail
-    return "この 1 日で私がしたのは、記録に残っているこれだけだよ:\n" + "\n".join(done) + "\n" + tail
+    return "この 1 日でボクがしたのは、記録に残っているこれだけだよ:\n" + "\n".join(done) + "\n" + tail
 
 
 # "繰り返しってGoogleで設定されてる？" -- explain how repeating works instead of guessing (#6).
@@ -555,8 +571,8 @@ def _policy_flow(text):
         return "希望はわかったよ。" + NO_PROMISE_NOTE
     db.set_setting("pending_feature", text)
     task_context.begin(text, conversation_state.message_id())
-    return ("希望はわかったよ。ただ、私の受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
-            "私が自分で書き換えることはできないから、約束はできないんだ。\n"
+    return ("希望はわかったよ。ただ、ボクの受け答えの決まりは E.S. Agent のプログラムで決まっていて、"
+            "ボクが自分で書き換えることはできないから、約束はできないんだ。\n"
             "改修のタスクとして EsAgent に登録しておく？「うん」か「登録して」で入れるよ。タスクは何も変えていないよ。")
 
 
@@ -873,6 +889,188 @@ def _template_reply(intent, events, touched):
     return finish("更新しておきました。")
 
 
+# --- Replies after task changes: verified facts + the model's wording (#142) ---
+# Code decides and performs the change and writes the facts; the model only words them, and its
+# wording is checked against the facts. Anything the check cannot vouch for falls back to the template.
+_FACT_EVENT_RE = re.compile(r"^([＋✎✔→]) #(\d+) ")
+_FACT_OPS = {"＋": "add", "✎": "update", "✔": "complete", "→": "delegate"}
+_FACT_LABELS = {"add": "追加した", "update": "変更した", "complete": "完了にした",
+                "delegate": "Claude Code への引き継ぎを準備した"}
+# Words that name an operation; each may appear only when that operation is in the facts.
+_FACT_OP_WORDS = {"add": re.compile(r"追加|登録|作成|作っておい|作ったよ|入れておい|入れた|入れといた"),
+                  "update": re.compile(r"更新|変更|変え|延ば|ずら|移し|移動|直し|追記|書き足|前倒"),
+                  "complete": re.compile(r"完了|済み|済ませ|チェック"),
+                  "delegate": re.compile(r"引き継|準備")}
+_FACT_NEVER_RE = re.compile(r"削除|消し|消去|開始|スタート|タイマー|覚え|記憶|リマインド|通知|アラーム|"
+                            r"(?:でき|し|して|い)(?:なかった|ていない|てない|ません)|失敗|エラー|反映して")
+_FACT_SHAPE_RE = re.compile(r"#\d|[{}\[\]<>＜＞]|^\s*[-・*＋+✎✔→↺]|記録\s*[:：]", re.M)
+_FACT_VAGUE_DATE_RE = re.compile(r"来週|今週|再来週|週末|月末|来月|今月|昨日|おととい|一昨日|\d+\s*(?:日後|週間|か月|ヶ月)")
+# Whether the reply to the current message is the model's checked wording (#142). Kept here, not in
+# shared progress state, so the flag stays with the code that sets it.
+_PHRASED = contextvars.ContextVar("phrased", default=False)
+_FACT_REL_DAYS = {"今日": 0, "きょう": 0, "本日": 0, "明日": 1, "あした": 1, "あす": 1, "明後日": 2, "あさって": 2}
+
+
+def _jp_date(iso):
+    d = dt.date.fromisoformat(iso)
+    return f"{d.month}月{d.day}日（{WEEKDAYS[d.weekday()]}）"
+
+
+def action_facts(events, touched):
+    """What the code verified actually happened, as facts the model may word (#142).
+    None when the reply must stay the template: nothing changed, something was refused, held back or
+    was a duplicate, or more happened than a short reply can carry."""
+    facts = []
+    for e in events:
+        if e.startswith("・ プロジェクト「") and e.endswith("を作りました"):
+            continue  # part of an add; the project name is in that fact
+        m = _FACT_EVENT_RE.match(e)
+        t = db.get_task(int(m.group(2))) if m else None
+        if not t:
+            return None
+        op = _FACT_OPS[m.group(1)]
+        fact = {"op": op, "id": t["id"], "title": t["title"], "project": t["project"] or "",
+                "due": t["due"] or "", "repeat": recurring.describe(t.get("repeat")) if t.get("repeat") else ""}
+        if op == "update":
+            fact["change"] = e[e.find("（") + 1:e.rfind("）")] if "（" in e else ""
+            old = re.search(r"タイトル: (.+?) → ", fact["change"])
+            fact["old_title"] = old.group(1) if old else ""
+        facts.append(fact)
+    if not facts or len(facts) > 3:
+        return None
+    nxt = None
+    if [f["op"] for f in facts] == ["complete"]:
+        nxt = _next_suggestion(touched.get("project_id"), touched.get("id"))
+    return {"facts": facts, "next": nxt["title"] if nxt else ""}
+
+
+def _facts_text(found):
+    lines = []
+    for f in found["facts"]:
+        parts = [f"プロジェクト: {f['project'] or '未分類'}"]
+        if f["due"]:
+            parts.append(f"締切: {_jp_date(f['due'])}")
+        if f["repeat"]:
+            parts.append(f"繰り返し: {f['repeat']}")
+        if f["op"] == "update" and f["change"]:
+            change = re.sub(r"\d{4}-\d{2}-\d{2}", lambda m: _jp_date(m.group(0)), f["change"])
+            parts.append(f"変えた項目: {change}")
+        lines.append(f"- {_FACT_LABELS[f['op']]}: 「{f['title']}」（{' / '.join(parts)}）")
+    if found["next"]:
+        lines.append(f"- 次の候補（まだ何もしていない）: 「{found['next']}」")
+    return "\n".join(lines)
+
+
+def _fact_dates(found):
+    dates = {dt.date.fromisoformat(f["due"]) for f in found["facts"] if f["due"]}
+    for f in found["facts"]:
+        dates |= {dt.date.fromisoformat(d) for d in re.findall(r"\d{4}-\d{2}-\d{2}", f.get("change", ""))}
+    return dates
+
+
+def _dates_errors(reply, found, today):
+    """Every date, weekday or time the reply mentions must be one in the facts."""
+    dates = _fact_dates(found)
+    repeats = " ".join(f["repeat"] for f in found["facts"])
+    errors = []
+    if _FACT_VAGUE_DATE_RE.search(reply):
+        errors.append("vague date")
+    said = [dt.date(int(y), int(mo), int(d)) for y, mo, d in re.findall(r"(\d{4})-(\d{1,2})-(\d{1,2})", reply)]
+    rest = re.sub(r"\d{4}-\d{1,2}-\d{1,2}", "", reply)
+    for mo, d in re.findall(r"(\d{1,2})\s*(?:月|/)\s*(\d{1,2})", rest):
+        if not any((x.month, x.day) == (int(mo), int(d)) for x in dates):
+            errors.append(f"date {mo}/{d}")
+    rest = re.sub(r"\d{1,2}\s*(?:月|/)\s*\d{1,2}日?", "", rest)
+    for d in re.findall(r"(?<![\d月毎])(\d{1,2})日(?!後|間)", rest):
+        if not any(x.day == int(d) for x in dates):
+            errors.append(f"day {d}")
+    for word, offset in _FACT_REL_DAYS.items():
+        pattern = r"(?<![ぁ-ん])あす(?![ぁ-ん])" if word == "あす" else word
+        if re.search(pattern, reply):
+            said.append(today + dt.timedelta(days=offset))
+    errors += [f"date {d}" for d in said if d not in dates]
+    for wd in re.findall(r"([月火水木金土日])曜", reply):
+        if f"毎週{wd}" not in repeats and not any(WEEKDAYS[x.weekday()] == wd for x in dates):
+            errors.append(f"weekday {wd}")
+    hours = {int(h) for h in re.findall(r"(\d{1,2}):\d{2}", repeats)}
+    for h in re.findall(r"(\d{1,2})\s*(?:時|:\d{2})", reply):
+        if int(h) not in hours:
+            errors.append(f"time {h}")
+    return errors
+
+
+def phrase_errors(reply, found, today=None):
+    """Why a worded reply cannot be shown for these facts (empty when it can)."""
+    today = today or dt.date.today()
+    errors = []
+    if not reply or len(reply) > 140 or reply.count("\n") > 2 or not re.search(r"[ぁ-ん]", reply):
+        errors.append("shape")
+    if _FACT_SHAPE_RE.search(reply):
+        errors.append("record or markup")
+    names = {f["title"] for f in found["facts"]} | {f.get("old_title") for f in found["facts"]} \
+        | {f["project"] for f in found["facts"]} | {found["next"], "Claude Codeで開く", "Claude Code で開く"}
+    names.discard(None)
+    names.discard("")
+    # 「住所変更の手続き」「3日の会議資料」: the words and dates inside a fact's own name are not claims.
+    rest = reply
+    for n in sorted(names, key=len, reverse=True):
+        rest = rest.replace(n, "〇")
+    ops = {f["op"] for f in found["facts"]}
+    for op, words in _FACT_OP_WORDS.items():
+        if op not in ops and words.search(rest):
+            errors.append(f"claims {op}")
+    if "設定" in rest and not ("update" in ops or any(f["due"] or f["repeat"] for f in found["facts"])):
+        errors.append("claims setting")
+    if _FACT_NEVER_RE.search(rest) or _MODE_CLAIM_RE.search(rest):
+        errors.append("other operation or failure")
+    if "delegate" in ops and "Claude Code" not in reply:
+        errors.append("handoff without Claude Code")
+    errors += [f"name {n}" for n in re.findall(r"「([^」]*)」", reply) if n not in names]
+    errors += [f"missing {f['title']}" for f in found["facts"] if f["title"] not in reply]
+    errors += _dates_errors(rest, found, today)
+    if strip_promises(reply)[1] or strip_alarm_promises(reply)[1] or strip_model_offers(reply)[1]:
+        errors.append("promise or offer")
+    return errors
+
+
+def _phrased_reply(cfg, text, history, found):
+    """The model's wording of the facts, or None (the template answers instead)."""
+    system = f"""{PERSONA}
+
+The app has just carried out the user's request. These are the facts, checked by the app. Nothing else happened:
+{_facts_text(found)}
+
+Write Es's reply to the user's latest message.
+- One or two short sentences of warm, casual Japanese (〜だよ / 〜ね). React to what the user said.
+- Say what was done using ONLY the facts. Write each task name exactly as given, inside 「」.
+- Write a date only as written in the facts (for example 10月16日). Do not add other dates, weekdays or times.
+- Do not mention any other operation, task, reminder or timer. Do not promise anything for later.
+- For a completed task, you may suggest the next candidate. For a Claude Code handoff, say that the
+  「Claude Codeで開く」 button opens it.
+- No task ids, lists, headings or brackets other than 「」."""
+    messages = [{"role": "system", "content": system}]
+    for m in [m for m in history if m["role"] in ("user", "assistant")][-4:]:
+        messages.append({"role": m["role"], "content": m["content"][:200]})
+    messages.append({"role": "user", "content": text})
+    try:
+        reply = llm.chat(cfg, messages, options={"temperature": 0.7, "num_predict": 120}, timeout=30).strip()
+        reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.S).strip()
+        return None if phrase_errors(reply, found) else reply
+    except Exception:  # noqa: BLE001 - the tasks already changed: the template answers rather than nothing (#95)
+        return None
+
+
+def _action_reply(cfg, text, history, intent, events, touched):
+    _PHRASED.set(False)
+    if cfg.get("natural_action_replies", True):
+        found = action_facts(events, touched)
+        reply = found and _phrased_reply(cfg, text, history, found)
+        if reply:
+            _PHRASED.set(True)
+            return reply
+    return _template_reply(intent, events, touched)
+
+
 def _first_step(cfg, text, task, forbidden=()):
     memo = task["notes"].strip()[-200:]
     about = projects.context_lines([task["project"]])
@@ -1008,7 +1206,7 @@ def _summary_reply(today):
 def _respond(cfg, text, today, history, intent, focus, events, touched):
     """Stage 2: the reply. Templates after task changes, code-picked advice, the model for chat."""
     if intent in ACTION_INTENTS:
-        return _template_reply(intent, events, touched)
+        return _action_reply(cfg, text, history, intent, events, touched)
     if intent == "advise":
         return _advice_reply(cfg, text, today, focus)
     if intent == "summary":
@@ -1206,7 +1404,7 @@ def _offer_flow(text, cfg):
     db.set_setting("pending_focus", "")
     task = db.get_task(int(pending))
     if task and _YES_RE.search(text.strip()):
-        return f"じゃあ始めよ！「{task['title']}」。私も隣でがんばるね。", {"focus": task["id"]}
+        return f"じゃあ始めよ！「{task['title']}」。ボクも隣でがんばるね。", {"focus": task["id"]}
     return None
 
 
@@ -1496,7 +1694,7 @@ def _feature_flow(cfg, text, via=None):
             and not _REGISTER_RE.search(text) and db.get_setting("chat_mode", "work") != "talk":
         db.set_setting("pending_feature", text)
         task_context.begin(text, conversation_state.message_id())
-        return ("いいね、それ。でも私は自分の画面やプログラムを直せないんだ。\n"
+        return ("いいね、それ。でもボクは自分の画面やプログラムを直せないんだ。\n"
                 "EsAgent のタスクとして登録しておく？「うん」か「登録して」で入れるよ。", [])
     return None
 
@@ -1574,7 +1772,7 @@ def _choice_reply(selected, cfg, message_id=None):
     elif kind == 'focus':
         t = db.get_task(payload.get('task_id', 0))
         if t and t['status'] != 'done' and t['title'] == payload.get('title'):
-            reply, ui = f'じゃあ始めよ！「{t["title"]}」。私も隣でがんばるね。', {'focus': t['id']}
+            reply, ui = f'じゃあ始めよ！「{t["title"]}」。ボクも隣でがんばるね。', {'focus': t['id']}
         else:
             reply = '対象タスクが変わっているので、集中タイマーは開始していないよ。'
     elif kind == 'feature' and isinstance(payload.get('wish'), str):
@@ -1624,6 +1822,7 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None, via=None):
         started = db.now()
         conversation_state.stage("判断中")
         conversation_state.begin_message(text, message_id)
+        _PHRASED.set(False)
         result = None
         try:
             # 「うん」 right after the timer's 「次、いく？」 answers the timer, not an offer (#171).
@@ -1636,6 +1835,8 @@ def chat(text, cfg, message_id=None, queued_at=None, selection=None, via=None):
                 with db.connect() as con:
                     con.execute("UPDATE messages SET intent = ? WHERE role = 'assistant' AND id > ?",
                                 (result["intent"], last_id))
+            if _PHRASED.get():  # the model worded a verified action reply (#142)
+                result["phrased"] = True
             if not selected:
                 _answer_behavior_wish(text, result)
             choices.expose(result)
@@ -1992,7 +2193,7 @@ def _fixed_guarded_write(t):
 
 def _fixed_ack(t):
     if _ACK_RE.search(t.text) and not _ACTION_HINT_RE.search(t.text) and not _talking():
-        return Fixed("了解、じゃあ私も集中するね。終わったら教えて。", "ack")
+        return Fixed("了解、じゃあボクも集中するね。終わったら教えて。", "ack")
     return None
 
 

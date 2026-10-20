@@ -88,7 +88,7 @@ def _answer(value):
             save(value)
             return f"「{word}」。次は「{sound[-1]}」だよ。"
     save({})
-    return f"「{head}」からの未使用の言葉が思いつかなかった。私の負け。しりとりは終了だよ。"
+    return f"「{head}」からの未使用の言葉が思いつかなかった。ボクの負け。しりとりは終了だよ。"
 
 
 # 「しりとりをしようよ。」「暇だから、しりとりしよう」「しりとりしない？」「りから始めて」: the model played
@@ -140,7 +140,7 @@ def handle(text, cfg=None):
             return _answer(begun)
         save(begun)
         head = f"「{begun['next']}」から" if begun["next"] else "好きな言葉から"
-        return f"しりとり始めよう！あなたからだね。{head}どうぞ。"
+        return f"しりとり始めよう！キミからだね。{head}どうぞ。"
     if not value:
         return None
     if _END_RE.fullmatch(text):
@@ -150,10 +150,10 @@ def handle(text, cfg=None):
         save({})
         # Explicit switch is released to the usual conversation path.
         return None
-    if re.search(r"次は(?:君|きみ|あなた|Es|エス)|(?:君|きみ|あなた|Es|エス)の(?:手番|番)|交互に", text):
+    if re.search(r"次は(?:君|きみ|キミ|あなた|Es|エス)|(?:君|きみ|キミ|あなた|Es|エス)の(?:手番|番)|交互に", text):
         if value.get("turn") == "es":
             return _answer(value)
-        return f"交互に一語ずつだね。私の答えは「{value['last_word']}」。今はあなたの番で「{value['next']}」からだよ。"
+        return f"交互に一語ずつだね。ボクの答えは「{value['last_word']}」。今はキミの番で「{value['next']}」からだよ。"
     literal = text.strip("「」『』。！! ")
     match = re.fullmatch(r"(.{1,30})[（(](?:読み[は:：]?)?([ぁ-ゖァ-ヺー]+)[）)]", literal)
     word, sound = (match[1], reading(match[2])) if match else (literal, reading(literal))
@@ -178,7 +178,7 @@ def handle(text, cfg=None):
         return f"{said}「{word}」はもう使ったよ。別の言葉をどうぞ。"
     if sound[-1] == "ん":
         save({})
-        return f"{said}「{word}」は「ん」で終わるから、あなたの負け。しりとりは終了だよ。"
+        return f"{said}「{word}」は「ん」で終わるから、キミの負け。しりとりは終了だよ。"
     value["used"].append(sound)
     value.update(last_word=word, next=sound[-1], turn="es")
     save(value)
