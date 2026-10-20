@@ -17,7 +17,7 @@
       "pathPattern": "(^|/)(tests/test_output_retry\\.py|spec/test/output-retry-32\\.md)$"
     },
     {
-      "pathPattern": "(^|/)tests/test_review_done_today\\.py$"
+      "pathPattern": "(^|/)(tests/test_review_done_today\\.py|tests/test_user_skills\\.py)$"
     },
     {
       "pathPattern": "(^|/)(tests/test_chat_choices\\.py|spec/test/chat-choices-45\\.md)$"

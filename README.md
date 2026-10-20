@@ -5,7 +5,7 @@
 
 - タスクを 1 つのリストで横断管理（Google ToDo と双方向同期、締切は Google カレンダーへ）
 - 集中タイマー、雨・風の環境音、YouTube / YouTube Music の BGM、なかよし度
-- `/` で呼び出すスキル（`skills/*/SKILL.md` で定義）
+- `/` で呼び出すスキル（`skills/*/SKILL.md` で定義。自分のスキルは `data/skills/*/SKILL.md` に置く）
 - 重い作業は Claude Code に引き継ぎ、結果は MCP でタスクに書き戻す
 
 ## 必要なもの

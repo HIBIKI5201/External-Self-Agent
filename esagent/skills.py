@@ -1,6 +1,8 @@
 """Skills: what "/name" runs, defined as files like Claude's skills.
 
-Each skill is skills/<name>/SKILL.md with a small frontmatter:
+Each skill is <folder>/<name>/SKILL.md with a small frontmatter. The built-in skills are skills/
+(tracked by git, updated with the app); the user's own skills go in data/skills/ (not tracked, so
+`git pull` never touches them) and replace a built-in skill of the same name (#240):
 
     ---
     name: morning
@@ -23,6 +25,7 @@ the arguments), and an existing task is changed only when the arguments name it.
 """
 import datetime as dt
 import json
+import logging
 import os
 import re
 
@@ -40,6 +43,7 @@ import task_targets
 import write_guard
 
 SKILLS_DIR = os.path.join(db.ROOT, "skills")
+log = logging.getLogger("esagent.skills")
 MAX_STEPS = 8
 
 
@@ -60,17 +64,41 @@ def _parse(path):
     return meta
 
 
-def load():
-    _seed()
+def _load_dir(folder):
+    """{name: skill} of one folder. A skill is known by its `name:`; a folder whose name differs, or a
+    second folder with the same `name:`, is reported in the log (the first one in name order is kept)."""
     found = {}
-    for entry in sorted(os.listdir(SKILLS_DIR)):
-        path = os.path.join(SKILLS_DIR, entry, "SKILL.md")
-        if os.path.isfile(path):
-            try:
-                skill = _parse(path)
-            except (OSError, UnicodeDecodeError):
-                continue
-            found[skill["name"].lower()] = skill
+    if not os.path.isdir(folder):
+        return found
+    for entry in sorted(os.listdir(folder)):
+        path = os.path.join(folder, entry, "SKILL.md")
+        if not os.path.isfile(path):
+            continue
+        try:
+            skill = _parse(path)
+        except (OSError, UnicodeDecodeError):
+            log.warning("skill not readable: %s", path)
+            continue
+        key = skill["name"].lower()
+        if key != entry.lower():
+            log.warning("skill %s: folder %s has name: %s", path, entry, skill["name"])
+        if key in found:
+            log.warning("skill %s: name %s is already used by %s; ignored", path, skill["name"], found[key]["path"])
+            continue
+        skill["path"] = path
+        found[key] = skill
+    return found
+
+
+def user_dir():
+    """data/skills/, read from db.DATA_DIR on each call so a test's sandbox has its own."""
+    return os.path.join(db.DATA_DIR, "skills")
+
+
+def load():
+    """Built-in skills, then the user's own; the user's replace a built-in one of the same name."""
+    found = _load_dir(SKILLS_DIR)
+    found.update(_load_dir(user_dir()))
     return found
 
 
@@ -90,7 +118,8 @@ def help_text():
         out += ["Es が手順どおりに動くスキル:"] + [line(s) for s in procs] + [""]
     if fixed:
         out += ["すぐ動くスキル:"] + [line(s) for s in fixed] + [""]
-    out.append(f"スキルは {SKILLS_DIR} の SKILL.md です。フォルダを足すと /名前 で呼べるようになります。")
+    out.append(f"自分のスキルは {user_dir()} に <名前>/SKILL.md を置くと /名前 で呼べます"
+               f"（{SKILLS_DIR} の組み込みと同じ名前なら、自分のものが使われます）。")
     return "\n".join(out)
 
 
@@ -491,78 +520,3 @@ def _run(text, cfg, message_id=None, timing=None):
     if r.events:
         db.add_message("notice", "\n".join(r.events))
     return {"reply": reply, "events": r.events, "handoffs": r.handoffs, "ui": r.ui, "intent": "skill"}
-
-
-# ---- built-in skills, written out the first time ------------------------------------
-
-_BUILTIN = {
-    "morning": ("朝の作戦会議。今日やる3つを一緒に決める", "", None, """\
-1. list_tasks で未完了タスクと締切を確認する。締切を過ぎたものと3日以内のものを最優先にする。
-2. 今日やるタスクを最大3つ選ぶ。締切の近さ・すぐ終わるか・勢いがつくかのバランスで選ぶ。
-3. タスクは変更しない。
-4. 返事: 「今日の3つ」を番号付きで、それぞれ一言の理由と一緒に伝える。
-   1つ目のタスクで offer_focus を呼び、最後に「1つ目から集中タイマー始めよっか？」と聞く。"""),
-    "review": ("一日の振り返り。できたことを確かめて明日の一歩を決める", "[今日の感想]", None, """\
-（引数の感想は save-args: memory により自動で保存済み。自分では保存しない）
-1. recently_done を呼ぶ。先頭の「今日完了したタスク」の件数と名前をそのまま使う（自分で数え直したり、日付で選び直したりしない）。
-2. list_tasks を呼び、残りのタスクと、明日・明後日の締切を確認する。
-3. 今日できたことを、タスク名を出して具体的にねぎらう。何も終わっていなければ、責めずに休むことも大事だと伝える。
-4. 明日の最初の一歩を、未完了タスクの中から1つだけ提案する（15〜30分でできること）。
-5. 引数に感想があれば、それに一言だけ反応する。"""),
-    "plan": ("目標を小さなタスクに分けて、締切つきで登録する", "目標 [期限]", None, """\
-引数がなければ何も登録せず「/plan ポートフォリオを完成させる 11月末まで のように目標を書いてね」と返して終わる。
-1. 引数の目標を読む。期限が書かれていればそれを最終期限にし、なければ今日から2週間後にする。
-2. 目標を、1〜2時間で終わる具体的な小タスク 3〜6個に分ける。目標そのものを1件だけ登録するのは禁止。
-   例: 「ポートフォリオサイトを完成させる」なら
-   「載せる作品を3つ選ぶ」「各作品の説明文を書く」「トップページの構成を決める」「サイトを公開する」
-3. 最終期限から逆算して、小タスクに順番に締切を割り振る（今日より前にはしない。最後の小タスクが最終期限）。
-4. 小タスクごとに add_task を1回ずつ呼ぶ（合計 3〜6回）。合いそうなプロジェクトがあれば指定する。
-5. 返事: 登録した小タスクを締切つきで短く並べ、最初の1つの始め方を一言添える。"""),
-    "help": ("スキルの一覧", "", "help", "使えるスキルの一覧を出す。"),
-    "tasks": ("未完了タスクの一覧", "[プロジェクト]", "tasks", "未完了タスクをプロジェクトごとに出す。"),
-    "next": ("次にやることを1つ提案", "", "next", "締切と話題から次の1つを選び、最初の20分でやることを添える。"),
-    "summary": ("タスクの全体像と最近終わったこと", "", "summary", "件数・1週間以内の締切・最近終わったことをまとめる。"),
-    "add": ("タスクを追加（例: /add ES提出 金曜 #就活）", "タイトル [日付] [#プロジェクト]", "add", "タスクを1件追加する。"),
-    "done": ("タスクを完了にする", "番号 or 名前", "done", "タスクを完了にして、次の1つを提案する。"),
-    "due": ("締切を設定（例: /due 12 来週の火曜、/due 12 なし）", "番号 日付", "due", "締切を設定・解除する。"),
-    "repeat": ("繰り返しタスクにする（例: /repeat 12 毎週月曜9時、/repeat 12 なし）", "番号 いつ", "repeat",
-               "決まった時刻にタスクを未完了に戻し、次の締切を入れる。"),
-    "note": ("タスクのメモに追記（例: /note 12 構成は3章で）", "番号 内容", "note", "タスクのメモに一行追記する。"),
-    "claude": ("Claude Code に引き継ぐ（例: /claude 調べて DxLibのMV1形式）", "番号 or 依頼文", "claude",
-               "既存タスクか依頼文を Claude Code 用に準備する。"),
-    "talk": ("雑談モード（タスクの話をしない）", "", "talk", "雑談モードにする。"),
-    "work": ("通常モードに戻る", "", "work", "通常モードに戻す。"),
-    "remember": ("覚えておいてほしいことを保存", "内容", "remember", "記憶を1件保存する。"),
-    "memory": ("覚えていることの一覧", "", "memory", "記憶の一覧を出す。"),
-    "forget": ("覚えていることを消す", "番号", "forget", "記憶を1件消す。"),
-    "sync": ("リポジトリの TODO を読み直し、Google ToDo / カレンダーを今すぐ同期", "", "sync", "今すぐ同期する。"),
-    "clear": ("チャット履歴を消す（タスクは消えません）", "", "clear", "チャット履歴を消す。"),
-    "model": ("使っているモデル", "", "model", "モデル名を表示する。"),
-    "feedback": ("返事への評価の一覧・削除・書き出し（例: /feedback delete 3、/feedback export）", "[delete 番号|export [all]]",
-                 "feedback", "返事への評価を一覧・削除・書き出しする。"),
-}
-
-
-_BUILTIN_TOOLS = {"morning": "list_tasks, get_task, recently_done, offer_focus",
-                  "review": "recently_done, list_tasks, get_task, offer_focus",
-                  "plan": "list_tasks, get_task, add_task"}
-
-
-def _seed():
-    """Write the built-in skills once. After that the folder belongs to the user."""
-    if os.path.isdir(SKILLS_DIR):
-        return
-    for name, (desc, hint, action, body) in _BUILTIN.items():
-        folder = os.path.join(SKILLS_DIR, name)
-        os.makedirs(folder, exist_ok=True)
-        meta = [f"name: {name}", f"description: {desc}"]
-        if hint:
-            meta.append(f"argument-hint: {hint}")
-        if action:
-            meta.append(f"action: {action}")
-        if name == "review":
-            meta.append("save-args: memory")
-        if name in _BUILTIN_TOOLS:
-            meta.append(f"tools: {_BUILTIN_TOOLS[name]}")
-        with open(os.path.join(folder, "SKILL.md"), "w", encoding="utf-8") as f:
-            f.write("---\n" + "\n".join(meta) + "\n---\n" + body + "\n")

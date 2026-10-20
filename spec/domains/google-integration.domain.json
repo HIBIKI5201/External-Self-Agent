@@ -32,7 +32,7 @@
       "pathPattern": "(^|/)spec/test/youtube-2026-10-08\\.md$"
     },
     {
-      "pathPattern": "(^|/)tests/test_offline_google\\.py$"
+      "pathPattern": "(^|/)(tests/test_offline_google\\.py|tests/test_token_storage\\.py)$"
     },
     {
       "pathPattern": "(^|/)tests/test_sync_trigger\\.py$"
