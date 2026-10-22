@@ -493,8 +493,7 @@ def _google_connect(body):
 
 
 def _google_disconnect(body):
-    gauth.disconnect()
-    return {"ok": True}
+    return {"ok": True, **gauth.disconnect()}
 
 
 # Routes sync only when marked syncs=True (task and project changes, #231); _LOCAL says so for the rest.

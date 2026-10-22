@@ -19,7 +19,7 @@ E.S. Agent（External Self Agent）は、この Windows PC に常駐するロー
 - **判断はコードで行い、モデルには狭い役割だけを任せる**（`esagent/brain.py`）。
   8B モデルは嘘・作り話・手本の丸写しをする。モデルの出力は必ず検証してから使い、タスク操作後の返事はテンプレートにする。
   新しいモデル対策を入れたら、AS-02・AS-04 に書く。
-- `/` の動きはファイルで定義する（`skills/<名前>/SKILL.md`）。固定動作は `esagent/actions.py`。
+- `/` の動きはファイルで定義する（組み込みは `skills/<名前>/SKILL.md`、利用者のものは Git 管理外の `data/skills/`）。固定動作は `esagent/actions.py`。
 
 ## 動作確認の約束
 

@@ -1,12 +1,19 @@
 """Google OAuth for an installed app (loopback redirect + PKCE), standard library only.
 
 The redirect lands on EsAgent's own server at /oauth/callback, so no extra port is opened.
+
+The token file is encrypted with Windows DPAPI for the signed-in Windows user (#235): another user or
+another PC cannot read it, and a copied secrets/ folder does not carry a usable Google login. A token
+saved before #235 (plain JSON) is read once and saved again encrypted. Where DPAPI does not exist
+(tests on Linux) the token stays plain JSON.
 """
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
+import sys
 import threading
 import time
 import urllib.error
@@ -28,18 +35,25 @@ EXTRA = {"youtube": [YOUTUBE_SCOPE], "calendar": CALENDAR_VIEW_SCOPES}
 SCOPES = [TASKS_SCOPE, CALENDAR_SCOPE]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+PENDING_SECONDS = 600  # how long a started sign-in may take
+log = logging.getLogger("esagent.gauth")
 
 
 class AuthError(Exception):
-    """Google rejected us: the user must (re)connect."""
+    """Google rejected us: the user must (re)connect. code: Google's "error" value, or the HTTP status."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 class OfflineError(Exception):
     """Google could not be reached: try again when the network is back."""
 
 
-_pending = {}  # state -> (code_verifier, redirect_uri, created_at)
-_lock = threading.Lock()
+_pending = {}  # state -> (code_verifier, redirect_uri, created_at, purpose)
+_lock = threading.RLock()  # reentrant: _load_token may save the token again while a caller holds it
 
 
 def _client():
@@ -51,17 +65,82 @@ def _client():
     return data.get("installed") or data.get("web")
 
 
-def _load_token():
+# ---- the token file, encrypted with DPAPI (#235) ---------------------------------
+
+def _dpapi(data, protect):
+    """CryptProtectData / CryptUnprotectData for the current Windows user. Raises OSError."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Blob(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    crypt32, kernel32 = ctypes.windll.crypt32, ctypes.windll.kernel32
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    buf = ctypes.create_string_buffer(data, len(data))
+    src, out = Blob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), Blob()
+    ui_forbidden = 0x1  # never show a prompt: the server runs without a window
+    if protect:
+        ok = crypt32.CryptProtectData(ctypes.byref(src), "E.S. Agent Google token", None, None, None,
+                                      ui_forbidden, ctypes.byref(out))
+    else:
+        ok = crypt32.CryptUnprotectData(ctypes.byref(src), None, None, None, None, ui_forbidden, ctypes.byref(out))
+    if not ok:
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(out.pbData, out.cbData)
+    finally:
+        kernel32.LocalFree(out.pbData)
+
+
+def _can_protect():
+    return sys.platform == "win32"
+
+
+def _encode(tok):
+    """The file's text: {"dpapi": base64} on Windows, the plain token elsewhere."""
+    raw = json.dumps(tok).encode("utf-8")
+    if not _can_protect():
+        return raw.decode("utf-8")
+    try:
+        return json.dumps({"dpapi": base64.b64encode(_dpapi(raw, True)).decode("ascii")})
+    except OSError as e:  # keep the sign-in rather than lose it; the next save tries again
+        log.warning("could not encrypt the Google token (%s); saved without encryption", e)
+        return raw.decode("utf-8")
+
+
+def _read():
     try:
         with open(TOKEN_PATH, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+            text = f.read()
+        data = json.loads(text)
+    except (OSError, ValueError):
+        return None, None
+    return text, data if isinstance(data, dict) else None
+
+
+def _load_token():
+    text, data = _read()
+    if data is None:
+        return None
+    if "dpapi" not in data:  # saved before #235, or where DPAPI does not exist
+        if _can_protect() and data.get("refresh_token"):
+            with _lock:  # encrypt it once, unless a new sign-in replaced the file meanwhile
+                encoded = _encode(data) if _read()[0] == text else None
+                if encoded and "dpapi" in json.loads(encoded):  # not rewritten again and again if DPAPI fails
+                    db.write_atomic(TOKEN_PATH, encoded)
+        return data
+    try:
+        return json.loads(_dpapi(base64.b64decode(data["dpapi"]), False).decode("utf-8"))
+    except (OSError, AttributeError, ValueError):
+        # Another Windows user or another PC: the file cannot be read here, so it counts as not connected.
+        log.warning("the Google token cannot be decrypted by this Windows user")
         return None
 
 
 def _save_token(tok):
     os.makedirs(SECRETS_DIR, exist_ok=True)
-    db.write_atomic(TOKEN_PATH, json.dumps(tok))
+    db.write_atomic(TOKEN_PATH, _encode(tok))
 
 
 def status():
@@ -72,18 +151,20 @@ def status():
             "calendar_view": set(CALENDAR_VIEW_SCOPES).issubset(granted)}
 
 
-def _post_form(url, fields):
+def _post_form(url, fields, parse_json=True):
+    """POST a form. parse_json=False: success is the HTTP status alone (revoke answers with an empty body)."""
     req = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode("ascii"),
                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
-            return json.load(r)
+            return json.load(r) if parse_json else None
     except urllib.error.HTTPError as e:
         try:
             err = json.load(e)
         except Exception:
             err = {}
-        raise AuthError(f"{err.get('error', e.code)}: {err.get('error_description', '')}".strip(": "))
+        code = err.get("error") or e.code
+        raise AuthError(f"{code}: {err.get('error_description', '')}".strip(": "), code=code)
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
         raise OfflineError(str(e))
 
@@ -98,6 +179,8 @@ def begin(redirect_uri, youtube=False, calendar=False):
     purpose = "youtube" if youtube else "calendar" if calendar else "tasks"
     scopes = SCOPES + EXTRA.get(purpose, [])
     with _lock:
+        for old in [k for k, v in _pending.items() if time.time() - v[2] > PENDING_SECONDS]:
+            del _pending[old]  # sign-ins that were never finished
         _pending[state] = (verifier, redirect_uri, time.time(), purpose)
     return AUTH_URL + "?" + urllib.parse.urlencode({
         "client_id": client["client_id"],
@@ -116,7 +199,7 @@ def begin(redirect_uri, youtube=False, calendar=False):
 def finish(state, code):
     with _lock:
         entry = _pending.pop(state, None)
-    if not entry or time.time() - entry[2] > 600:
+    if not entry or time.time() - entry[2] > PENDING_SECONDS:
         raise AuthError("認証リクエストが無効か期限切れです。もう一度「接続」を押してください。")
     verifier, redirect_uri, _, purpose = entry
     client = _client()
@@ -168,5 +251,25 @@ def access_token():
 
 
 def disconnect():
-    if os.path.exists(TOKEN_PATH):
-        os.remove(TOKEN_PATH)
+    """Forget the token here, then ask Google to revoke it (#235), so "切断" also ends the permission on
+    Google's side. The local file goes first: offline, the app is still disconnected. Returns
+    {"revoked": True/False}; False when there was no token, Google could not be reached, or Google
+    refused for another reason than the token being invalid already (then the permission may remain)."""
+    with _lock:  # a refresh in progress must not write the token back after it is gone
+        tok = _load_token()
+        if os.path.exists(TOKEN_PATH):
+            os.remove(TOKEN_PATH)
+    secret = (tok or {}).get("refresh_token") or (tok or {}).get("access_token")
+    if not secret:
+        return {"revoked": False}
+    try:
+        _post_form(REVOKE_URL, {"token": secret}, parse_json=False)
+    except OfflineError as e:
+        log.warning("google revoke: offline (%s); the permission stays until it is removed on Google's side", e)
+        return {"revoked": False}
+    except AuthError as e:
+        if e.code != "invalid_token":  # 429, 5xx…: the permission may still be there
+            log.warning("google revoke failed (%s); the permission stays until it is removed on Google's side", e)
+            return {"revoked": False}
+        log.info("google revoke: %s", e)  # already revoked or expired
+    return {"revoked": True}

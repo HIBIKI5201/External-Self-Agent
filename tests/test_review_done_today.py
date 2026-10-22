@@ -52,5 +52,5 @@ def test_more_than_ten_completions_today_are_all_counted():
 
 
 def test_review_steps_use_the_counted_line():
-    assert "そのまま使う" in skills._BUILTIN["review"][3]
-    assert "完了日が今日のものを数える" not in (Path(__file__).resolve().parents[1] / "skills" / "review" / "SKILL.md").read_text(encoding="utf-8")
+    steps = (Path(__file__).resolve().parents[1] / "skills" / "review" / "SKILL.md").read_text(encoding="utf-8")
+    assert "そのまま使う" in steps and "完了日が今日のものを数える" not in steps
