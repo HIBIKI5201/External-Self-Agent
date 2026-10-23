@@ -20,7 +20,7 @@
       "pathPattern": "(^|/)esagent/events\\.py$"
     },
     {
-      "pathPattern": "(^|/)(esagent/companion\\.py|esagent/care\\.py|tests/test_care\\.py)$"
+      "pathPattern": "(^|/)(esagent/companion\\.py|esagent/care\\.py|tests/test_care\\.py|tests/test_pet_care\\.py)$"
     },
     {
       "pathPattern": "(^|/)esagent/static/cat/"

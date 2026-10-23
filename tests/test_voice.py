@@ -275,3 +275,29 @@ def test_listen_corrections_come_from_defaults_and_config():
     assert "ウォーフレーム" in table["Warframe"] and table["Sinfonia"] == ["シンフォニア"]
     assert voice.listen_corrections({"listen_corrections": {"Warframe": ["ワーフレ"]}})["Warframe"] == ["ワーフレ"]
     assert voice.listen_corrections({"listen_corrections": {"x": "not a list"}}).get("x") is None
+
+
+def test_a_line_that_may_not_wake_the_engine_is_dropped_when_it_is_stopped():
+    # #284: every caring line restarted the engine that had stopped after voicevox_idle_minutes.
+    with Sandbox(copy_real=False) as sb, FakeEngine(alive=False) as fe:
+        cfg = _cfg(sb)
+        voice.update(cfg, enabled=True)
+        launched = []
+        with_launch = voice._launch
+        voice._launch = lambda *a: launched.append(a)
+        try:
+            assert voice.say(cfg, "お水飲んでる？", wake=False)
+            voice.process_pending(cfg)
+        finally:
+            voice._launch = with_launch
+        st = voice.status(cfg)
+        assert fe.played == [] and launched == [] and st["error"] == "", st
+
+
+def test_a_line_that_may_not_wake_the_engine_is_read_while_it_runs():
+    with Sandbox(copy_real=False) as sb, FakeEngine() as fe:
+        cfg = _cfg(sb)
+        voice.update(cfg, enabled=True)
+        assert voice.say(cfg, "お水飲んでる？", wake=False)
+        voice.process_pending(cfg)
+        assert len(fe.played) == 1
