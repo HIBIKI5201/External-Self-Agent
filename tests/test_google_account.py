@@ -60,12 +60,13 @@ def test_mass_deletion_waits_and_single_deletion_is_recorded():
         # One task gone from Google (fewer than half): deleted here, with a line in the chat.
         gid = db.get_task(ids[0])["gtask_id"]
         fake.tasks["L0"].pop(gid)
-        gsync.sync_once()
+        gsync.sync_once(full=True)  # a task that vanished is found by the full read (#272)
         assert db.get_task(ids[0]) is None
         assert f"🗑 #{ids[0]} 課題 0 を Google で削除されたため消しました" in _notices()
         # Two of the three left vanish at once: held, nothing deleted.
         for i in ids[1:3]:
             fake.tasks["L0"].pop(db.get_task(i)["gtask_id"])
+        gsync.full_next()
         assert sb.sync_once() == "held"
         assert all(db.get_task(i) for i in ids[1:]) and gsync.hold()["tasks"] == ids[1:3]
         gsync.resolve("resend")
@@ -74,6 +75,7 @@ def test_mass_deletion_waits_and_single_deletion_is_recorded():
         # Held again, then the user confirms the deletion.
         for i in ids[1:3]:
             fake.tasks["L0"].pop(db.get_task(i)["gtask_id"])
+        gsync.full_next()
         assert sb.sync_once() == "held"
         gsync.resolve("delete")
         assert db.get_task(ids[1]) is None and db.get_task(ids[2]) is None and db.get_task(ids[3])

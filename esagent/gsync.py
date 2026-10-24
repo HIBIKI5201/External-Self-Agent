@@ -28,6 +28,13 @@ SyncError = gapi.SyncError
 
 # A sync that would delete this many synced tasks at once (or half of them) waits for the user (#194).
 MASS_DELETE = 10
+# Between full reads, a sync asks Google only for the tasks changed since the last one (#272): every
+# 3 minutes it read every task ever made, completed ones included. The full read, which also finds
+# the tasks gone from Google, runs at start and then once an hour.
+FULL_SYNC_SECONDS = 3600
+SINCE_MARGIN_SECONDS = 120  # clocks and Google's own write delay
+# The deadline calendar is compared again only when a task's title, due or status changed, or a day passed.
+CALENDAR_FULL_SECONDS = 86400
 
 
 class Held(Exception):
@@ -212,6 +219,7 @@ def resolve(action):
     else:
         raise ValueError(f"unknown action for {h['kind']}: {action}")
     db.set_setting("google_hold", "")
+    full_next()
     request()
     return {"ok": True}
 
@@ -297,8 +305,23 @@ def _reconcile(list_id, project_id, g, project_list, default_id, stats):
         stats["pushed"] += 1
 
 
-def sync_once():
+def _full_due():
+    try:
+        return not db.get_setting("google_since") or time.time() - float(db.get_setting("google_full_at") or 0) >= FULL_SYNC_SECONDS
+    except ValueError:
+        return True
+
+
+def full_next():
+    """The next sync reads everything again (start, reconnect, a resolved hold)."""
+    db.set_setting("google_full_at", "")
+    db.set_setting("google_cal_seen", "")
+
+
+def sync_once(full=None):
     stats = {"pulled": 0, "pushed": 0, "deleted": 0}
+    full = _full_due() if full is None else full
+    started = dt.datetime.now(dt.timezone.utc)
     lists = list(_paged("/users/@me/lists", {"maxResults": 100}))
     default_id = _req("GET", "/users/@me/lists/@default")["id"]
     # The default list's id differs between Google accounts: a reconnect to another account must not
@@ -314,7 +337,8 @@ def sync_once():
 
     seen = set()
     for L in lists:
-        params = {"showCompleted": "true", "showHidden": "true", "showDeleted": "true", "maxResults": 100}
+        params = {"showCompleted": "true", "showHidden": "true", "showDeleted": "true", "maxResults": 100,
+                  **({} if full else {"updatedMin": db.get_setting("google_since")})}
         for g in _paged(f"/lists/{L['id']}/tasks", params):
             seen.add(g["id"])
             _reconcile(L["id"], list_project[L["id"]], g, project_list, default_id, stats)
@@ -327,7 +351,15 @@ def sync_once():
             g = _req("POST", f"/lists/{list_id}/tasks", body=_body(t))
             _mark_synced(t["id"], g, list_id, t["updated_at"], t["rev"])
             stats["pushed"] += 1
+        elif not full and t["gtask_id"] not in seen and t["rev"] != t["synced_rev"] and t["glist_id"]:
+            # Changed here but not in Google since the last sync, so Google did not send it (#272).
+            _push_existing(t, t["glist_id"], project_list, default_id)
+            stats["pushed"] += 1
     db.set_setting("google_account", default_id)
+    since = (started - dt.timedelta(seconds=SINCE_MARGIN_SECONDS)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    if not full:  # only the changed tasks were read: what was not seen is not gone
+        db.set_setting("google_since", since)
+        return stats
     # Gone from Google entirely (e.g. its list was deleted). Many at once looks like a different
     # account or a mistake, so those wait for the user instead (#194).
     synced = [t for t in rows if t["gtask_id"]]
@@ -338,6 +370,8 @@ def sync_once():
     for t in gone:
         _delete_local(t["id"])
         stats["deleted"] += 1
+    db.set_setting("google_since", since)
+    db.set_setting("google_full_at", str(time.time()))
     return stats
 
 
@@ -367,13 +401,29 @@ def status():
     return s
 
 
+def _calendar_seen():
+    """What the deadline calendar is made from: each task's id, title, due and status (#272)."""
+    with db.connect() as con:
+        rows = con.execute("SELECT id, title, due, status FROM tasks ORDER BY id").fetchall()
+    return json.dumps([list(r) for r in rows] + [_cfg.get("calendar_name", "")], ensure_ascii=False)
+
+
 def _sync_calendar():
     """Deadlines -> Google Calendar. Its failures never block the task sync."""
     if not gauth.status().get("calendar"):
         _set(cal_error="")
         return
+    seen = _calendar_seen()
+    try:
+        recent = time.time() - float(db.get_setting("google_cal_full_at") or 0) < CALENDAR_FULL_SECONDS
+    except ValueError:
+        recent = False
+    if recent and seen == db.get_setting("google_cal_seen") and not db.get_setting("google_cal_error"):
+        return  # nothing the calendar shows has changed (#272)
     try:
         stats = gcal.sync(_cfg)
+        db.set_setting("google_cal_seen", seen)
+        db.set_setting("google_cal_full_at", str(time.time()))
         _set(cal_error="", cal_last_sync=db.now())
         if any(stats.values()):
             log.info("calendar sync: %s", stats)
@@ -425,4 +475,5 @@ def _loop(cfg):
 def start(cfg):
     global _cfg
     _cfg = cfg
+    full_next()
     threading.Thread(target=_loop, args=(cfg,), name="gsync", daemon=True).start()
