@@ -723,6 +723,7 @@ def _route(cfg, text, today, history):
     feedback = []
     context = _reference_context(text, history)
     literal = _literal_add(text)
+    asked = None  # the intent of the model's first answer
 
     def as_literal(result):
         # 「〇〇をタスクに入れてくれる？」: the model answered it as talk or proposed nothing to add (#178).
@@ -739,6 +740,7 @@ def _route(cfg, text, today, history):
                 if write_guard.analyze(text, db.list_tasks(include_done=True)).hold:
                     return result[0], result[1], []  # nothing may run, so nothing to retry (#67)
                 errors = _action_errors(result[2], text, context)
+                asked = result[0] if asked is None else asked
             except (ValueError, TypeError, AttributeError):
                 errors = ['指定されたJSONオブジェクト・intent・focus・actionsの形式で返してください']
         if not errors:
@@ -748,7 +750,8 @@ def _route(cfg, text, today, history):
                      + '。操作はまだ実行していません。全体を修正してください。'
                      + '依頼された操作がない・対象が一覧にない場合は actions を [] にしてください。'
                      + f'\n元の依頼: {text}\n現在のタスク一覧（この番号だけを使う）:\n{available}'}]
-    return as_literal(('update', '', []))  # the operation template honestly reports that nothing was applied
+    # The operation template honestly reports that nothing was applied; an add is asked for a name (#281).
+    return as_literal(('add' if asked == 'add' else 'update', '', []))
 
 
 def _reference_context(text, history):
@@ -872,6 +875,8 @@ def _template_reply(intent, events, touched):
     if not done and ask:
         names = re.findall(r"「[^」]+」", ask.split("のどれのことか")[0])
         return f"{''.join(names)}のどれのことか教えてね。まだ何も変更していないよ。"
+    if not done and not events and intent == "add":  # an add is not asked what to change (#281)
+        return "どんな名前で入れるか確かめられなかったので、タスクは何も追加していないよ。「〇〇をタスクに追加して」のように、名前を教えてね。"
     if not done and not events:
         return "依頼の内容を確かめられなかったので、タスクは何も変更していないよ。対象のタスク名と変えたい項目を教えてね。"
     if not done:
