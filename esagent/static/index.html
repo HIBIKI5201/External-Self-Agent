@@ -189,6 +189,28 @@ form#add input, form#add select {
 }
 form#add button { grid-column: 1 / -1; }
 details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margin-top: 14px; }
+
+/* A narrow window (#278): the task column and the timer bar can be hidden from the header,
+   and the rest packs tighter. Which parts are hidden is kept in this browser (es.layout). */
+#sideBtn[aria-pressed="true"], #barBtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+body.hide-side main { grid-template-columns: minmax(0, 1fr); }
+body.hide-side aside { display: none; }
+body.hide-bar #scene #controls { display: none; }
+@media (max-width: 1100px) {
+  header { flex-wrap: wrap; gap: 6px 10px; padding: 8px 12px; }
+  main { grid-template-columns: minmax(0, 1fr) 300px; }
+  #log { padding: 12px; }
+  .msg { max-width: 92%; }
+  form#send { flex-wrap: wrap; gap: 6px; padding: 8px 12px 10px; }
+  form#send textarea { flex: 1 1 100%; }
+  #sendBtn { margin-left: auto; }
+  #scene #controls { gap: 10px; padding: 6px 12px; }
+}
+@media (max-height: 640px) {
+  #scene #controls { padding: 4px 12px; }
+  #scene #pomo-time { font-size: 22px; }
+  form#send textarea { height: 38px; padding: 7px 10px; }
+}
 </style>
 </head>
 <body>
@@ -206,6 +228,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margi
   <button id="gsync" class="ghost" hidden>今すぐ同期</button>
   <button id="gkeep" class="ghost" hidden>Google に送り直す</button>
   <button id="gdrop" class="ghost" hidden></button>
+  <button id="sideBtn" class="ghost" title="右のタスク欄を出す / 隠す" aria-pressed="true">タスク欄</button>
+  <button id="barBtn" class="ghost" title="上のタイマー・音・なかよし度の欄を出す / 隠す" aria-pressed="true">タイマー欄</button>
   <button id="bgmBtn" class="ghost" title="YouTube の BGM と動画・プレイリスト" aria-expanded="false">♪ BGM</button>
   <button id="adminBtn" class="ghost" title="データベースの中身と設定">管理</button>
 </header>
@@ -430,6 +454,27 @@ $("#adminBtn").addEventListener("click", () => {
   const w = window.open("/admin", "esagent-admin", "width=1100,height=760");
   if (w) w.focus();
 });
+
+// Parts of the screen can be hidden for a narrow window (#278); this browser remembers it.
+const LAYOUT_PARTS = { side: "#sideBtn", bar: "#barBtn" };
+const layout = (() => {
+  try { const v = JSON.parse(localStorage.getItem("es.layout") || "{}"); return v && typeof v === "object" ? v : {}; }
+  catch { return {}; }
+})();
+function applyLayout(doc) {
+  for (const [part, sel] of Object.entries(LAYOUT_PARTS)) {
+    const hidden = layout[part] === false;
+    doc.body.classList.toggle("hide-" + part, hidden);
+    doc.querySelector(sel)?.setAttribute("aria-pressed", hidden ? "false" : "true");
+  }
+}
+function toggleLayout(part, doc) {
+  layout[part] = layout[part] === false;
+  try { localStorage.setItem("es.layout", JSON.stringify(layout)); } catch {}
+  applyLayout(doc);
+}
+for (const part in LAYOUT_PARTS) $(LAYOUT_PARTS[part]).onclick = () => toggleLayout(part, document);
+applyLayout(document);
 
 // ---- sending: a queue, so you can keep typing while Es is thinking ----------
 function renderChoices(message) {
@@ -775,6 +820,10 @@ window.EsCalendar?.init();
 // The BGM button opens YouTube under the header; closing only moves it off-screen.
 $("#bgmBtn").onclick = (e) => {
   e.stopPropagation();
+  // A narrow window wraps the header onto two lines (#278): open just under it, not over it.
+  const top = Math.round($("header").getBoundingClientRect().bottom + 6);
+  $("#bgm-drop").style.top = top + "px";
+  $("#bgm-drop").style.maxHeight = `calc(100vh - ${top + 16}px)`;
   const open = $("#bgm-drop").classList.toggle("open");
   $("#bgmBtn").setAttribute("aria-expanded", open ? "true" : "false");
 };
