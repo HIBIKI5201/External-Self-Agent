@@ -403,6 +403,8 @@ def scan_unity_projects(roots):
             candidates = [top] + [os.path.join(top, s) for s in sorted(os.listdir(top))
                                   if os.path.isdir(os.path.join(top, s))]
             for path in candidates:
+                if _is_worktree(path):
+                    continue  # a working copy of a project, not one of its own (#286)
                 if os.path.isdir(os.path.join(path, "Assets")) and \
                         os.path.isdir(os.path.join(path, "ProjectSettings")):
                     rel = os.path.relpath(path, root).replace(os.sep, "/")
@@ -411,6 +413,19 @@ def scan_unity_projects(roots):
                     if path == top:
                         break
     return found
+
+
+def _is_worktree(path):
+    """A Git worktree has a .git file (「gitdir: …」) instead of a .git folder (#286)."""
+    return os.path.isfile(os.path.join(path, ".git"))
+
+
+def _stale(project):
+    """A scanned Unity project with no tasks whose folder is gone or is a worktree (#286): kept in the
+    DB (its description and Google list stay), but left out of the lists and the model's context."""
+    folder = project.get("folder")
+    return project.get("kind") == "unity" and not project.get("task_count") and bool(folder) and \
+        (not os.path.isdir(folder) or _is_worktree(folder))
 
 
 def sync_projects(cfg):
@@ -453,9 +468,17 @@ def update_project(project_id, description=None, folder=None):
     return dict(row)
 
 
-def list_projects():
+def list_projects(include_stale=False):
+    """Every project, except stale scanned ones (see _stale) unless include_stale."""
     with connect() as con:
-        return [dict(r) for r in con.execute("SELECT * FROM projects ORDER BY kind DESC, name")]
+        rows = [dict(r) for r in con.execute(
+            "SELECT p.*, (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS task_count "
+            "FROM projects p ORDER BY p.kind DESC, p.name")]
+    for r in rows:
+        stale = _stale(r)
+        r.pop("task_count")
+        r["_stale"] = stale
+    return [{k: v for k, v in r.items() if k != "_stale"} for r in rows if include_stale or not r["_stale"]]
 
 
 # 「EsAgentカテゴリー」「Warframeのリスト」: the words around a project name are not part of it.
