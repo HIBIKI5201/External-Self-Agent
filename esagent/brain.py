@@ -20,6 +20,7 @@ import projects
 import recurring
 import repeat_chat
 import choices
+import task_apply
 import task_context
 import write_guard
 import conversation_context
@@ -1062,13 +1063,15 @@ Write Es's reply to the user's latest message.
 
 def _action_reply(cfg, text, history, intent, events, touched):
     _PHRASED.set(False)
+    reply = None
     if cfg.get("natural_action_replies", True):
         found = action_facts(events, touched)
         reply = found and _phrased_reply(cfg, text, history, found)
         if reply:
             _PHRASED.set(True)
-            return reply
-    return _template_reply(intent, events, touched)
+    reply = reply or _template_reply(intent, events, touched)
+    spoken = task_apply.due_time_spoken(events)  # the time of a deadline is not saved (#283)
+    return f"{reply}\n{spoken}" if spoken else reply
 
 
 def _first_step(cfg, text, task, forbidden=()):
