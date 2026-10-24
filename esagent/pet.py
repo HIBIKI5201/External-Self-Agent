@@ -21,6 +21,7 @@ sys.path.insert(0, HERE)
 
 import care  # noqa: E402
 import db  # noqa: E402
+import pet_react  # noqa: E402
 import winfocus  # noqa: E402
 
 CFG = db.load_config()
@@ -37,11 +38,12 @@ FX_H = 20                                # room above the cat for "z", "…", "�
 ANIMS = {  # frames per strip, ms per frame
     "Idle": (10, 120), "Sleeping1": (1, 1000), "Sleeping2": (1, 1000), "Laying": (8, 150),
     "Stretching": (13, 120), "Meow": (4, 150), "Sitting": (1, 1000), "Licking 1": (5, 180), "Itch": (2, 170),
+    "Run": (8, 90),
 }
 MOOD_ANIM = {"idle": "Idle", "focus": "Sleeping1", "break": "Laying", "stretch": "Stretching",
              "thinking": "Sitting", "happy": "Meow", "talk": "Meow", "worried": "Itch", "sleep": "Sleeping2",
-             "lick": "Licking 1", "itch": "Itch", "sit": "Sitting"}
-MOOD_FX = {"focus": "z", "sleep": "💤", "thinking": "…", "happy": "♪", "talk": "♪", "worried": "!?"}
+             "lick": "Licking 1", "itch": "Itch", "sit": "Sitting", **pet_react.REACT_ANIM}
+MOOD_FX = {"focus": "z", "sleep": "💤", "thinking": "…", "happy": "♪", "talk": "♪", "worried": "!?", **pet_react.REACT_FX}
 FIDGETS = ("lick", "itch", "sit", "lick")
 
 
@@ -111,6 +113,7 @@ class Pet:
         self.voice = {}
         self.chat_on = True  # show chat replies in the bubble while the chat window is out of sight (#121)
         self.drag = None
+        self.hovering, self.hearing = False, False  # pointer on the cat / the user talking to Es (#279)
         self._hidden = winfocus.chat_window_visible()
         self._place()
         self._bind()
@@ -187,7 +190,9 @@ class Pet:
         return self.mood
 
     def _animate(self):
-        mood = self._current()
+        flashing = bool(self.override and time.time() < self.override_until and self.override not in FIDGETS)
+        mood = pet_react.choose(self._current(), dragging=bool(self.drag and self.drag[4]), flashing=flashing,
+                                hovering=self.hovering, hearing=self.hearing)
         name = MOOD_ANIM.get(mood, "Idle")
         if name != self.anim:
             self.anim, self.frame = name, 0
@@ -287,6 +292,7 @@ class Pet:
             self.voice = st.get("voice") or {}
             self.chat_on = st.get("chat", True)
             self.mood = st["mood"]
+            self.hearing = bool(st.get("hearing"))
             if self.last_event is None:
                 self.last_event = st["last_event"]  # don't replay what happened before we started
             for ev in api(f"/api/events?after={self.last_event}")["events"]:
@@ -441,6 +447,7 @@ class Pet:
         c.bind("<Double-Button-1>", self._double)
         c.bind("<Button-3>", self._menu)
         c.bind("<Enter>", self._hover)
+        c.bind("<Leave>", self._unhover)
 
     def _press(self, e):
         self.drag = (e.x_root, e.y_root, self.root.winfo_x(), self.root.winfo_y(), False)
@@ -460,6 +467,7 @@ class Pet:
         self.drag = None
         if moved:
             self._save_pos()
+            self.flash("stretch", 1.6)  # put down: a stretch (#279)
         else:  # a single click is just a hello; double-click opens the chat
             self.flash("talk", 1.8)
             self.say(random.choice(["にゃ？", "なになに？", "にゃー"]), secs=1.5, kind="murmur")
@@ -470,10 +478,14 @@ class Pet:
         self._open_chat()
 
     def _hover(self, e):
+        self.hovering = True
         text = hover_text(self.pomo)
         if self.bubble or not text:
             return
         self.say(text, secs=2.5, voice=False, record=False)
+
+    def _unhover(self, e):
+        self.hovering = False
 
     def _care(self):
         """A caring line every 15-25 minutes (#140). Not while focusing or asking something: the cat sleeps

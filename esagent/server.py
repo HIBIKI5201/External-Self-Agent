@@ -43,6 +43,7 @@ import utterances  # noqa: E402
 import calendar_view  # noqa: E402
 import gapi  # noqa: E402
 import feedback  # noqa: E402
+import pet_react  # noqa: E402
 import voice  # noqa: E402
 import runtime_log
 import playback
@@ -92,7 +93,7 @@ def pet_state():
         mood = "sleep"
     else:
         mood = "idle"
-    return {"mood": mood, "pomo": pomo, "stage": prog["stage"], "overdue": overdue,
+    return {"mood": mood, "pomo": pomo, "stage": prog["stage"], "overdue": overdue, "hearing": pet_react.hearing(),
             "last_event": events.last_id(), "port": CFG["port"],
             "enabled": pet_enabled(), "cat": CFG.get("pet_cat", 2), "scale": CFG.get("pet_scale", 3),
             "voice": voice.status(CFG), "chat": db.get_setting("pet_chat", "1") == "1"}
@@ -543,6 +544,7 @@ POST = _table({
     "/api/mode": Route(_mode),
     "/api/pet/enabled": Route(_pet_enabled),
     "/api/pet/chat": Route(_pet_chat),
+    "/api/pet/hearing": Route(lambda body: pet_react.heard()),  # the voice chat hears the user (#279)
     "/api/poke": Route(lambda body: {"ok": True}, syncs=True),  # the MCP server's "something changed" signal
     "/api/google/connect": Route(_google_connect),
     "/api/google/sync": Route(lambda body: {"result": gsync.run_once()}),

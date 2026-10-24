@@ -67,7 +67,8 @@
   const MINI_ANIMS = { Idle: [10, 1.2], Sleeping1: [1, 1], Sleeping2: [1, 1], Laying: [8, 1.2],
                        Stretching: [13, 1.6], Meow: [4, 0.6], Sitting: [1, 1], Itch: [2, 0.35] };
   const MOOD_ANIM = { idle: "Idle", focus: "Sleeping1", break: "Laying", stretch: "Stretching", thinking: "Sitting",
-                      happy: "Meow", talk: "Meow", worried: "Itch", sleep: "Sleeping2" };
+                      happy: "Meow", talk: "Meow", worried: "Itch", sleep: "Sleeping2",
+                      curious: "Meow", listen: "Sitting" };  // reactions to the pointer and to input (#279)
   let miniCat = 2, miniAnim = "", miniMood = "idle", miniOverride = null, miniUntil = 0;
 
   function setMini(mood) {
@@ -85,6 +86,14 @@
     el.style.animation = frames > 1 ? `minicat ${secs}s steps(${frames}) infinite` : "none";
   }
   function flashMini(mood, ms = 2500) { miniOverride = mood; miniUntil = Date.now() + ms; setMini(); setTimeout(() => setMini(), ms + 50); }
+  // The user typing or speaking to Es: the small cat listens (#279). It comes on every keystroke, so one
+  // timer; a reaction already playing (a click, a done task) is not cut off.
+  let listenTimer = null;
+  function hearing() {
+    if (miniOverride && miniOverride !== "listen" && Date.now() < miniUntil) return;
+    miniOverride = "listen"; miniUntil = Date.now() + 2000; setMini();
+    clearTimeout(listenTimer); listenTimer = setTimeout(() => setMini(), 2050);
+  }
 
   // ---- Es's lines in this window ---------------------------------------------------------
   let lineTimer = null, lineKey = null;
@@ -714,6 +723,7 @@
       $("#voice-test").onclick = () => post("/api/voice/test", {}).catch(() => say("試聴できなかった…", { voice: false }));
       $("#voice-stop").onclick = () => post("/api/voice/stop", {}).then(renderVoice).catch(() => {});
       $("#minicat").onclick = () => { flashMini("talk", 1500); say(pick(["にゃ？", "なになに？", "にゃー"]), { ms: 2000, kind: "murmur" }); };
+      $("#minicat").onmouseenter = () => { if (!(miniOverride && Date.now() < miniUntil)) flashMini("curious", 1200); };
       setMini("idle");
       $("#bgm-focus").addEventListener("change", syncBgm);
       document.querySelectorAll("[data-sound]").forEach((b) => b.onclick = () => setSound(b.dataset.sound, !soundOn[b.dataset.sound]));
@@ -747,5 +757,6 @@
       else if (ev.some((e) => e.startsWith("→"))) say("Claude に頼んでおくね。右のボタンから開けるよ。", { ms: 3500, record: false });  // the server records the event's line
     },
     say,
+    hearing,
   };
 })();
