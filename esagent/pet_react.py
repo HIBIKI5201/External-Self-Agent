@@ -31,13 +31,13 @@ def hearing(now=None):
 
 def choose(mood, dragging=False, flashing=False, hovering=False, hearing=False):
     """The mood to draw. Being carried always shows; a short reaction already playing (a click, a done
-    task) is not cut off by the pointer; a sleeping, focusing cat stays asleep under the pointer
-    (the hover bubble shows the timer instead), and a thinking cat keeps thinking."""
+    task) is not cut off by the pointer; a sleeping or focusing cat stays asleep under the pointer
+    (while focusing, the hover bubble shows the timer instead), and a thinking cat keeps thinking."""
     if dragging:
         return "held"
     if flashing:
         return mood
-    if hovering and mood != "focus":
+    if hovering and mood not in ("sleep", "focus", "thinking"):
         return "curious"
     if hearing and mood != "thinking":
         return "listen"

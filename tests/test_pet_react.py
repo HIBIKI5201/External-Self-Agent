@@ -18,7 +18,8 @@ def test_a_focusing_cat_sleeps_on_and_a_thinking_cat_keeps_thinking():
     assert pet_react.choose("focus", hovering=True) == "focus"  # the hover bubble shows the timer instead
     assert pet_react.choose("focus", hearing=True) == "listen"
     assert pet_react.choose("thinking", hearing=True) == "thinking"
-    assert pet_react.choose("thinking", hovering=True) == "curious"
+    assert pet_react.choose("thinking", hovering=True) == "thinking"
+    assert pet_react.choose("sleep", hovering=True) == "sleep"  # the server or the model is down
     assert pet_react.choose("focus", dragging=True) == "held"
 
 
