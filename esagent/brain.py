@@ -281,7 +281,14 @@ _SPEAK_Q_RE = re.compile(r"(?:喋れる|しゃべれる|喋れるように|し�
 _HEAR_Q_RE = re.compile(r"(?:聞こえる|聴こえる|聞こえて(?:る)?|聞き取れる|マイク(?:は|って)?(?:使える|で話せる))[^。！!\n]{0,8}" + _ASKS +
                         # 「マイクの音声読み取り使ってるよね？」「どうやって聞いてるの？」 (#207)
                         r"|(?:音声認識|音声読み取り|マイク(?:の)?音声|どうやって(?:聞|聴)いて|どうやって声を)[^。！!\n]{0,20}"
-                        r"[？?][。！!\s]*$")
+                        r"[？?][。！!\s]*$"
+                        # 「会話モードの認識はEdgeのAPI？」「声はどうやって文字にしてるの？」 (#120: the model said
+                        # it was a Google API that needs a Cloud project and a key)
+                        r"|(?:会話モード|マイク|聞き取り|声|音声)[^。！!\n]{0,8}(?:認識|聞き取り|文字起こし|文字に)[^。！!\n]{0,20}"
+                        r"(?:API|ＡＰＩ|キー|仕組み|どうやって|どう(?:なって|して)|Google|グーグル|Edge|エッジ|Chrome|ブラウザ|何(?:を)?使|どの)"
+                        r"[^。！!\n]{0,15}[？?]?[。！!\s]*$"
+                        r"|聞き取り[^。！!\n]{0,6}(?:仕組み|どうやって|API)[^。！!\n]{0,10}[？?][。！!\s]*$"
+                        r"|(?:声|言葉|音声)[^。！!\n]{0,6}どうやって[^。！!\n]{0,4}文字に[^。！!\n]{0,10}[？?][。！!\s]*$")
 
 
 def _ability_flow(text, cfg):
@@ -302,9 +309,10 @@ def _ability_flow(text, cfg):
     if _HEAR_Q_RE.search(said):
         music = re.search(r"音楽|曲|BGM|動画|音(?!声)", said)
         # The model told the user to make a Google Cloud project and an API key for it (#207, #208).
-        how = re.search(r"どうやって|API|キー|仕組み|何(?:を)?使", said, re.I)
+        how = re.search(r"どうやって|API|ＡＰＩ|キー|仕組み|何(?:を)?使|どの|Google|グーグル|Edge|エッジ|Chrome|ブラウザ|文字に", said, re.I)
         return ("会話モードをオンにすると、マイクで話してくれた言葉を Edge の音声認識で文字にして受け取れるよ。"
-                + ("ブラウザに入っている機能を使うから、API キーや Google Cloud の設定は要らないんだ。" if how else "")
+                + ("ブラウザに入っている Web Speech API（SpeechRecognition）を使うから、"
+                   "API キーや Google Cloud の設定は要らないんだ。" if how else "")
                 + "音楽や動画の音そのものは聞こえないんだ。"
                 + ("アプリ内の YouTube なら、タイトルと再生しているかどうかだけは分かるよ。" if music else ""))
     return None

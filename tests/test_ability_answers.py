@@ -61,3 +61,14 @@ def test_voice_input_is_not_denied_and_its_mechanism_is_answered():
         r = sb.chat("どうやって聞いてるの？")
         assert "会話モード" in r["reply"], r
     assert brain._ability_flow("音声認識の調子が悪い", {}) is None
+
+
+def test_more_wordings_of_the_recognition_question_are_answered_from_the_code():
+    """#120 (reopened): the model said the recognition was a Google API that needs a Cloud project and a key."""
+    with Sandbox(copy_real=False) as sb, patch.object(llm, "chat", side_effect=AssertionError("no model")):
+        for text in ("会話モードの認識はEdgeのAPI？", "聞き取りはどの仕組み？", "マイクの認識にAPIキーいる？",
+                     "声はどうやって文字にしてるの？"):
+            r = sb.chat(text)
+            assert r["intent"] == "ability" and "Web Speech API" in r["reply"] and "要らない" in r["reply"], (text, r)
+    for text in ("声の認識って精度悪いね", "会話モードの認識、今日は調子いい"):
+        assert brain._ability_flow(text, {}) is None, text
