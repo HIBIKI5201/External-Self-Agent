@@ -104,6 +104,8 @@ def _literal_add_title(text, match=None):
             return None
         match = deadline
     title = match["title"].strip()
+    # 「明日までにES 提出を未分類でいいから追加して」: the request words are not part of the name (#280).
+    title = re.sub(r"\s*を\s*[^を]{0,30}?(?:追加|登録|入れ|増や)" + _ADD_TAIL + r"$", "", title).strip()
     for p in sorted((p["name"] for p in db.list_projects() if p["name"]), key=len, reverse=True):
         if title.startswith(p) and re.match(r"(?:に|へ|として|で)", title[len(p):]):
             title = re.sub(r"^(?:に|へ|として|で)\s*", "", title[len(p):])  # 「就活にB社の説明会」
@@ -111,6 +113,11 @@ def _literal_add_title(text, match=None):
     if not title or _PRONOUN_RE.search(title) or re.search(r"と|、|,|および|締め?切|期限|期日|メモ|詳細", title) or annotate_dates(title, dt.date.today()) != title:
         return None
     return title
+
+
+def _without_add_word(title):
+    """「動作確認メモの追加」 -> 「動作確認メモ」 (#281): the model names the request, not the task."""
+    return re.sub(r"\s*(?:の|を)?\s*(?:追加|登録)(?:する|して)?$", "", title or "").strip() or title
 
 
 def _add_title_grounded(title, text, context=""):
@@ -428,6 +435,9 @@ def _action_errors(actions, text, context=''):
         literal = _literal_add_title(text) if kind == 'add_task' and not tid else None
         if literal:
             a['title'] = title = literal
+        elif kind == 'add_task' and not tid and title and not _add_title_grounded(title, text, context) \
+                and _add_title_grounded(_without_add_word(title), text, context):
+            a['title'] = title = _without_add_word(title)  # #281
         if tid and tid not in known:
             errors.append(f'#{tid} は一覧にありません。一覧から選んでください')
         elif kind in ('update_task', 'complete_task') and missing:

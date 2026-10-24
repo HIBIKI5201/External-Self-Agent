@@ -20,7 +20,7 @@
       "pathPattern": "(^|/)esagent/(brain|conversation_state|dates|reply_filters|status_question|task_apply|task_targets)\\.py$"
     },
     {
-      "pathPattern": "(^|/)(esagent/write_guard\\.py|tests/test_write_permission\\.py|tests/test_due_time\\.py)$"
+      "pathPattern": "(^|/)(esagent/write_guard\\.py|tests/test_write_permission\\.py|tests/test_due_time\\.py|tests/test_add_request_words\\.py)$"
     },
     {
       "pathPattern": "(^|/)tests/test_read_queries\\.py$"
