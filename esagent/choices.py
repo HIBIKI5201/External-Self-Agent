@@ -17,7 +17,7 @@ _PLAIN = re.compile(r'繰り?返し(?:は)?(?:なし|無し|いらない)|普通
 # A new request that names a task is not an answer to the pending question.
 _OTHER_TASK = re.compile(r'[「『"“＂#]')
 # Offers whose answer writes tasks: a spoken answer does not choose them, the button does (#174).
-WRITES = {'feature', 'project_add', 'repeat_bulk', 'repeat_add', 'complete'}
+WRITES = {'feature', 'project_add', 'repeat_bulk', 'repeat_add', 'complete', 'calendar_add'}
 _NO = re.compile(r'^(?:いいえ|やめる|やめて|キャンセル|あとで|しない)[。！!\s]*$')
 
 
@@ -54,6 +54,8 @@ def publish(kind, payload=None):
         options = [{'value': key, 'label': v[0]} for key, v in TOPICS.items()]
     elif kind in labels:
         options = [{'value': 'accept', 'label': labels[kind]}]
+    elif kind == 'calendar_add':  # #287: an event on the calendar, added only after this button
+        options = [{'value': 'accept', 'label': f"{payload['calendar_label']}に追加する"}]
     elif kind == 'repeat_bulk':  # #123: one period for several tasks
         options = [{'value': 'accept', 'label': f"{len(payload['ids'])} 件に設定する"}]
     elif kind == 'project_add':  # #115: the project of a new task
