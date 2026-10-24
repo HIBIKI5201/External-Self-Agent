@@ -63,3 +63,29 @@ def test_weekly_with_a_comma_is_read_and_the_reset_is_not_called_a_deadline_time
         r = sb.chat('週次レポートの締切を毎週、日曜日の23:59に繰り返し設定して')
         assert db.get_task(t['id'])['repeat'] == 'weekly 6 23:59', r
         assert '時刻は持たない' in r['reply'] and '終日' in r['reply'], r
+
+
+def test_pm_times_are_read_as_the_repeat_reads_them():
+    import task_apply
+    assert task_apply._clock('午後9時までに') == '21:00' and task_apply._clock('夜12時') == '00:00'
+    assert task_apply._clock('午前9時') == '09:00' and task_apply._clock('9時') == '09:00'
+
+
+def test_same_day_with_a_time_says_the_time_was_not_saved():
+    tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+    with Sandbox(copy_real=False) as sb:
+        t = db.add_task('資料の修正', due=tomorrow)
+        with patch.object(llm, 'chat', return_value=route([op('update_task', t['id'], due=tomorrow)])):
+            r = sb.chat('資料の修正の締切を明日の23:59にして')
+        assert '読み取れなかった' not in r['reply'], r
+        assert '時刻（23:59）は入っていない' in r['reply'], r
+
+
+def test_the_note_does_not_turn_off_the_natural_reply():
+    tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+    events = [f'✎ #1 資料の修正 を更新しました（締切 {tomorrow}）',
+              f'・ 締切は日付（{tomorrow}）だけ保存しました。時刻（23:59）は締切に保存できません（Google カレンダーでは終日の予定になります）']
+    with Sandbox(copy_real=False):
+        db.add_task('資料の修正', due=tomorrow)
+        found = brain.action_facts(events, {})
+        assert found and [f['op'] for f in found['facts']] == ['update'], found

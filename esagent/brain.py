@@ -925,6 +925,8 @@ def action_facts(events, touched):
     for e in events:
         if e.startswith("・ プロジェクト「") and e.endswith("を作りました"):
             continue  # part of an add; the project name is in that fact
+        if e.startswith(task_apply.DUE_TIME_NOTES):
+            continue  # added after the wording by _action_reply (#283)
         m = _FACT_EVENT_RE.match(e)
         t = db.get_task(int(m.group(2))) if m else None
         if not t:
