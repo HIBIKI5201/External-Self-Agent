@@ -62,6 +62,12 @@ def work_area():
     return rc.l, rc.t, rc.r, rc.b
 
 
+def poll_delay_ms(fails):
+    """1 s between polls; after failures 2, 4, then 8 s (#285). A server that stalls for seconds got a
+    new request every second from the cat, which then all failed together when it came back."""
+    return 1000 * min(8, 2 ** fails) if fails else 1000
+
+
 def hover_text(pomo):
     """The timer's state shown while the pointer is on the cat, or "" when idle (#189)."""
     if not pomo or pomo.get("mode", "idle") == "idle":
@@ -291,9 +297,11 @@ class Pet:
                 self.warned_day = today
                 self.flash("worried", 6)
                 self.say(f"「{st['overdue']}」の締切、過ぎちゃってるよ…", kind="notice", source="task")
+            self._poll_fails = 0
         except Exception:
             self.online, self.mood = False, "sleep"
-        self.root.after(1000, self._poll)
+            self._poll_fails = getattr(self, "_poll_fails", 0) + 1
+        self.root.after(poll_delay_ms(getattr(self, "_poll_fails", 0)), self._poll)
 
     def _on_event(self, ev):
         kind = ev["kind"]

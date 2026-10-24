@@ -156,3 +156,37 @@ def test_favicon_gets_an_empty_answer():
             patch.object(server.Handler, "_send", lambda self, code, obj=None, body=None, **k: sent.append((code, body))):
         handler.do_GET()
     assert sent == [(204, b"")]
+
+
+def test_dropped_answers_are_summed_per_route_with_the_slowest_time():
+    """#285: 3,090 lines of 「response delivery interrupted」 in 5 days, with no route or time."""
+    import server
+    out = io.StringIO()
+    logger = logging.Logger("cut-test", logging.INFO)
+    logger.addHandler(logging.StreamHandler(out))
+    clock = Clock()
+    traffic = runtime_log.Traffic(logger, clock)
+
+    class Broken:
+        def write(self, data):
+            raise ConnectionAbortedError("the client hung up")
+
+    handler = object.__new__(server.Handler)
+    handler.request_version, handler.requestline = "HTTP/1.1", "GET /api/pet HTTP/1.1"
+    handler.wfile, handler._headers_buffer = Broken(), []
+    with patch.object(server, "traffic", traffic), patch.object(server, "log", logger):
+        for i, path in enumerate(["/api/pet", "/api/events?after=PRIVATE", "/api/pet"]):
+            handler.command, handler.path, handler._started = "GET", path, 0.0
+            with patch.object(server.time, "monotonic", return_value=1.6 + i):
+                handler._send(200, {"ok": True})
+    assert not out.getvalue()  # nothing per request
+    clock.value = runtime_log.INTERVAL
+    traffic.checkpoint()
+    text = out.getvalue()
+    assert "interrupted summary GET /api/pet 200 count=2 max_ms=3600 window_seconds=300" in text, text
+    assert "interrupted summary GET /api/events 200 count=1 max_ms=2600" in text, text
+    assert "PRIVATE" not in text
+    out.truncate(0)
+    clock.value = 2 * runtime_log.INTERVAL
+    traffic.checkpoint()
+    assert "interrupted" not in out.getvalue()

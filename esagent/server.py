@@ -555,6 +555,10 @@ POST = _table({
 class Handler(BaseHTTPRequestHandler):
     server_version = "EsAgent/0.1"
 
+    def handle_one_request(self):
+        self._started = time.monotonic()  # how long an answer took when the client gave up on it (#285)
+        super().handle_one_request()
+
     def log_request(self, code="-", size="-"):
         traffic.request(self.command, self.path, code)
 
@@ -573,7 +577,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except ConnectionError:
             self.close_connection = True
-            log.info("response delivery interrupted status=%d", code)
+            now = time.monotonic()
+            traffic.interrupted(getattr(self, "command", ""), getattr(self, "path", ""), code,
+                                now - getattr(self, "_started", now))
 
     def _host_ok(self):
         # Blocks DNS-rebinding: only accept requests addressed to the loopback host.
