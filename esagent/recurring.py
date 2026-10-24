@@ -14,7 +14,8 @@ WEEKDAYS = "月火水木金土日"
 # without one (「毎週月曜」) is found and asked about instead of being saved as 0:00.
 _TIME = (r"(?P<ap>午前|午後|朝|昼|夕方|夜|深夜)?\s*(?:(?P<h>\d{1,2})\s*(?:時|:)\s*"
          r"(?:(?P<half>半)|(?P<m>\d{1,2})\s*分?)?)?")
-_RULE_RE = re.compile(r"(?:毎日|毎週\s*(?P<wd>[月火水木金土日])曜?日?)\s*(?:の|に)?\s*" + _TIME)
+# 「毎週、日曜日の23:59」 (#283): a comma after 毎週 used to hide the whole rule.
+_RULE_RE = re.compile(r"(?:毎日|毎週\s*[、,，]?\s*(?P<wd>[月火水木金土日])曜?日?)\s*[、,，]?\s*(?:の|に)?\s*" + _TIME)
 _LEFT_RE = re.compile(r"\s*(?:\d+\s*(?:時|:|分)?|半|:)")
 _PM = {"午後": range(1, 12), "夕方": range(1, 12), "昼": range(1, 6), "夜": range(6, 12)}
 ASK_TIME = "何時にリセットするか教えてね（例: 毎週月曜9時、毎日午後9時半）。"

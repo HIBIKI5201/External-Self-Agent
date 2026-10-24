@@ -123,6 +123,8 @@ def _change_time(text, history):
     task = recurring.set_rule(task['id'], _with_time(task['repeat'], hour, minute))
     description = recurring.describe(task['repeat'])
     reply = f'「{task["title"]}」を{description}にリセットする設定にしたよ（次の締切 {task["due"]}）。\n{recurring.GOOGLE_NOTE}'
+    if re.search(r'締切|締め切り|期限|まで', text):  # #283: the reset time is not a deadline time
+        reply += f'\n締切は日付（{task["due"]}）だけで、時刻は持たないよ（Google カレンダーでは終日の予定になる）。'
     return reply, [f'✎ #{task["id"]} {task["title"]}（🔁{description} / {task["due"]}）']
 
 
@@ -231,6 +233,8 @@ def handle(text, history):
         marker = '✎'
     description = recurring.describe(task['repeat'])
     reply = f'「{task["title"]}」を{description}にリセットする設定にしたよ（次の締切 {task["due"]}）。\n{recurring.GOOGLE_NOTE}'
+    if re.search(r'締切|締め切り|期限|まで', text):  # #283: the reset time is not a deadline time
+        reply += f'\n締切は日付（{task["due"]}）だけで、時刻は持たないよ（Google カレンダーでは終日の予定になる）。'
     return reply, [f'{marker} #{task["id"]} {task["title"]}（🔁{description} / {task["due"]}）']
 
 # 「ゲームのウィークリーに「週課A」を追加して」 (#135): a weekly wish without a day and time.

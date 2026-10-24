@@ -244,6 +244,9 @@ def _apply_current(actions, cfg, user_text="", context_text=""):
             events.append(f"＋ #{t['id']} {t['title']}"
                           f"（{t['project'] or '未分類'}{' / ' + t['due'] if t['due'] else ''}"
                           f"{' / 🔁' + recurring.describe(t['repeat']) if t.get('repeat') else ''}）")
+            note = _due_time_note(t, user_text, notes) if due else None
+            if note:
+                events.append(note)
         elif kind == "update_task":
             change = _intended_update(db.get_task(task_id), title, due, project, notes, f"{user_text} {context_text}",
                                       own=user_text)
@@ -258,7 +261,9 @@ def _apply_current(actions, cfg, user_text="", context_text=""):
                     continue
             if not change:
                 cur = db.get_task(task_id)
-                events.append(f"・ #{cur['id']} {cur['title']} は変えていません（何を変えるのか読み取れなかったため）")
+                # 「締切を23:59にして」 for the day it is already due: the date is right, the time cannot be kept (#283)
+                note = _due_time_note(cur, user_text, unchanged=True) if due and due == cur["due"] else None
+                events.append(note or f"・ #{cur['id']} {cur['title']} は変えていません（何を変えるのか読み取れなかったため）")
                 continue
             old = db.get_task(task_id)
             t = touched = db.update_task(task_id, **change)
@@ -268,6 +273,9 @@ def _apply_current(actions, cfg, user_text="", context_text=""):
                     ([f"プロジェクト: {t['project']}"] if "project" in change else []) + \
                     ([f"メモ追記: {change['notes_append']}"] if "notes_append" in change else [])
             events.append(f"✎ #{t['id']} {t['title']} を更新しました（{' / '.join(parts)}）")
+            note = _due_time_note(t, user_text, t.get("notes")) if "due" in change else None
+            if note:
+                events.append(note)
         elif kind == "complete_task":
             t = touched = db.update_task(task_id, status="done")
             events.append(f"✔ #{t['id']} {t['title']} を完了にしました")
@@ -290,6 +298,63 @@ def _apply_current(actions, cfg, user_text="", context_text=""):
             handoffs.append(h)
             events.append(f"→ #{t['id']} {t['title']} を Claude Code 用に準備しました（handoff #{h['id']}）")
     return events, handoffs, touched
+
+
+# 「23:59まで」「18時」「21時半」 said with a deadline (#283). A due is a date only (AS-04): the time is
+# not saved, and saying 「締切を設定しました」 alone let the user think 23:59 was.
+_CLOCK_RE = re.compile(r'(?<![\d/:-])(?P<ap>午前|午後|朝|昼|夕方|夜|深夜)?\s*(?P<h>[01]?\d|2[0-3])\s*(?:[:：]\s*(?P<m>[0-5]\d)|時(?!間)\s*(?:(?P<half>半)|(?P<m2>[0-5]?\d)\s*分)?)')
+
+
+def _clock(text):
+    """The first clock time in the words ('23:59'), date tags left out, or None."""
+    m = _CLOCK_RE.search(re.sub(r'\(=\d{4}-\d{2}-\d{2}\)', '', text or ''))
+    if not m:
+        return None
+    hour, minute = int(m['h']), 30 if m['half'] else int(m['m'] or m['m2'] or 0)
+    if m['ap'] in recurring._PM and hour in recurring._PM[m['ap']]:  # the same reading as recurring.read
+        hour += 12
+    elif m['ap'] in ("午前", "夜", "深夜") and hour == 12:
+        hour = 0
+    return f"{hour:02d}:{minute:02d}"
+
+
+DUE_TIME_NOTES = ("・ 締切は日付（", "・ 繰り返しのリセットは ", "・ 締切はすでに日付（")
+
+
+def _due_time_note(t, user_text, notes="", unchanged=False):
+    """The line saying the time of a deadline was not saved, when the words gave one (#283).
+    A repeat's own reset time (「毎週日曜23:59」) is saved, as the reset; the due is still a date."""
+    clock = _clock(user_text)
+    if not clock or not t.get("due"):
+        return None
+    if unchanged:
+        return (f"・ 締切はすでに日付（{t['due']}）です。時刻（{clock}）は締切に保存できません"
+                "（Google カレンダーでは終日の予定になります）")
+    reset = (t.get("repeat") or "").split()[-1:] == [clock]
+    head = (f"・ 繰り返しのリセットは {clock} にしましたが、締切そのものは日付（{t['due']}）だけです"
+            if reset else f"・ 締切は日付（{t['due']}）だけ保存しました。時刻（{clock}）は締切に保存できません")
+    memo = "。メモに書いた時刻は記録で、締切の時刻ではありません" if clock in (notes or "") or \
+        clock.lstrip("0") in (notes or "") else ""
+    return head + memo + "（Google カレンダーでは終日の予定になります）"
+
+
+def due_time_spoken(events):
+    """Es's own words for the due-time lines among the events, to end the reply with (#283): the
+    reply alone (「更新したよ」) must not leave the user thinking the time was set."""
+    out = []
+    for e in events:
+        m = re.match(r"・ 締切(?:は|はすでに)日付（(.+?)）(?:だけ保存しました|です)。時刻（(.+?)）", e)
+        r = re.match(r"・ 繰り返しのリセットは (\S+) にしましたが、締切そのものは日付（(.+?)）", e)
+        if m:
+            out.append(f"締切は日付（{m[1]}）だけ保存できるから、時刻（{m[2]}）は入っていないよ。")
+        elif r:
+            out.append(f"リセットは {r[1]} だけど、締切そのものは日付（{r[2]}）だけだよ。")
+        else:
+            continue
+        if "メモに書いた時刻" in e:
+            out.append("メモの時刻は記録で、締切の時刻じゃないよ。")
+        out.append("Google カレンダーでは終日の予定になるよ。")
+    return "".join(dict.fromkeys(out))
 
 
 def _intended_update(task, title, due, project, notes, said, own=None):
@@ -386,7 +451,8 @@ def _action_errors(actions, text, context=''):
             elif _META_TITLE_RE.search(title) or (not _EXPLICIT_ADD_RE.search(text)
                                                   and _similarity(f'{text} {context}', title) < .35):
                 errors.append(f'「{title}」は発言から読み取れません。利用者の内容だけを使ってください')
-        if kind == 'update_task' and tid in known and not _intended_update(
+        same_day_time = due and tid in known and due == db.get_task(tid)['due'] and _clock(text)  # #283
+        if kind == 'update_task' and tid in known and not same_day_time and not _intended_update(
                 db.get_task(tid), title, due, _clean(a.get('project')), _clean(a.get('notes')), f'{text} {context}', own=text):
             errors.append('何を変更する依頼か読み取れません。依頼のある項目だけを指定してください')
         elif kind == 'update_task' and tid in known:
