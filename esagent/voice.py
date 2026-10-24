@@ -173,9 +173,11 @@ def speakable(text, max_chars=200):
     return t
 
 
-def say(cfg, text, key=None, force=False):
+def say(cfg, text, key=None, force=False, wake=True):
     """Queue a line. Returns False when reading aloud is off or the line was already queued.
-    `key` names the thing being said (an event, a reply) so two windows queue it once."""
+    `key` names the thing being said (an event, a reply) so two windows queue it once.
+    wake=False: a line not worth starting the engine for (the cat's caring lines, #284); if no engine
+    answers when its turn comes, it is dropped and the bubble alone shows it."""
     if not (force or settings()["enabled"]):
         return False
     words = speakable(text, int(cfg.get("voice_max_chars", 200)))
@@ -192,7 +194,7 @@ def say(cfg, text, key=None, force=False):
         for m in marks:
             _seen[m] = now
         jobs.check()
-        _queue.append({"text": words, "gen": _gen, "at": now, "job": jobs.CURRENT.get()})
+        _queue.append({"text": words, "gen": _gen, "at": now, "job": jobs.CURRENT.get(), "wake": wake})
         while len(_queue) > QUEUE_MAX:
             _queue.popleft()
         _cond.notify_all()
@@ -300,7 +302,9 @@ def _process(cfg, item):
         return
     _active_voice_token = item.get("job")
     try:
-        url = _engine(cfg)
+        url = _engine(cfg, start=item.get("wake", True))
+        if url is None:
+            return  # not worth starting the engine for
         sid = _style_id(cfg, url)
         if not jobs.valid(item.get("job")):
             return
@@ -362,13 +366,15 @@ def _alive(url):
         return False
 
 
-def _engine(cfg):
-    """The engine's URL, starting the engine when nothing answers there."""
+def _engine(cfg, start=True):
+    """The engine's URL, starting the engine when nothing answers there (start=False: None instead)."""
     global _proc
     url = cfg.get("voicevox_url") or DEFAULT_URL
     if _alive(url):
         _state["engine"] = "ready"
         return url
+    if not start:
+        return None
     path = cfg.get("voicevox_engine_path") or DEFAULT_ENGINE
     if not os.path.isfile(path):
         _state["engine"] = "missing"

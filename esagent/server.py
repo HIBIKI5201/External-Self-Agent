@@ -521,7 +521,8 @@ POST = _table({
     "/api/listen/log": Route(_listen_log),
     "/api/es/said": Route(_es_said),
     # a line the cat or the chat window shows
-    "/api/voice/say": Route(lambda body: {"queued": voice.say(CFG, str(body.get("text") or "")[:500], key=body.get("key"))}, **_LOCAL),
+    "/api/voice/say": Route(lambda body: {"queued": voice.say(CFG, str(body.get("text") or "")[:500], key=body.get("key"),
+                                                                  wake=body.get("wake", True) is not False)}, **_LOCAL),
     # 試聴: a fixed line, even while reading aloud is off
     "/api/voice/test": Route(lambda body: {"queued": voice.say(CFG, voice.SAMPLE, force=True)}, **_LOCAL),
     "/api/voice/stop": Route(_voice_stop, **_LOCAL),

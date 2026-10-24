@@ -201,7 +201,7 @@ class Pet:
 
     # ---- speech bubble ------------------------------------------------------------------
     def say(self, text, buttons=None, secs=None, voice=True, key=None, kind="feedback", source="pet", ukey=None,
-            record=True, on_click=None):
+            record=True, on_click=None, wake_voice=True):
         if self._hidden:
             return  # the chat window owns companion speech while the desktop cat is hidden
         # Everything the cat says goes to the one utterance log (#139); an event's line carries its key
@@ -211,7 +211,7 @@ class Pet:
             body = {"text": text, "kind": kind, "source": source, **({"key": ukey} if ukey else {})}
             threading.Thread(target=lambda: self._quiet(lambda: api("/api/es/said", body)), daemon=True).start()
         if voice and self.voice.get("enabled"):
-            self._speak(text, key)
+            self._speak(text, key, wake_voice)
         self._close_bubble()
         b = tk.Toplevel(self.root)
         b.overrideredirect(True)
@@ -248,9 +248,10 @@ class Pet:
         if not buttons:
             self.root.after(int((secs or max(4, len(text) * 0.16)) * 1000), lambda bb=b: self._close_bubble(bb))
 
-    def _speak(self, text, key=None):
-        """Hand the line to the server's single voice player (#44); the cat never plays audio itself."""
-        body = {"text": text, **({"key": key} if key else {})}
+    def _speak(self, text, key=None, wake=True):
+        """Hand the line to the server's single voice player (#44); the cat never plays audio itself.
+        wake=False: only if the VOICEVOX engine is already running (#284)."""
+        body = {"text": text, **({"key": key} if key else {}), **({} if wake else {"wake": False})}
         threading.Thread(target=lambda: self._quiet(lambda: api("/api/voice/say", body)), daemon=True).start()
 
     @staticmethod
@@ -468,12 +469,14 @@ class Pet:
 
     def _care(self):
         """A caring line every 15-25 minutes (#140). Not while focusing or asking something: the cat sleeps
-        then, and a question on screen must not be covered."""
+        then, and a question on screen must not be covered. Not while the user is away either (#284), and
+        the voice is not worth starting a stopped VOICEVOX engine for."""
         self.root.after(care.delay_seconds() * 1000, self._care)
-        if self.pomo.get("mode") == "focus" and not self.pomo.get("paused") or self.asking or self.bubble:
+        focusing = self.pomo.get("mode") == "focus" and not self.pomo.get("paused")
+        if not care.due(care.idle_seconds(), focusing, busy=bool(self.asking or self.bubble)):
             return
         self.care_kind, line = care.pick(time.localtime().tm_hour, self.care_kind)
-        self.say(line, kind="notice", source="care")
+        self.say(line, kind="notice", source="care", wake_voice=False)
 
     @staticmethod
     def _greeting():
