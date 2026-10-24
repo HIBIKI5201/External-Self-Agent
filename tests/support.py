@@ -146,6 +146,7 @@ class FakeTasks:
         self.lists = {account: {"id": account, "title": "マイタスク"}}
         self.tasks = {account: {}}
         self.offline = False
+        self.calls = []  # (method, path) of every request, to count them (#272)
 
     def stamp(self):
         import datetime as dt
@@ -155,6 +156,7 @@ class FakeTasks:
         if self.offline:
             import gauth
             raise gauth.OfflineError("fake network down")
+        self.calls.append((method, path))
         p = path.strip("/").split("/")
         if path == "/users/@me/lists" and method == "GET":
             return {"items": list(self.lists.values())}
@@ -167,7 +169,10 @@ class FakeTasks:
             return self.lists[i]
         lid = p[1]
         if len(p) == 3 and method == "GET":
-            return {"items": list(self.tasks[lid].values())}
+            since = (params or {}).get("updatedMin")  # RFC 3339 in UTC compares as text
+            return {"items": [t for t in self.tasks[lid].values()
+                              if (not t.get("deleted") or (params or {}).get("showDeleted") == "true")
+                              and (not since or t["updated"] >= since)]}
         if len(p) == 3 and method == "POST":
             i = f"T{next(self.n)}"
             t = {"id": i, **{k: v for k, v in body.items() if v is not None}, "updated": self.stamp()}
@@ -191,6 +196,10 @@ class FakeTasks:
             self.tasks[lid].pop(tid)
             return {}
         raise AssertionError(f"unhandled {method} {path}")
+
+    def delete_in_google(self, lid, tid):
+        """What deleting in the Google ToDo app does: the task stays, marked deleted (showDeleted)."""
+        self.tasks[lid][tid].update(deleted=True, updated=self.stamp())
 
     def install(self):
         import gsync

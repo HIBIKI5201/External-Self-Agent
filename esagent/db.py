@@ -317,7 +317,12 @@ def _v2_chat_request_age(con):
 
 # Applied in order; PRAGMA user_version is the number of steps a database has had. Append new
 # steps (type changes, indexes, data moves) here; never edit or reorder a released one.
-VERSIONS = [_v1_baseline, _v2_chat_request_age]
+def _v3_gtask_index(con):
+    # Every task Google sends is looked up by its Google id (#272).
+    con.execute("CREATE INDEX IF NOT EXISTS tasks_gtask_id ON tasks(gtask_id)")
+
+
+VERSIONS = [_v1_baseline, _v2_chat_request_age, _v3_gtask_index]
 KEEP_DAYS = 7  # finished chat requests and conversation jobs are kept this long
 
 
