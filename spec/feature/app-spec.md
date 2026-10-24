@@ -33,7 +33,7 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 - **実装（#241）:** モデルの状態（Ollama の `/api/tags`・`/api/ps`）は 5 秒（`llm.STATUS_TTL`）覚えておき、黒猫（1 秒ごとの `/api/pet`）・画面（8 秒ごと）・返事待ちの処理が同じ答えを使う。モデルの読み込み（warm）が終わったら覚えた答えを捨てる。黒猫の締切切れの判定は、全タスクではなく最も古い 1 件だけを読む（`db.first_overdue`）。
 
 ### サーバーログの保持と診断（#82、AS-01/17）
-成功したGETの状態取得（pet/events/state/progress/pomo/voice/chat/job/health）と、再生中に5秒ごとに届くPOSTの再生状態（/api/playback/state、#209）は5分ごとの経路別件数に集約する（`poll summary GET|POST <経路> 200 count=…`）。ブラウザが毎回求める /favicon.ico は 204 で返し、404のWARNINGにしない（#209）。変更要求・その他のHTTP・失敗した取得は個別に残し、4xxはWARNING、5xxはERRORとする。経路は既知の固定名に正規化し、クエリ・リクエスト本文・任意のURL断片・OAuth code/stateは記録しない。
+成功したGETの状態取得（pet/events/state/progress/pomo/voice/chat/job/health）と、再生中に5秒ごとに届くPOSTの再生状態（/api/playback/state、#209）は5分ごとの経路別件数に集約する（`poll summary GET|POST <経路> 200 count=…`）。ブラウザが毎回求める /favicon.ico は 204 で返し、404のWARNINGにしない（#209）。相手が先に接続を切って返せなかった応答も、1 件ずつ書かずに同じ 5 分ごとに経路・状態ごとの件数と、要求を受けてからいちばん長くかかった時間にまとめる（`interrupted summary GET <経路> 200 count=… max_ms=…`、#285）。デスクトップの猫はサーバーに届かないと、問い合わせの間隔を 1 秒から 2・4・8 秒に延ばし、届いたら 1 秒に戻す（#285）。変更要求・その他のHTTP・失敗した取得は個別に残し、4xxはWARNING、5xxはERRORとする。経路は既知の固定名に正規化し、クエリ・リクエスト本文・任意のURL断片・OAuth code/stateは記録しない。
 容量ローテーションは既定1MB×8本（現行とバックアップ7本）。server_log_max_bytes（100KB〜10MB）、server_log_backups（2〜30）で上限を設定でき、無効な型は既定値を使う。既存ログの移行や削除を起動時に追加しない。
 5分のチェックポイントでログ保持範囲を確認する。診断は入力ごとの最古・最新時刻、HTTP状態件数、成功ポーリング集約と境界の不確実性、指定期間前後の不足を表示する。要求全体を保存されたチェックポイントで連続して覆えない場合は未検証とする。古いログ、読取不能、空白、遅延したチェックポイントは全期間の健全性の証拠にしない。容量を超える異常多発時に24時間の保持を保証せず、実際の不足を報告する。
 

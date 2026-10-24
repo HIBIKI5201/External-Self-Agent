@@ -55,6 +55,17 @@ class Traffic:
         self.lock = threading.RLock()
         self.since = clock()
         self.counts = {}
+        self.cut = {}  # (method, path, status) -> [count, slowest seconds] of answers the client dropped
+
+    def interrupted(self, method, target, status, seconds):
+        """The client hung up before the answer was written (#285). One line per route at the next
+        checkpoint, with how long the slowest answer took: the cat gives up after 1.5 s."""
+        method = method if method in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") else "OTHER"
+        key = (method, route(target), int(status) if isinstance(status, int) else 0)
+        with self.lock:
+            entry = self.cut.setdefault(key, [0, 0.0])
+            entry[0] += 1
+            entry[1] = max(entry[1], max(0.0, seconds))
 
     def request(self, method, target, status):
         method = method if method in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") else "OTHER"
@@ -81,5 +92,9 @@ class Traffic:
             self.logger.info("log heartbeat window_seconds=%s", window)
             for (method, path), count in sorted(self.counts.items()):
                 self.logger.info("poll summary %s %s 200 count=%d window_seconds=%s", method, path, count, window)
+            for (method, path, status), (count, slowest) in sorted(self.cut.items()):
+                self.logger.info("interrupted summary %s %s %d count=%d max_ms=%d window_seconds=%s",
+                                 method, path, status, count, round(slowest * 1000), window)
             self.counts.clear()
+            self.cut.clear()
             self.since = now

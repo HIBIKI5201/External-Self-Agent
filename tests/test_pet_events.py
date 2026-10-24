@@ -55,4 +55,4 @@ def test_overdue_warning_once_a_day_and_sleep_when_the_server_is_away():
     with patch.object(pet, "api", away):
         cat._poll()
     assert cat.online is False and cat.mood == "sleep"
-    assert cat.root.after.call_args[0][0] == 1000  # it keeps polling
+    assert cat.root.after.call_args[0][0] == 2000  # it keeps polling, less often while away (#285)
