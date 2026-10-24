@@ -10,6 +10,7 @@ outside model.
 import datetime as dt
 import json
 import re
+import sqlite3
 import threading
 import time
 import urllib.parse
@@ -193,8 +194,11 @@ def add(cal_id, title, date, start_time="", end_time="", cfg=None):
     row = _row(cal, {**body, **ev, "start": ev.get("start", body["start"]), "end": ev.get("end", body["end"])},
                dt.date.today())
     if row and cal["selected"]:
-        with db.connect() as con:
-            con.execute("INSERT OR REPLACE INTO calendar_events VALUES(?, ?, ?, ?, ?, ?, ?, ?)", row)
+        try:
+            with db.connect() as con:
+                con.execute("INSERT OR REPLACE INTO calendar_events VALUES(?, ?, ?, ?, ?, ?, ?, ?)", row)
+        except sqlite3.Error:
+            pass  # the event is on Google already; the next calendar sync fills the cache (#287)
     return {"id": ev.get("id"), "calendar": display_name(cal), "title": title}
 
 
@@ -326,6 +330,8 @@ _ADD_EVENT = re.compile(r"(?:予定|カレンダー)\s*(?:に|へ)\s*(?P<a>.*?)\
                         r"|[「『](?P<b>[^」』]{1,80})[」』]\s*(?:を|も)?\s*(?:.{0,20}?)(?:予定|カレンダー)\s*(?:に|へ|として)\s*"
                         r"(?:追加|入れ|登録|書い|足し)")
 _TASK_WORD = re.compile(r"タスク|ToDo|TODO|todo|締め?切")
+# 「追加しないで」「追加してくれた？」: not a request to add (#287).
+_ADD_DECLINED = re.compile(r"(?:追加|入れ|登録|書い|足し)(?:し)?(?:ないで|なくて|なく|ない|てくれた|てある|てる[？?]|た[？?か]|ました)")
 _TAG = re.compile(r"\(=(\d{4}-\d{2}-\d{2})\)")
 
 
@@ -333,7 +339,7 @@ def add_request(text, today=None):
     """(reply, offer payload or None) for a request to put an event on the calendar, or None when the
     message is not one. Nothing is written here: the event is added only after the button (#287)."""
     from dates import annotate_dates
-    if len(text) > 120 or _TASK_WORD.search(text):
+    if len(text) > 120 or _TASK_WORD.search(text) or _ADD_DECLINED.search(text):
         return None
     today = today or dt.date.today()
     tagged = annotate_dates(text, today)

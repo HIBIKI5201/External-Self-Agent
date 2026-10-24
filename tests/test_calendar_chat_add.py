@@ -1,5 +1,6 @@
 """「11/22の予定にXを追加して」 asks to add a calendar event and never makes a task (#287, AS-11)."""
 import datetime as dt
+import sqlite3
 from unittest.mock import patch
 
 import brain
@@ -58,6 +59,26 @@ def test_task_words_still_make_a_task_request():
     assert calendar_view.add_request("11/22締切でレポートをタスクに追加して") is None
     assert calendar_view.add_request("明日の予定は？") is None
     assert calendar_view.add_request("資料の修正を追加して") is None
+
+
+def test_a_negation_or_a_question_is_not_a_request():
+    for text in ("明日の予定に歯医者を追加しないで", "明日の予定に歯医者を追加してくれた？",
+                 "明日の予定に歯医者を入れた？", "明日の予定に歯医者は入れなくていいよ"):
+        assert calendar_view.add_request(text) is None, text
+
+
+def test_a_failed_cache_write_still_says_the_event_was_added():
+    d, md = _day()
+    google = FakeGoogle()
+    with Sandbox(copy_real=False), connected(), patch.object(calendar_view, "_req", google.req):
+        calendar_view.calendars(refresh=True)
+        payload = {"calendar": "me@example.com", "calendar_label": "メインのカレンダー", "title": "町内会", "date": d.isoformat()}
+        cals = calendar_view.calendars()
+        with patch.object(calendar_view, "calendars", return_value=cals), \
+                patch.object(db, "connect", side_effect=sqlite3.OperationalError("database is locked")):
+            reply, events = calendar_view.finish_add(payload, cfg={})
+        assert "追加したよ" in reply and events, reply
+        assert any(e.get("summary") == "町内会" for e in google.events["me@example.com"])
 
 
 def test_mail_address_names_are_not_said():
