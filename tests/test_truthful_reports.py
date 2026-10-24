@@ -122,3 +122,18 @@ def test_game_requires_ending_before_focus_operation():
         result = sb.chat("集中タイマーのタスクを合成の資料にして")
         assert result["intent"] == "game" and not result["events"]
         assert pomodoro.state(sb.cfg)["task_id"] is None
+
+
+def test_small_talk_loses_a_claim_without_the_registration_note():
+    """#176: 「まだ何も登録・変更していないよ。登録するなら…」 was added to talk that asked nothing."""
+    with Sandbox(copy_real=False) as sb:
+        def model(cfg, messages, schema=None, **kw):
+            if schema:
+                return '{"intent":"chat","focus":"","actions":[]}'
+            return "いいね、晴れると気分が上がるよね。予定に追加しておいたよ。"
+        with patch.object(brain.llm, "chat", model):
+            talk = sb.chat("今日は晴れてて気持ちいいね")
+            ask = sb.chat("買い物をタスクにしたいんだけど")
+        assert "追加しておいた" not in talk["reply"] and brain.NO_CHANGE_NOTE not in talk["reply"], talk
+        assert "晴れると気分が上がる" in talk["reply"]
+        assert brain.NO_CHANGE_NOTE in ask["reply"], ask  # a task was asked about: the note stays

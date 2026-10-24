@@ -715,6 +715,12 @@ def conversation(history, budget):
     return conversation_context.select(history, budget)
 
 
+# Words that make a message read as a request to change tasks: only then does a dropped claim get the
+# 「まだ何も登録・変更していないよ。登録するなら…」 note (#176). Small talk only loses the claim.
+_OPERATION_ASK_RE = re.compile(r"タスク|追加|登録|締め?切|期限|完了|終わった|終わらせ|変更|変えて|直して|メモ|入れて|消して|"
+                               r"削除|延ばして|ずらして|ToDo|TODO|todo|やること")
+
+
 def _budget(cfg):
     return cfg.get("history_tokens", 2000)
 
@@ -1250,7 +1256,7 @@ def _respond(cfg, text, today, history, intent, focus, events, touched):
     reply = _MODE_CLAIM_RE.sub("", reply).strip()
     if _TALK_START_RE.search(text) and db.get_setting("chat_mode", "work") == "work":
         reply += "\n（雑談モードにする？上のボタンか「雑談モードにして」で切り替えられるよ）"
-    reply = clean_model_reply(reply, events)
+    reply = clean_model_reply(reply, events, asked=bool(_OPERATION_ASK_RE.search(text)))
     reply, offered = strip_model_offers(reply)
     reply, promised = strip_promises(reply)
     reply, alarmed = strip_alarm_promises(reply)
