@@ -32,6 +32,8 @@ jobs:
         run: node tests/test_calendar_days.js
       - name: Task list fold tests
         run: node tests/test_task_fold.js
+      - name: Narrow window layout tests
+        run: node tests/test_layout_toggle.js
       - name: JSON files
         shell: bash
         run: for f in config.example.json spec/domains/*.json .claude/settings.json; do python -m json.tool "$f" > /dev/null || exit 1; done
