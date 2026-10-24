@@ -44,3 +44,14 @@ def test_real_model_small_talk_avoids_stock_closings():
             assert not brain._GENERIC_CLOSER_RE.search(r) or any(w in r for w in ("カレー", "スパイス", "辛")), replies
             assert not brain._SELF_LIMIT_RE.search(r), replies
         assert len(set(replies)) == 3, replies
+
+
+def test_stock_closings_and_the_same_tail_emoji_are_dropped():
+    """#176: 「話してOKだよ～！😊」「一緒に頑張ろうね～！😊」 after #109."""
+    reply = "コーヒー淹れたんだね、豆から？話してOKだよ～！"
+    assert brain.tidy_chat_reply(reply, "コーヒー淹れた", []) == "コーヒー淹れたんだね、豆から？"
+    reply = "締切前は焦るよね。一緒に頑張ろうね～！"
+    assert brain.tidy_chat_reply(reply, "締切が近い", []) == "締切前は焦るよね。"
+    before = hist("いいね、散歩は気分転換になるよね 😊")
+    assert brain.tidy_chat_reply("雨の音っていいよね 😊", "雨が降ってる", before) == "雨の音っていいよね"
+    assert brain.tidy_chat_reply("雨の音っていいよね 😊", "雨が降ってる", []) == "雨の音っていいよね 😊"

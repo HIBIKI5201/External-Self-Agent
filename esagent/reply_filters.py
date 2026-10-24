@@ -21,7 +21,11 @@ _RECORD_RE = re.compile(r"(?:記録\s*[:：]|(?:^|\n)\s*[＋+✎✔→↺・]\s*
 # Small talk kept ending in the same 「何でも話してね」, repeating earlier lines and explaining what
 # Es cannot hear (#109). Such sentences are dropped when the reply has something else to say.
 _GENERIC_CLOSER_RE = re.compile(r"(?:何でも|なんでも|いつでも|気軽に|遠慮なく|好きなだけ)[^。！!？?\n]{0,15}"
-                                r"(?:話|聞|言|相談|教え|声をかけ)|聞かせて(?:ね|ください|ほしい|欲しい)?(?:な)?[。！!〜ー♪\s]*$")
+                                r"(?:話|聞|言|相談|教え|声をかけ)|聞かせて(?:ね|ください|ほしい|欲しい)?(?:な)?[。！!〜ー♪\s]*$|"
+                                # 「話してOKだよ～！」「一緒に頑張ろうね～！」 closed most replies (#176)
+                                r"話して(?:OK|ＯＫ|オッケー|いい|大丈夫)|一緒に(?:頑張|がんば)ろう")
+# A trailing emoji the last replies also ended with (「…😊」 on nearly every reply, #176).
+_TAIL_EMOJI_RE = re.compile(r"\s*([\U0001F300-\U0001FAFF\u2600-\u27BF])\ufe0f?\s*$")
 # 「E.S. Agent は音声を直接聞くことはできないから、文字に変換して話してね」 is never true: the user's speech
 # arrives through 会話モード (#207). Unlike music, there is no question in which it is the right answer.
 _VOICE_LIMIT_RE = re.compile(r"(?:音声|声|言葉|話)(?:は|が|を)?[^。！!？?\n]{0,8}"
@@ -41,6 +45,11 @@ def _norm(sentence):
 
 def tidy_chat_reply(reply, text, history):
     """Drop a generic closing line, a line repeated from the last replies, and an unasked self-limit."""
+    tail = _TAIL_EMOJI_RE.search(reply)
+    if tail and reply[:tail.start()].strip() and any(
+            (_TAIL_EMOJI_RE.search(m["content"]) or [None, None])[1] == tail[1]
+            for m in history[-6:] if m["role"] == "assistant"):
+        reply = reply[:tail.start()].rstrip()
     sentences = [s for s in re.split(r"(?<=[。！!？?\n])", reply) if s.strip()]
     if len(sentences) < 2:
         return reply
@@ -188,8 +197,10 @@ def strip_context_echo(reply, said=()):
     return reply, not n or any(n == _norm(line) for line in said)
 
 
-def clean_model_reply(reply, events=()):
-    """Replace model operation claims with independently generated operation records."""
+def clean_model_reply(reply, events=(), asked=True):
+    """Replace model operation claims with independently generated operation records.
+    asked=False: the user did not ask for an operation, so the claim is only dropped, without the
+    「登録するなら…」 note that does not fit small talk (#176)."""
     original = reply
     reply = strip_model_records(reply)
     sentences = re.split(r"(?<=[。！!？?\n])", reply)
@@ -202,6 +213,8 @@ def clean_model_reply(reply, events=()):
         only_timer = timer and not any(_CLAIM_RE.search(s) and s not in timer for s in sentences)
         note = timer_chat.NO_TIMER_NOTE if only_timer else \
             "実行した操作は下の記録を確認してね。" if events else NO_CHANGE_NOTE
+        if not asked and not events and not only_timer:
+            return kept or "うん、そうなんだね。"
         return f"{kept}\n{note}" if kept else note
     return kept
 
