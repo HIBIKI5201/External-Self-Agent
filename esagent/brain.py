@@ -1797,6 +1797,8 @@ def _choice_reply(selected, cfg, message_id=None):
         reply, events = _finish_project_add(payload, value, cfg)
     elif kind == 'repeat_bulk' and value == 'accept':
         reply, events = repeat_chat.finish_bulk(payload)
+    elif kind == 'calendar_add' and value == 'accept':
+        reply, events = calendar_view.finish_add(payload, cfg)
     elif kind == 'complete' and value == 'accept':
         reply, events = _finish_complete(payload)
     elif kind == 'repeat_add' and value in ('accept', 'plain', 'rule'):
@@ -2061,6 +2063,15 @@ def _fixed_schedule(t):
     return Fixed(schedule, "schedule", clear=True) if schedule else None
 
 
+def _fixed_calendar_add(t):
+    # 「11/22の予定にXを追加して」: a calendar event asked first, never a task by default (#287)
+    found = calendar_view.add_request(t.text)
+    if not found:
+        return None
+    reply, offer = found
+    return Fixed(reply, "proposal" if offer else "calendar", offer=("calendar_add", offer) if offer else None)
+
+
 def _fixed_ability(t):
     ability = _ability_flow(t.text, t.cfg)
     return Fixed(ability, "ability", clear=True) if ability else None
@@ -2252,6 +2263,7 @@ FIXED_REPLIES = (
     ("game", _fixed_game),                        # しりとり (conversation_game)
     ("es_reply", _fixed_es_reply),                # 「終わったよ」 to Es's own question (#139)
     ("schedule", _fixed_schedule),                # 「明日の予定は？」 (#157)
+    ("calendar_add", _fixed_calendar_add),        # 「11/22の予定にXを追加して」 (#287)
     ("ability", _fixed_ability),                  # 「喋れるようになった？」 (#120)
     ("playback", _fixed_playback),                # 「今何の曲？」
     ("focus", _fixed_focus),                      # 「集中タイマーのタスクを〇〇にして」

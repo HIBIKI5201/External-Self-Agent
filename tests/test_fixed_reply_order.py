@@ -36,6 +36,9 @@ TABLE = (
     ("資料の修正、今日はやる気でないから明日にする", "model"),
     # #193: asking for the schedule.
     ("明日の予定は？", "schedule"),
+    # #287: putting something on the calendar is not a task.
+    ("11/22の予定に町内会の集まりを追加して", "calendar_add"),
+    ("明日の予定にES提出を追加してくれる？", "calendar_add"),
     # One or more sentences for the other entries.
     ("しりとりしよう", "game"),
     ("喋れるようになった？", "ability"),
@@ -64,7 +67,6 @@ TABLE = (
 # #193: still taken by the calendar until PR #218 lands. Either answer passes, so whichever lands
 # first stays green; after #218, move these rows into TABLE with the second value.
 KNOWN_MISFIRES = (
-    ("明日の予定にES提出を追加してくれる？", "schedule", "model"),
     ("金曜までに資料を出す予定だけど、タスクにしてくれる？", "schedule", "model"),
     ("来週の予定を立てたいんだけど、何からやればいい？", "schedule", "model"),
     ("明日は友達と遊ぶ予定なんだ、楽しみ！どう思う？", "schedule", "model"),

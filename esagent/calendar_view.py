@@ -158,6 +158,15 @@ def events(first, last):
     return out
 
 
+def display_name(cal):
+    """A calendar's name to show and say (#287): Google names the main calendar after the account's
+    mail address, which must not end up in the chat, the utterance log or the voice."""
+    name = (cal or {}).get("name") or ""
+    if "@" in name or not name:
+        return "メインのカレンダー" if (cal or {}).get("primary") else "共有のカレンダー"
+    return name
+
+
 def add(cal_id, title, date, start_time="", end_time="", cfg=None):
     """Add one event to a writable chosen calendar. Returns the kept row."""
     cfg = cfg or db.load_config()
@@ -186,7 +195,7 @@ def add(cal_id, title, date, start_time="", end_time="", cfg=None):
     if row and cal["selected"]:
         with db.connect() as con:
             con.execute("INSERT OR REPLACE INTO calendar_events VALUES(?, ?, ?, ?, ?, ?, ?, ?)", row)
-    return {"id": ev.get("id"), "calendar": cal["name"], "title": title}
+    return {"id": ev.get("id"), "calendar": display_name(cal), "title": title}
 
 
 def state():
@@ -293,7 +302,7 @@ def answer(text):
         return ("Google カレンダーにはまだ接続していないので、予定は分からないんだ。"
                 "カレンダー欄の「Google カレンダーに接続」から許可すると、答えられるようになるよ。")
     found = events(first, last)
-    names = "、".join(c["name"] for c in calendars() if c["selected"]) or "なし"
+    names = "、".join(display_name(c) for c in calendars() if c["selected"]) or "なし"
     far = (last - dt.date.today()).days > DETAIL_DAYS
     tail = "（3か月より先は、終日や数日にわたる予定だけを読み込んでいるよ）" if far else ""
     if not found:
@@ -310,3 +319,62 @@ def prompt_lines(today=None):
     today = today or dt.date.today()
     found = events(today, today + dt.timedelta(days=1))
     return "\n".join(_line(e) for e in found[:12]) or "(no events today or tomorrow)"
+
+
+# 「11/22の予定にXを追加して」「カレンダーに「X」を入れて」 (#287): an event, not a task with a due date.
+_ADD_EVENT = re.compile(r"(?:予定|カレンダー)\s*(?:に|へ)\s*(?P<a>.*?)\s*(?:を|も)?\s*(?:追加|入れ|登録|書い|足し)"
+                        r"|[「『](?P<b>[^」』]{1,80})[」』]\s*(?:を|も)?\s*(?:.{0,20}?)(?:予定|カレンダー)\s*(?:に|へ|として)\s*"
+                        r"(?:追加|入れ|登録|書い|足し)")
+_TASK_WORD = re.compile(r"タスク|ToDo|TODO|todo|締め?切")
+_TAG = re.compile(r"\(=(\d{4}-\d{2}-\d{2})\)")
+
+
+def add_request(text, today=None):
+    """(reply, offer payload or None) for a request to put an event on the calendar, or None when the
+    message is not one. Nothing is written here: the event is added only after the button (#287)."""
+    from dates import annotate_dates
+    if len(text) > 120 or _TASK_WORD.search(text):
+        return None
+    today = today or dt.date.today()
+    tagged = annotate_dates(text, today)
+    m = _ADD_EVENT.search(_TAG.sub("", tagged).replace("(", "（").replace(")", "）")) or _ADD_EVENT.search(text)
+    if not m:
+        return None
+    quoted = re.search(r"[「『]([^」』]{1,80})[」』]", text)  # a quoted name is the name, whatever the order
+    title = (quoted[1] if quoted else m["b"] or m["a"] or "").strip(" 　「」『』、。")
+    title = re.sub(r"^(?:\d{1,2}\s*(?:月|/)\s*\d{1,2}日?|今日|明日|明後日|あさって|来週|今週)\s*(?:の|に)?\s*", "", title)
+    days = _TAG.findall(tagged)
+    unchanged = "何も追加していないよ。"
+    if not ready():
+        return ("Google カレンダーにはまだつながっていないから、予定には入れられないんだ。カレンダー欄の"
+                "「Google カレンダーに接続」から許可すると、ここから予定を入れられるよ。"
+                + (f"タスクとして入れるなら「{title}をタスクに追加して」と言ってね。" if title else "") + unchanged, None)
+    if not title:
+        return "予定の名前が読み取れなかったよ。「11/22の予定に「〇〇」を追加して」のように教えてね。" + unchanged, None
+    if len(set(days)) != 1:
+        return f"「{title}」を入れる日が決まらなかったよ。「11/22の予定に」のように日付を 1 つ教えてね。" + unchanged, None
+    if days[0] < today.isoformat():
+        return f"{days[0]} は過ぎた日だから、予定には入れていないよ。" + unchanged, None
+    cal = next((c for c in calendars() if c["writable"] and c["primary"]), None) or \
+        next((c for c in calendars() if c["writable"]), None)
+    if not cal:
+        return "書き込めるカレンダーがないから、予定には入れられないよ。" + unchanged, None
+    day = dt.date.fromisoformat(days[0])
+    when = f"{day.month}月{day.day}日（終日）"
+    timed = "時刻つきで入れるなら、カレンダー欄の「追加」から入れてね。" if re.search(r"\d\s*(?:時|:)", text) else ""
+    reply = (f"{when}の予定として「{title}」を{display_name(cal)}に追加していい？ タスクにはしないよ。{timed}"
+             "まだ追加していないから、ボタンで決めてね。")
+    return reply, {"calendar": cal["id"], "calendar_label": display_name(cal), "title": title[:200], "date": days[0]}
+
+
+def finish_add(payload, cfg=None):
+    """Add the event the user approved (#287). (reply, event lines)."""
+    try:
+        r = add(payload.get("calendar", ""), payload.get("title", ""), payload.get("date", ""), cfg=cfg)
+    except (CalendarError, ValueError) as e:
+        return f"予定を追加できなかったよ（{e}）。何も追加していないよ。", []
+    except Exception:  # noqa: BLE001 - offline, a revoked token: say so instead of failing the chat
+        return "Google カレンダーにつながらなくて、予定を追加できなかったよ。何も追加していないよ。", []
+    day = dt.date.fromisoformat(payload["date"])
+    return (f"{day.month}月{day.day}日の予定に「{r['title']}」を追加したよ（{r['calendar']}・終日）。",
+            [f"📅 {payload['date']} {r['title']}（{r['calendar']}・終日）"])
