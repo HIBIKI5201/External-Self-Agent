@@ -8,7 +8,7 @@
       "pathPattern": "(^|/)(tests/test_pet_visibility\\.py|tests/test_pet_bubble\\.py|tests/test_pet_events\\.py|tests/test_pet_chat\\.py|tests/test_pet_poll\\.py|tests/test_focus_timer_rules\\.py|tests/test_timer_hover\\.py|spec/test/pet-visibility-35\\.md)$"
     },
     {
-      "pathPattern": "(^|/)esagent/pet\\.py$"
+      "pathPattern": "(^|/)(esagent/pet\\.py|esagent/pet_react\\.py|tests/test_pet_react\\.py|tests/test_pet_pointer\\.py)$"
     },
     {
       "pathPattern": "(^|/)esagent/pomodoro\\.py$"

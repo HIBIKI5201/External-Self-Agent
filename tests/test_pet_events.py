@@ -52,7 +52,8 @@ def test_overdue_warning_once_a_day_and_sleep_when_the_server_is_away():
     assert len([t for t, _ in cat.said if "締切" in t]) == 2
     def away(path, body=None):
         raise OSError("connection refused")
+    cat.hearing = True  # heard just before the server went away (#279)
     with patch.object(pet, "api", away):
         cat._poll()
-    assert cat.online is False and cat.mood == "sleep"
+    assert cat.online is False and cat.mood == "sleep" and cat.hearing is False
     assert cat.root.after.call_args[0][0] == 2000  # it keeps polling, less often while away (#285)

@@ -626,6 +626,7 @@ async function pumpQueue() {
 let warmedAt = 0;
 const warm = () => { if (Date.now() - warmedAt > 20000) { warmedAt = Date.now(); api("/api/warm", {}).catch(() => {}); } };
 $("#input").addEventListener("input", warm);
+$("#input").addEventListener("input", () => window.Es?.hearing?.());  // the small cat listens while you type (#279)
 $("#input").addEventListener("focus", warm);
 warm();
 
