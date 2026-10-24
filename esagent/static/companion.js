@@ -69,11 +69,11 @@
   const MOOD_ANIM = { idle: "Idle", focus: "Sleeping1", break: "Laying", stretch: "Stretching", thinking: "Sitting",
                       happy: "Meow", talk: "Meow", worried: "Itch", sleep: "Sleeping2",
                       curious: "Meow", listen: "Sitting" };  // reactions to the pointer and to input (#279)
-  let miniCat = 2, miniAnim = "", miniMood = "idle", miniOverride = null, miniUntil = 0;
+  let miniCat = 2, miniAnim = "", miniMood = "idle", miniOverride = null, miniUntil = 0, miniHover = false;
 
   function setMini(mood) {
     if (mood) miniMood = mood;
-    const m = miniOverride && Date.now() < miniUntil ? miniOverride : miniMood;
+    const m = miniOverride && Date.now() < miniUntil ? miniOverride : miniHover ? "curious" : miniMood;
     const name = MOOD_ANIM[m] || "Idle";
     if (name === miniAnim) return;
     miniAnim = name;
@@ -723,7 +723,8 @@
       $("#voice-test").onclick = () => post("/api/voice/test", {}).catch(() => say("試聴できなかった…", { voice: false }));
       $("#voice-stop").onclick = () => post("/api/voice/stop", {}).then(renderVoice).catch(() => {});
       $("#minicat").onclick = () => { flashMini("talk", 1500); say(pick(["にゃ？", "なになに？", "にゃー"]), { ms: 2000, kind: "murmur" }); };
-      $("#minicat").onmouseenter = () => { if (!(miniOverride && Date.now() < miniUntil)) flashMini("curious", 1200); };
+      $("#minicat").onmouseenter = () => { miniHover = true; setMini(); };  // curious while the pointer is on it
+      $("#minicat").onmouseleave = () => { miniHover = false; setMini(); };
       setMini("idle");
       $("#bgm-focus").addEventListener("change", syncBgm);
       document.querySelectorAll("[data-sound]").forEach((b) => b.onclick = () => setSound(b.dataset.sound, !soundOn[b.dataset.sound]));

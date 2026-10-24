@@ -305,7 +305,7 @@ class Pet:
                 self.say(f"「{st['overdue']}」の締切、過ぎちゃってるよ…", kind="notice", source="task")
             self._poll_fails = 0
         except Exception:
-            self.online, self.mood = False, "sleep"
+            self.online, self.mood, self.hearing = False, "sleep", False  # no server: nobody is heard
             self._poll_fails = getattr(self, "_poll_fails", 0) + 1
         self.root.after(poll_delay_ms(getattr(self, "_poll_fails", 0)), self._poll)
 
