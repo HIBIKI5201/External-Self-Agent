@@ -128,6 +128,15 @@
   // Edge's recognition sometimes goes silent without ending (#168): the screen kept saying 「聞いています…」
   // and nothing was sent. lastSign is the last sign of life of the current session.
   let lastSign = 0, stallWatch = null;
+  // While the user speaks, the cats listen (#279): the small one here, and the desktop one through the server
+  // (it shows when this window is minimised). At most one report a second.
+  let petPing = 0;
+  function catsListen() {
+    window.Es?.hearing?.();
+    if (Date.now() - petPing < 1000) return;
+    petPing = Date.now();
+    post("/api/pet/hearing", {}).catch(() => {});
+  }
   const QUIET_MS = 20000;  // nothing recognised for this long: point at the Windows input device
 
   async function post(path, body) {
@@ -309,6 +318,7 @@
       const now = (heard + w.interim).trim();
       if (!now) return;
       show("認識中：", now);
+      catsListen();
       heardSome(now);
       clearTimeout(timer);
       timer = setTimeout(finish, silenceFor(now));
