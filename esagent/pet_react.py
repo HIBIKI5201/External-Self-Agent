@@ -37,7 +37,9 @@ def choose(mood, dragging=False, flashing=False, hovering=False, hearing=False):
         return "held"
     if flashing:
         return mood
-    if hovering and mood not in ("sleep", "focus", "thinking"):
+    if hovering and mood in ("sleep", "focus", "thinking"):
+        return mood  # the pointer does not wake a sleeping cat, even while the user speaks
+    if hovering:
         return "curious"
     if hearing and mood != "thinking":
         return "listen"
