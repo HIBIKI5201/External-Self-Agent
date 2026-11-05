@@ -9,6 +9,8 @@ import threading
 import unicodedata
 from contextlib import closing, contextmanager
 
+import db_health
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
 
@@ -45,6 +47,7 @@ def code_version():
 
 CODE_VERSION = code_version()
 DB_PATH = os.path.join(DATA_DIR, "esagent.db")
+health = db_health.Health(lambda: DB_PATH)  # read at failure time: tests point DB_PATH at a copy
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 
 STATUSES = ("todo", "doing", "delegated", "done")
@@ -247,14 +250,25 @@ def now():
 @contextmanager
 def _connect():
     os.makedirs(DATA_DIR, exist_ok=True)
-    con = sqlite3.connect(DB_PATH, timeout=30)  # several background threads write; wait rather than fail
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")  # per connection; WAL is kept in the file, set by init()
+    con = None
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=30)  # several background threads write; wait rather than fail
+        con.row_factory = sqlite3.Row
+        con.execute("PRAGMA foreign_keys=ON")  # per connection; WAL is kept in the file, set by init()
+    except sqlite3.DatabaseError as e:
+        if con is not None:
+            con.close()
+        health.failed(e)
+        raise
     try:
         yield con
         con.commit()
+    except sqlite3.DatabaseError as e:
+        health.failed(e)
+        raise
     finally:
         con.close()
+    health.ok()
 
 
 @contextmanager
