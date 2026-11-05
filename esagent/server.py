@@ -684,10 +684,16 @@ def _pending_loop():
                 continue
             for m in waiting:
                 run = skills.run if m["content"].startswith("/") else brain.chat
-                result = run(m["content"], CFG, message_id=m["id"])
+                # Sent from the screen: answered under its own request, which speaks and reports itself (#192).
+                result = jobs.resume(m, CFG, run) if m.get("request_id") else None
+                if result is None and m.get("request_id"):
+                    continue  # its request was corrected, cancelled or cleared meanwhile
+                if result is None:
+                    result = run(m["content"], CFG, message_id=m["id"])
                 if result.get("pending"):
                     break  # still not ready; keep the order and try again later
-                voice.reply(CFG, result, key=f"answered:{m['id']}")
+                if not m.get("request_id"):
+                    voice.reply(CFG, result, key=f"answered:{m['id']}")
                 events.push("answered", message_id=m["id"], lines=result.get("events") or [])
         except Exception as e:
             _loop_failed(e, "answering waiting messages")
