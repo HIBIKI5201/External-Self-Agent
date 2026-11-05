@@ -99,3 +99,42 @@ def test_memo_text_does_not_grant_permission():
         with patch.object(llm, "chat_tools", side_effect=model):
             skills._procedure(skill, "", sb.cfg)
         assert db.get_task(t["id"])["status"] == "todo"
+
+
+def _titles():
+    return {t["title"] for t in db.list_tasks()}
+
+
+def test_plan_adds_at_most_six_steps():
+    """Issue #254: the steps say 3〜6; code stops the seventh add whatever the model does."""
+    with Sandbox(copy_real=False) as sb:
+        steps = [("add_task", {"title": f"手順{i}を進める", "due": "2099-01-0" + str(i)}) for i in range(1, 9)]
+        model, _ = _script(steps, "分けて登録したよ。")
+        with patch.object(llm, "chat_tools", side_effect=model):
+            result = sb.skill("/plan 引っ越しの準備 2099-01-31")
+        added = {f"手順{i}を進める" for i in range(1, 9)} & _titles()
+        assert added == {f"手順{i}を進める" for i in range(1, 7)}, added
+        assert sum(e.startswith("＋") for e in result["events"]) == 6
+        assert any("6 件を超える" in e for e in result["events"]), result["events"]
+
+
+def test_plan_does_not_register_the_goal_itself_or_dues_past_the_deadline():
+    """Issue #254: the goal as one task, and a due after the deadline in the arguments, are refused."""
+    with Sandbox(copy_real=False) as sb:
+        model, _ = _script([("add_task", {"title": "引っ越しの準備をする", "due": "2099-01-20"}),
+                            ("add_task", {"title": "段ボールを集める", "due": "2099-02-10"}),
+                            ("add_task", {"title": "引っ越しの準備の計画を立てる", "due": "2099-01-10"}),
+                            ("add_task", {"title": "不用品を捨てる", "due": "2099-01-31"})], "登録したよ。")
+        with patch.object(llm, "chat_tools", side_effect=model):
+            sb.skill("/plan 引っ越しの準備 2099-01-31まで")
+        titles = _titles()
+        assert "引っ越しの準備をする" not in titles and "段ボールを集める" not in titles, titles
+        assert {"引っ越しの準備の計画を立てる", "不用品を捨てる"} <= titles, titles
+
+
+def test_other_skills_have_no_add_limit():
+    with Sandbox(copy_real=False) as sb:
+        run = skills._Run(sb.cfg, {"add_task"}, "ネタを7つ追加して", _skill("ideas", "add_task"))
+        for i in range(8):
+            run.call("add_task", {"title": f"ネタ{i}"})
+        assert len(run.events) == 8 and run.max_adds is None

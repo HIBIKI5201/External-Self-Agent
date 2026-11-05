@@ -11,6 +11,9 @@ Each skill is <folder>/<name>/SKILL.md with a small frontmatter. The built-in sk
     action: tasks        # optional: run a fixed built-in action instead of the model
     save-args: memory    # optional: first save what was typed after the name as a memory
     tools: list_tasks, add_task   # optional: the tools the steps may use (see below)
+    max-adds: 6          # optional: add_task runs at most this many times in one call (#254)
+    split-goal: yes      # optional: the arguments are "goal [deadline]": no task named as the whole
+                         # goal, and no due date after the deadline (#254)
     ---
     Steps written in plain language...
 
@@ -28,6 +31,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 
 import actions
 import brain
@@ -170,11 +174,44 @@ def allowed_tools(skill):
     return {n for n in re.split(r"[,、\s]+", raw) if n in TOOL_NAMES}
 
 
+def _count(value):
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _yes(value):
+    return str(value or "").strip().lower() in ("yes", "true", "1", "on")
+
+
+def _norm(text):
+    return re.sub(r"[\s　、。,.・!！?？「」『』()（）]+", "", unicodedata.normalize("NFKC", text or "")).lower()
+
+
+_DEADLINE_RE = re.compile(r"\S*?\(=(\d{4}-\d{2}-\d{2})\)(?:まで(?:に)?)?|(\d{4}-\d{2}-\d{2})(?:まで(?:に)?)?")
+
+
+def _goal(args, today):
+    """The goal and the last date written in "/plan goal [deadline]" (#254). A deadline the dates
+    module does not read (「11月末」) leaves the deadline unchecked; the goal is what is left."""
+    tagged = brain.annotate_dates(args or "", today)
+    dates = [a or b for a, b in _DEADLINE_RE.findall(tagged)]
+    goal = _DEADLINE_RE.sub(" ", tagged)
+    goal = re.sub(r"\S*月末(?:まで(?:に)?)?", " ", goal)
+    return _norm(goal), max(dates) if dates else None
+
+
 class _Run:
     """State of one procedure-skill run: what changed, for the chat and Es's reactions."""
 
-    def __init__(self, cfg, allowed=None, args=""):
+    def __init__(self, cfg, allowed=None, args="", skill=None):
         self.cfg, self.events, self.handoffs, self.ui = cfg, [], [], {}
+        skill = skill or {}
+        self.max_adds = _count(skill.get("max-adds"))
+        self.added = 0
+        self.goal, self.deadline = _goal(args, dt.date.today()) if _yes(skill.get("split-goal")) else ("", None)
         self.seen = set()  # Qwen3 sometimes repeats the same call; answer repeats without re-running
         self.today = dt.date.today()
         self.error = None
@@ -282,9 +319,19 @@ class _Run:
             return self._reject(err)
         if not title.strip():
             return self._reject('タイトルが空です。具体的な内容を指定してください')
+        # The goal itself, give or take a few characters (「〇〇をする」); 「〇〇の計画を立てる」 is a step.
+        if self.goal and self.goal in _norm(title) and len(_norm(title)) - len(self.goal) <= 3:
+            return self._reject("目標そのものは登録しません。目標を 1〜2 時間で終わる小さなタスクに分けてください")
+        if self.deadline and due and due > self.deadline:
+            return self._reject(f"締切 {due} は最終期限 {self.deadline} より後です。最終期限までに割り振ってください")
         dup = task_targets._duplicate_of(title)
         if dup:
             return f"#{dup['id']}「{dup['title']}」が既にあるので追加しませんでした"
+        if self.max_adds is not None and self.added >= self.max_adds:
+            # Not a mistake to retry: the run goes on to the reply with what was added (#254).
+            self.events.append(f"⚠ 「{title}」は 1 回で追加できる {self.max_adds} 件を超えるため追加しませんでした")
+            return f"1 回で追加できるのは {self.max_adds} 件までなので追加しませんでした。これ以上は追加せず、返事を書いてください"
+        self.added += 1
         t = db.add_task(title, project=project or None, due=due, notes=notes)
         self.events.append(f"＋ #{t['id']} {t['title']}（{t['project'] or '未分類'}"
                            f"{' / ' + t['due'] if t['due'] else ''}）")
@@ -347,7 +394,7 @@ _TOOL_LABELS = {"list_tasks": "タスクを確認中", "recently_done": "終わ�
 def _procedure(skill, args, cfg, message_id=None):
     today = dt.date.today()
     allowed = allowed_tools(skill)
-    run = _Run(cfg, allowed, args)
+    run = _Run(cfg, allowed, args, skill)
     tools = [t for t in TOOLS if t["function"]["name"] in allowed]
     memories = "\n".join(f"- {m['content']}" for m in db.list_memories()) or "(none)"
     system = f"""{brain.PERSONA}
