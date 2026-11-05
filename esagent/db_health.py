@@ -77,11 +77,11 @@ class Health:
             due = not first and now - self.reported >= REPORT_EVERY
             if due:
                 self.reported = now
-            count, names = self.count, dict(self.names)
+            count, names, since = self.count, dict(self.names), self.since
         if first:
             self.logger.error("database failing: %s %s", err, storage(self._path()))
         elif due:
-            self.logger.error("database still failing for %.0f s: count=%d %s %s", now - self.since,
+            self.logger.error("database still failing for %.0f s: count=%d %s %s", now - since,
                               count, _names(names), storage(self._path()))
         return True
 
