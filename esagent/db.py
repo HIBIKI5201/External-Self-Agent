@@ -336,7 +336,15 @@ def _v3_gtask_index(con):
     con.execute("CREATE INDEX IF NOT EXISTS tasks_gtask_id ON tasks(gtask_id)")
 
 
-VERSIONS = [_v1_baseline, _v2_chat_request_age, _v3_gtask_index]
+def _v4_focus_log(con):
+    # Every stretch of focus actually timed, in seconds (#48). Older sessions have only a count and
+    # are not estimated into it.
+    con.execute("CREATE TABLE IF NOT EXISTS focus_log(id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL, "
+                "ended_at TEXT NOT NULL, seconds INTEGER NOT NULL, task_id INTEGER, how TEXT NOT NULL)")
+    con.execute("CREATE INDEX IF NOT EXISTS focus_log_ended ON focus_log(ended_at)")
+
+
+VERSIONS = [_v1_baseline, _v2_chat_request_age, _v3_gtask_index, _v4_focus_log]
 KEEP_DAYS = 7  # finished chat requests and conversation jobs are kept this long
 
 

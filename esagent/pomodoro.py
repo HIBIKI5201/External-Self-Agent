@@ -4,6 +4,7 @@ import json
 import threading
 import time
 
+import activity
 import companion
 import db
 import events
@@ -11,7 +12,8 @@ import media
 import utterances
 import voice
 
-DEFAULT = {"mode": "idle", "ends_at": 0, "paused": 0, "round": 0, "task_id": None}
+# since: when the focus now running started or resumed, so the seconds actually focused are logged (#48).
+DEFAULT = {"mode": "idle", "ends_at": 0, "paused": 0, "round": 0, "task_id": None, "since": 0}
 _lock = threading.Lock()
 
 
@@ -82,13 +84,24 @@ def _say(cfg, ev, text, kind="notice"):
 
 # ---- actions ----------------------------------------------------------------------
 
+def _close(p, how, now=None):
+    """Log the focus that has run since `since` (never past the end of the session) and stop counting.
+    A state saved before #48 has no `since`: nothing is guessed for it."""
+    if p["mode"] == "focus" and not p["paused"] and p.get("since"):
+        now = time.time() if now is None else now
+        activity.record(p["since"], min(now, p["ends_at"]), how, p["task_id"])
+    p["since"] = 0
+
+
 def start(cfg, task_id=None):
     with _lock:
         p = _load()
         focus, _, _ = _minutes(cfg)
+        _close(p, "restart")  # starting again while focusing: what ran so far still counts
         if task_id is not None:
             p["task_id"] = int(task_id) if task_id else None
-        p.update(mode="focus", ends_at=time.time() + focus * 60, paused=0, round=p["round"] + 1)
+        now = time.time()
+        p.update(mode="focus", ends_at=now + focus * 60, paused=0, round=p["round"] + 1, since=now)
         _save(p)
     ev = events.push("focus_start", task=_task_title(p["task_id"]), task_id=p["task_id"])
     _say(cfg, ev, f"「{ev['task']}」、いこう。" if ev["task"] else "集中タイム。となりで丸くなってるね。")
@@ -97,17 +110,23 @@ def start(cfg, task_id=None):
 
 
 def toggle(cfg):
-    p = _load()
-    if p["mode"] == "idle":
-        return start(cfg)
     with _lock:
-        if p["paused"]:
-            p["ends_at"], p["paused"] = time.time() + p["paused"], 0
-            resumed = True
-        else:
-            p["paused"] = max(1, p["ends_at"] - time.time())
-            resumed = False
-        _save(p)
+        # Read inside the lock: a tick that has just closed this focus must not be closed twice (#48).
+        p = _load()
+        idle = p["mode"] == "idle"
+        if not idle:
+            if p["paused"]:
+                now = time.time()
+                p["ends_at"], p["paused"] = now + p["paused"], 0
+                p["since"] = now if p["mode"] == "focus" else 0
+                resumed = True
+            else:
+                _close(p, "pause")
+                p["paused"] = max(1, p["ends_at"] - time.time())
+                resumed = False
+            _save(p)
+    if idle:
+        return start(cfg)  # takes the lock itself
     events.push("resume" if resumed else "pause")
     if p["mode"] == "focus":
         _bgm("play" if resumed else "pause")
@@ -117,6 +136,7 @@ def toggle(cfg):
 def reset(cfg):
     with _lock:
         p = _load()
+        _close(p, "reset")
         _save({**DEFAULT, "task_id": p["task_id"]})
     events.push("reset")
     _bgm("pause")
@@ -140,6 +160,7 @@ def tick(cfg):
         focus, short, long_ = _minutes(cfg)
         if p["mode"] == "focus":
             is_long = p["round"] % 4 == 0
+            _close(p, "done")
             p.update(mode="break", ends_at=time.time() + (long_ if is_long else short) * 60, paused=0)
             _save(p)
             finished = ("focus", is_long)

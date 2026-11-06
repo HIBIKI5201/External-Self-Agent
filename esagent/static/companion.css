@@ -83,6 +83,9 @@
 #sounds input { flex: 1; min-width: 0; accent-color: var(--accent); }
 #bond { color: var(--muted); font-size: 12px; }
 #bond b { color: var(--accent); }
+.activity { margin-top: 4px; }
+.activity-days { display: flex; align-items: flex-end; gap: 1px; height: 16px; margin-top: 2px; }
+.activity-days i { width: 4px; background: var(--accent); opacity: .55; border-radius: 1px; }
 
 /* BGM (YouTube embed; must stay visible while playing) */
 #bgm h2 { margin-top: 2px; }

@@ -688,10 +688,24 @@
   function pauseEmbed() { bgm.pending = null; if (bgm.ready) bgm.player.pauseVideo(); }
 
   // ---- なかよし度 ------------------------------------------------------------
-  function renderBond(c) {
+  function renderBond(c, a) {
     if (!c) return;
     const next = c.to_next ? `あと${c.to_next}回で次のレベル` : "最高レベル";
-    $("#bond").innerHTML = `なかよし度 <b>Lv${c.level} ${esc(c.level_name)}</b><br>今日 ${c.today}回 ・ 合計 ${c.sessions}回 ・ ${next}`;
+    $("#bond").innerHTML = `なかよし度 <b>Lv${c.level} ${esc(c.level_name)}</b><br>今日 ${c.today}回 ・ 合計 ${c.sessions}回 ・ ${next}` +
+      activityHtml(a);
+  }
+  // 活動レベル (#48): the seconds actually focused in the last 30 days, apart from なかよし度.
+  function hm(sec) {
+    const m = Math.floor((sec || 0) / 60);
+    return m >= 60 ? `${Math.floor(m / 60)}時間${m % 60 ? (m % 60) + "分" : ""}` : `${m}分`;
+  }
+  function activityHtml(a) {
+    if (!a || !Array.isArray(a.days)) return "";
+    const top = Math.max(3600, ...a.days.map((d) => d.seconds));
+    const bars = a.days.map((d) => `<i style="height:${Math.round(2 + 14 * d.seconds / top)}px" title="${esc(d.date)} ${hm(d.seconds)}"></i>`).join("");
+    return `<div class="activity" title="直近30日の集中時間。2時間ごとに1レベル。届いたレベルは下がらない">` +
+      `活動 <b>Lv${a.level}</b> ・ 直近30日 ${hm(a.seconds)} ・ 次まで ${hm(a.to_next)}` +
+      `<div class="activity-days" aria-hidden="true">${bars}</div></div>`;
   }
 
   // ---- public hooks used by index.html ---------------------------------------------
@@ -747,7 +761,7 @@
           tasks.filter((t) => t.status !== "delegated").map((t) => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
         sel.value = tasks.some((t) => t.id === P.task_id) ? String(P.task_id) : "";
       }
-      renderBond(S.companion);
+      renderBond(S.companion, S.activity);
     },
     thinking() {},  // the desktop cat shows this now
     focusOn(taskId) {
