@@ -193,13 +193,33 @@ def _norm(text):
 _DEADLINE_RE = re.compile(r"\S*?\(=(\d{4}-\d{2}-\d{2})\)(?:まで(?:に)?)?|(\d{4}-\d{2}-\d{2})(?:まで(?:に)?)?")
 
 
+_MONTH_END_RE = re.compile(r"(今月|来月|再来月|(\d{1,2})月)末(?:まで(?:に)?)?")
+
+
+def _month_end(match, today):
+    """The last day of the month in 「11月末」「来月末」 (a month already past means next year)."""
+    word, number = match.group(1), match.group(2)
+    if number:
+        year, month = today.year, int(number)
+        if not 1 <= month <= 12:
+            return None
+        if month < today.month:
+            year += 1
+    else:
+        ahead = {"今月": 0, "来月": 1, "再来月": 2}[word]
+        year, month = today.year + (today.month - 1 + ahead) // 12, (today.month - 1 + ahead) % 12 + 1
+    first_next = dt.date(year + month // 12, month % 12 + 1, 1)
+    return (first_next - dt.timedelta(days=1)).isoformat()
+
+
 def _goal(args, today):
-    """The goal and the last date written in "/plan goal [deadline]" (#254). A deadline the dates
-    module does not read (「11月末」) leaves the deadline unchecked; the goal is what is left."""
+    """The goal and the last date written in "/plan goal [deadline]" (#254). 「11月末」「来月末」 are
+    read as the month's last day; the goal is what is left after the dates."""
     tagged = brain.annotate_dates(args or "", today)
     dates = [a or b for a, b in _DEADLINE_RE.findall(tagged)]
+    dates += [d for d in (_month_end(m, today) for m in _MONTH_END_RE.finditer(tagged)) if d]
     goal = _DEADLINE_RE.sub(" ", tagged)
-    goal = re.sub(r"\S*月末(?:まで(?:に)?)?", " ", goal)
+    goal = _MONTH_END_RE.sub(" ", goal)
     return _norm(goal), max(dates) if dates else None
 
 
