@@ -2423,7 +2423,8 @@ def _chat(text, cfg, message_id=None, via=None):
     talk_offer = (_TALK_START_RE.search(text) and db.get_setting('chat_mode', 'work') == 'work'
                   and not db.get_setting('pending_focus') and not db.get_setting('pending_feature'))
     # Something the user said about themselves: offered with a button, never saved by itself (#47).
-    remember = (None if late or talk_offer or events or intent in ACTION_INTENTS or db.get_setting('pending_focus')
+    remember = (None if late or talk_offer or events or intent in ACTION_INTENTS or intent == "remember"
+                or db.get_setting('pending_focus')
                 or db.get_setting('pending_feature') else memory_offer.candidate(text))
     if remember:
         reply = (reply or "").rstrip() + "\n" + memory_offer.line(remember)

@@ -70,7 +70,8 @@ def candidate(text, now=None):
     if not sentence:
         return None
     key = _norm(sentence)
-    if any(key in _norm(m["content"]) or _norm(m["content"]) in key for m in db.list_memories()):
+    kept = [n for n in (_norm(m["content"]) for m in db.list_memories()) if n]  # 「。」 alone matches nothing
+    if any(key in n or n in key for n in kept):
         return None
     import conversation_context
     if _digest(sentence) in _declined() or conversation_context.digest(text) in conversation_context.deleted_sources():

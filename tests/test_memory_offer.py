@@ -82,3 +82,15 @@ def test_task_requests_and_other_offers_are_not_interrupted():
         assert "覚えておこうか" not in r["reply"]
         r = _talk(sb, "雑談したい。猫が好き")
         assert r["choices"] and r["choices"]["options"][0]["label"] == "切り替える"
+
+
+def test_an_empty_memory_hides_nothing_and_a_save_request_gets_no_offer():
+    """CodeRabbit on #305: a memory that normalizes to "" matched every sentence, and a message that
+    already asked to remember could get the button as well."""
+    with Sandbox(copy_real=False) as sb:
+        db.add_memory("。")
+        assert memory_offer.candidate("辛いものが苦手なんだ") == "辛いものが苦手なんだ"
+        with patch.object(brain, "_remember", return_value="覚えたよ。"):
+            r = sb.chat("辛いものが苦手なんだ。覚えておいて")
+        assert "覚えておこうか" not in r["reply"], r["reply"]
+        assert choices.current() is None or choices.current().get("kind") != "memory"
