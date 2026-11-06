@@ -98,3 +98,30 @@ def test_nothing_logged_is_level_one():
     with Sandbox(copy_real=False):
         s = activity.stats(dt.date(2026, 11, 5))
         assert s["level"] == 1 and s["seconds"] == 0 and s["to_next"] == activity.LEVEL_SECONDS
+
+
+def test_a_pause_racing_the_end_of_a_focus_logs_it_once():
+    """CodeRabbit on #304: toggle read the state outside the lock, so a tick that closed the focus
+    in between could be followed by toggle closing the same stretch again."""
+    import threading
+    with Sandbox(copy_real=False) as sb, patch.object(pomodoro.time, "time", Clock()) as clock, \
+            patch.object(voice, "say", lambda *a, **k: None):
+        cfg = _timer(sb)
+        pomodoro.start(cfg)
+        clock.now += 25 * 60 + 0.5
+        real_load, paused = pomodoro._load, threading.Event()
+
+        def slow_load():
+            p = real_load()
+            if threading.current_thread().name == "toggle":
+                paused.set()
+                threading.Event().wait(0.2)  # give tick the chance to run in between
+            return p
+        with patch.object(pomodoro, "_load", slow_load):
+            t = threading.Thread(target=pomodoro.toggle, args=(cfg,), name="toggle")
+            t.start()
+            paused.wait(2)
+            pomodoro.tick(cfg)
+            t.join(5)
+        assert [h for _, h in _logged()].count("done") + [h for _, h in _logged()].count("pause") == 1, _logged()
+        assert activity.stats(dt.date(2026, 11, 5))["today"] == 1500

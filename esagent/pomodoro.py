@@ -110,20 +110,23 @@ def start(cfg, task_id=None):
 
 
 def toggle(cfg):
-    p = _load()
-    if p["mode"] == "idle":
-        return start(cfg)
     with _lock:
-        if p["paused"]:
-            now = time.time()
-            p["ends_at"], p["paused"] = now + p["paused"], 0
-            p["since"] = now if p["mode"] == "focus" else 0
-            resumed = True
-        else:
-            _close(p, "pause")
-            p["paused"] = max(1, p["ends_at"] - time.time())
-            resumed = False
-        _save(p)
+        # Read inside the lock: a tick that has just closed this focus must not be closed twice (#48).
+        p = _load()
+        idle = p["mode"] == "idle"
+        if not idle:
+            if p["paused"]:
+                now = time.time()
+                p["ends_at"], p["paused"] = now + p["paused"], 0
+                p["since"] = now if p["mode"] == "focus" else 0
+                resumed = True
+            else:
+                _close(p, "pause")
+                p["paused"] = max(1, p["ends_at"] - time.time())
+                resumed = False
+            _save(p)
+    if idle:
+        return start(cfg)  # takes the lock itself
     events.push("resume" if resumed else "pause")
     if p["mode"] == "focus":
         _bgm("play" if resumed else "pause")
