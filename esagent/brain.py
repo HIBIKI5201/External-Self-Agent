@@ -2195,6 +2195,12 @@ def _fixed_offer(t):
     return Fixed(offer[0], "offer", ui=offer[1]) if offer else None
 
 
+def _fixed_usage(t):
+    # 「Claude の残りは？」: the recorded percentages, never a guessed number of tokens (#4).
+    import claude_usage
+    return Fixed(claude_usage.describe(), "usage") if claude_usage.asked(t.text) else None
+
+
 def _fixed_alarm(t):
     alarm = _alarm_flow(t.text)  # 「7時半に起こして」: no alarm exists, answered by code (#205)
     return Fixed(alarm, "alarm") if alarm else None
@@ -2292,6 +2298,7 @@ FIXED_REPLIES = (
     ("schedule", _fixed_schedule),                # 「明日の予定は？」 (#157)
     ("calendar_add", _fixed_calendar_add),        # 「11/22の予定にXを追加して」 (#287)
     ("ability", _fixed_ability),                  # 「喋れるようになった？」 (#120)
+    ("usage", _fixed_usage),                      # 「Claude の残りは？」 (#4)
     ("playback", _fixed_playback),                # 「今何の曲？」
     ("focus", _fixed_focus),                      # 「集中タイマーのタスクを〇〇にして」
     ("timer", _fixed_timer),                      # 「タイマー、再開して」「あと何分？」 (#172)

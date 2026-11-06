@@ -38,6 +38,9 @@ TABLE = (
     ("明日の予定は？", "schedule"),
     # #287: putting something on the calendar is not a task.
     ("11/22の予定に町内会の集まりを追加して", "calendar_add"),
+    # #4: the Claude plan's usage, not a task.
+    ("Claudeの残りは？", "usage"),
+    ("Claude Code で開いて", "model"),
     ("明日の予定にES提出を追加してくれる？", "calendar_add"),
     # One or more sentences for the other entries.
     ("しりとりしよう", "game"),
