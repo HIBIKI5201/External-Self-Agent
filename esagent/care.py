@@ -33,9 +33,26 @@ def delay_seconds(rng=random):
     return rng.randint(MIN_MINUTES * 60, MAX_MINUTES * 60)
 
 
-def pick(hour, last_kind=None, rng=random):
-    """(kind, line) for this hour, never of the same kind as last time."""
-    choices = [(kind, line) for kind, line, hours in LINES if hour in hours and kind != last_kind]
+def late_hours(bedtime):
+    """With the user's usual bedtime (#141), 「もう遅いね」 starts at it and lasts four hours."""
+    if not bedtime:
+        return None
+    return tuple((bedtime[0] + i) % 24 for i in range(5))
+
+
+def pick(hour, last_kind=None, rng=random, bedtime=None):
+    """(kind, line) for this hour, never of the same kind as last time. bedtime: (hour, minute) the user
+    usually stops at, observed by code (profile.py); the late line then says so, and when."""
+    late = late_hours(bedtime)
+    choices = []
+    for kind, line, hours in LINES:
+        if kind == "late" and late:
+            hours = late
+            if hour == bedtime[0] and bedtime[1] >= 30:
+                continue  # 1:45 is not yet late at 1:05
+            line = f"いつもは {bedtime[0]} 時ごろには終わってるよね。今日もそろそろ休もう？"
+        if hour in hours and kind != last_kind:
+            choices.append((kind, line))
     return rng.choice(choices)
 
 

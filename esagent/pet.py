@@ -293,6 +293,8 @@ class Pet:
             self.chat_on = st.get("chat", True)
             self.mood = st["mood"]
             self.hearing = bool(st.get("hearing"))
+            bedtime = st.get("bedtime")
+            self.bedtime = tuple(bedtime) if isinstance(bedtime, list) and len(bedtime) == 2 else None
             if self.last_event is None:
                 self.last_event = st["last_event"]  # don't replay what happened before we started
             for ev in api(f"/api/events?after={self.last_event}")["events"]:
@@ -495,7 +497,8 @@ class Pet:
         focusing = self.pomo.get("mode") == "focus" and not self.pomo.get("paused")
         if not care.due(care.idle_seconds(), focusing, busy=bool(self.asking or self.bubble)):
             return
-        self.care_kind, line = care.pick(time.localtime().tm_hour, self.care_kind)
+        self.care_kind, line = care.pick(time.localtime().tm_hour, self.care_kind,
+                                         bedtime=getattr(self, "bedtime", None))
         self.say(line, kind="notice", source="care", wake_voice=False)
 
     @staticmethod

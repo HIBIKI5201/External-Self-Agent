@@ -115,6 +115,9 @@ def run_action(action, args, cfg):
         reply = _task_list(args or None)
     elif name == "/summary":
         reply = brain._summary_reply(today)
+    elif name == "/profile":
+        import profile
+        reply = profile.describe(args)
     elif name == "/usage":
         import claude_usage
         reply = claude_usage.describe()
