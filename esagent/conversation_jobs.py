@@ -212,15 +212,17 @@ def accept(body, cfg, operation):
             return status(request_id)
         previous = _row(target) if mode != "independent" else None
         if mode == "continue" and (not previous or previous["revision"] != expected or previous["committed"]
-                                   or previous["state"] not in ("queued", "running")):
+                                   or previous["state"] not in ("queued", "running", "waiting")):
             mode, previous = "independent", None  # already answered or changed something: a new message
         if mode != "independent":
             if not previous or previous["revision"] != expected:
                 raise ValueError("対象の依頼は更新されています。履歴を確認して、現在の依頼を選び直してください。")
             _LIVE.pop(_key(target), None)
-            if previous["state"] in ("queued", "running"):
+            if previous["state"] in ("queued", "running", "waiting"):
                 with db.connect() as con:
                     con.execute("UPDATE messages SET status='cancelled' WHERE request_id=? AND role IN ('assistant','es')", (target,))
+                    # A message waiting for the model is replaced or dropped, not answered later (#192).
+                    con.execute("UPDATE messages SET status='cancelled' WHERE request_id=? AND status='pending'", (target,))
             import voice
             voice.stop_request(target)
             if mode in ("correction", "append") and previous["committed"]:
@@ -234,7 +236,7 @@ def accept(body, cfg, operation):
                 return {"jobId": target, "revision": expected, "state": "cancelled", "result": {"reply": note, "events": [], "handoffs": []}}
             if mode == "cancel":
                 import conversation_game
-                in_flight = previous["state"] in ("queued", "running")
+                in_flight = previous["state"] in ("queued", "running", "waiting")
                 ended = conversation_game.end_on_cancel()
                 if ended and not in_flight:
                     note = "しりとりは終了だよ。"  # nothing left to cancel: the game is what to stop (#156)
@@ -286,8 +288,17 @@ def _work(request_id, revision, body, cfg, operation):
             result = operation(body)
             check()
             if result.get("pending"):
-                # Async requests must not leak into the legacy automatic pending rerun loop.
-                raise Stopped(result.get("error") or "")
+                if token["committed"] or not _model_unready(result.get("error") or "", cfg):
+                    # Something changed (never answer it again), or the model was there and the request
+                    # failed anyway (a reply cut at the time limit, #198): waiting would only fail again.
+                    raise Stopped(result.get("error") or "")
+                result = {**result, "note": waiting_note(result.get("error") or "")}
+                # The model was not ready and nothing changed: the message stays waiting and the server's
+                # pending loop answers it under this same request (AS-16, #192).
+                with boundary(), db.connect() as con:
+                    con.execute("UPDATE conversation_jobs SET state='waiting',result=?,updated_at=? WHERE id=? AND revision=?",
+                                (json.dumps(result, ensure_ascii=False), db.now(), request_id, revision))
+                return result
             with boundary():
                 with db.connect() as con:
                     con.execute("UPDATE conversation_jobs SET state='done',result=?,updated_at=? WHERE id=? AND revision=?",
@@ -321,6 +332,49 @@ def _work(request_id, revision, body, cfg, operation):
                 with db.connect() as con:
                     con.execute("UPDATE messages SET status='cancelled' WHERE request_id=? AND request_revision=? AND (role IN ('assistant','es') OR status='pending')",
                                 (request_id, revision))
+    return result
+
+
+def resume(message, cfg, run):
+    """Answer a message that waited for the model under its own request, so the screen and a later
+    correction or cancel see it (#192). Returns None when it is not such a message any more."""
+    request_id, revision = message.get("request_id"), message.get("request_revision")
+    if not request_id:
+        return None
+    with _LOCK:
+        row = _row(request_id)
+        if not row or row["state"] != "waiting" or row["revision"] != revision:
+            return None
+        _LIVE[_key(request_id)] = revision
+        with db.connect() as con:
+            con.execute("UPDATE conversation_jobs SET state='queued',updated_at=? WHERE id=? AND revision=?",
+                        (db.now(), request_id, revision))
+    text = message["content"]
+    result = _work(request_id, revision, {"text": text, "said": text}, cfg,
+                   lambda body: run(text, cfg, message_id=message["id"]))
+    if result and result.get("failed"):
+        # The screen stopped watching this request when it began to wait: say it here, in the history,
+        # and take the ⏳ off so it is neither shown as waiting nor answered later.
+        with detached():
+            with db.connect() as con:
+                con.execute("UPDATE messages SET status=NULL WHERE id=? AND status='pending'", (message["id"],))
+            db.add_message("assistant", result["reply"])
+    return result
+
+
+def _model_unready(error, cfg):
+    """Whether the request failed because Ollama or the model was not there, judged by the failure itself
+    (the model may be ready by the time it is checked again)."""
+    import llm
+    if error:
+        return llm.CONNECT_ERROR in error or "が見つかりません" in error
+    return not llm.status(cfg).get("model")
+
+
+def waiting_note(reason=""):
+    """What the screen says when a message waits for the model (#192): why, and that it will be answered."""
+    when = "Ollama が起動したら" if "接続できません" in reason else "モデルの準備ができたら"
+    return (reason + "\n" if reason else "") + f"この発言は残しておいて、{when}自動で返事するね。"
 
 
 def stopped_reply(reason=""):
