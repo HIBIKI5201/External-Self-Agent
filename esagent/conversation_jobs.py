@@ -288,9 +288,8 @@ def _work(request_id, revision, body, cfg, operation):
             result = operation(body)
             check()
             if result.get("pending"):
-                import llm
-                if token["committed"] or llm.status(cfg).get("model"):
-                    # Something changed (never answer it again), or the model is there and the request
+                if token["committed"] or not _model_unready(result.get("error") or "", cfg):
+                    # Something changed (never answer it again), or the model was there and the request
                     # failed anyway (a reply cut at the time limit, #198): waiting would only fail again.
                     raise Stopped(result.get("error") or "")
                 result = {**result, "note": waiting_note(result.get("error") or "")}
@@ -351,8 +350,25 @@ def resume(message, cfg, run):
             con.execute("UPDATE conversation_jobs SET state='queued',updated_at=? WHERE id=? AND revision=?",
                         (db.now(), request_id, revision))
     text = message["content"]
-    return _work(request_id, revision, {"text": text, "said": text}, cfg,
-                 lambda body: run(text, cfg, message_id=message["id"]))
+    result = _work(request_id, revision, {"text": text, "said": text}, cfg,
+                   lambda body: run(text, cfg, message_id=message["id"]))
+    if result and result.get("failed"):
+        # The screen stopped watching this request when it began to wait: say it here, in the history,
+        # and take the ⏳ off so it is neither shown as waiting nor answered later.
+        with detached():
+            with db.connect() as con:
+                con.execute("UPDATE messages SET status=NULL WHERE id=? AND status='pending'", (message["id"],))
+            db.add_message("assistant", result["reply"])
+    return result
+
+
+def _model_unready(error, cfg):
+    """Whether the request failed because Ollama or the model was not there, judged by the failure itself
+    (the model may be ready by the time it is checked again)."""
+    import llm
+    if error:
+        return llm.CONNECT_ERROR in error or "が見つかりません" in error
+    return not llm.status(cfg).get("model")
 
 
 def waiting_note(reason=""):

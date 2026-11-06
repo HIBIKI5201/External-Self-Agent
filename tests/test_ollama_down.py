@@ -128,3 +128,27 @@ def test_other_stops_keep_the_generic_reply():
     # A reply cut at the time limit (#198) is said as it is, without blaming the connection.
     cut = jobs.stopped_reply("返事に 30 秒以上かかったので打ち切りました（Ollama にはつながっています）。")
     assert cut.startswith("返事に 30 秒以上") and "Ollama が起動したら" not in cut and "履歴とタスク" not in cut
+
+
+def test_a_waiting_message_that_fails_when_answered_says_so_and_stops_waiting():
+    with Sandbox(copy_real=False) as sb:
+        with patch.object(llm.urllib.request, "urlopen", _refused), patch.object(llm, "loaded", return_value=None):
+            jobs.accept({"requestId": REQUEST, "text": "ただいま"}, sb.cfg,
+                        lambda request: brain.chat(request["text"], sb.cfg))
+            assert _wait(REQUEST)["state"] == "waiting"
+        waiting = db.pending_messages()
+
+        def broken(text, cfg, message_id=None):
+            raise RuntimeError("bug")
+        result = jobs.resume(waiting[0], sb.cfg, broken)
+        assert result["failed"] and jobs.status(REQUEST, 1)["state"] == "failed"
+        assert db.pending_messages() == []  # no ⏳ left, not answered again
+        assert db.recent_messages(5)[-1]["content"] == result["reply"]
+
+
+def test_waiting_is_decided_by_why_the_request_failed():
+    # Ollama refused the connection; by the time it is checked it is up: still a message to answer later.
+    with Sandbox(copy_real=False) as sb, patch.object(llm, "status", return_value={"ollama": True, "model": True}):
+        jobs.accept({"requestId": REQUEST, "text": "ただいま"}, sb.cfg,
+                    lambda request: {"reply": "", "events": [], "handoffs": [], "pending": True, "error": llm.CONNECT_ERROR})
+        assert _wait(REQUEST)["state"] == "waiting"

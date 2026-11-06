@@ -220,7 +220,9 @@
       if (embed) pauseEmbed();
     } else if (ev.kind === "answered") {
       window.EsHooks?.refresh?.();
-      say("待たせてごめんね、返事したよ。", { ms: 3500, key: `event:${ev.id}`, kind: "notice", source: "system", ukey: ev.key });
+      // A waiting message that could not be answered after all says so (#192).
+      say(ev.failed ? "待たせたのに、返事できなかった…。履歴を見てね。" : "待たせてごめんね、返事したよ。",
+          { ms: 3500, key: `event:${ev.id}`, kind: "notice", source: "system", ukey: ev.key });
     } else if (ev.kind === "resume") {
       if (embed && P.mode === "focus" && bgm.url) playEmbed();
     }

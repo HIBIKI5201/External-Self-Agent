@@ -694,7 +694,8 @@ def _pending_loop():
                     break  # still not ready; keep the order and try again later
                 if not m.get("request_id"):
                     voice.reply(CFG, result, key=f"answered:{m['id']}")
-                events.push("answered", message_id=m["id"], lines=result.get("events") or [])
+                events.push("answered", message_id=m["id"], lines=result.get("events") or [],
+                            failed=bool(result.get("failed")))
         except Exception as e:
             _loop_failed(e, "answering waiting messages")
 
