@@ -99,3 +99,60 @@ def test_memo_text_does_not_grant_permission():
         with patch.object(llm, "chat_tools", side_effect=model):
             skills._procedure(skill, "", sb.cfg)
         assert db.get_task(t["id"])["status"] == "todo"
+
+
+def _titles():
+    return {t["title"] for t in db.list_tasks()}
+
+
+def test_plan_adds_at_most_six_steps():
+    """Issue #254: the steps say 3〜6; code stops the seventh add whatever the model does."""
+    with Sandbox(copy_real=False) as sb:
+        steps = [("add_task", {"title": f"手順{i}を進める", "due": "2099-01-0" + str(i)}) for i in range(1, 9)]
+        model, _ = _script(steps, "分けて登録したよ。")
+        with patch.object(llm, "chat_tools", side_effect=model):
+            result = sb.skill("/plan 引っ越しの準備 2099-01-31")
+        added = {f"手順{i}を進める" for i in range(1, 9)} & _titles()
+        assert added == {f"手順{i}を進める" for i in range(1, 7)}, added
+        assert sum(e.startswith("＋") for e in result["events"]) == 6
+        assert any("6 件を超える" in e for e in result["events"]), result["events"]
+
+
+def test_plan_does_not_register_the_goal_itself_or_dues_past_the_deadline():
+    """Issue #254: the goal as one task, and a due after the deadline in the arguments, are refused."""
+    with Sandbox(copy_real=False) as sb:
+        model, _ = _script([("add_task", {"title": "引っ越しの準備をする", "due": "2099-01-20"}),
+                            ("add_task", {"title": "段ボールを集める", "due": "2099-02-10"}),
+                            ("add_task", {"title": "引っ越しの準備の計画を立てる", "due": "2099-01-10"}),
+                            ("add_task", {"title": "不用品を捨てる", "due": "2099-01-31"})], "登録したよ。")
+        with patch.object(llm, "chat_tools", side_effect=model):
+            sb.skill("/plan 引っ越しの準備 2099-01-31まで")
+        titles = _titles()
+        assert "引っ越しの準備をする" not in titles and "段ボールを集める" not in titles, titles
+        assert {"引っ越しの準備の計画を立てる", "不用品を捨てる"} <= titles, titles
+
+
+def test_plan_reads_a_month_end_deadline():
+    """Issue #254: 「11月末」「来月末」 are the month's last day; a due after it is refused."""
+    import datetime as dt
+    today = dt.date(2026, 11, 6)
+    assert skills._goal("英検に合格 11月末まで", today) == ("英検に合格", "2026-11-30")
+    assert skills._goal("英検 2月末", today) == ("英検", "2027-02-28")
+    assert skills._goal("英検 来月末までに", today) == ("英検", "2026-12-31")
+    with Sandbox(copy_real=False) as sb:
+        end = skills._month_end(skills._MONTH_END_RE.search("来月末"), dt.date.today())
+        later = (dt.date.fromisoformat(end) + dt.timedelta(days=1)).isoformat()
+        model, _ = _script([("add_task", {"title": "単語を覚える", "due": end}),
+                            ("add_task", {"title": "過去問を解く", "due": later})], "登録したよ。")
+        with patch.object(llm, "chat_tools", side_effect=model):
+            sb.skill("/plan 英検に合格 来月末まで")
+        titles = _titles()
+        assert "単語を覚える" in titles and "過去問を解く" not in titles, titles
+
+
+def test_other_skills_have_no_add_limit():
+    with Sandbox(copy_real=False) as sb:
+        run = skills._Run(sb.cfg, {"add_task"}, "ネタを7つ追加して", _skill("ideas", "add_task"))
+        for i in range(8):
+            run.call("add_task", {"title": f"ネタ{i}"})
+        assert len(run.events) == 8 and run.max_adds is None
