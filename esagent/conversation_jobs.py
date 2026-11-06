@@ -28,11 +28,11 @@ SCRATCH_TABLES = {
 }
 DURABLE_SETTINGS = {"pomo", "chat_mode", "pending_mode", "voice", "pet_enabled", "pet_chat", "conversation_game", "deleted_memory_sources",
                     "calendar_selected", "gcal_calendar_id", "companion_sessions", "companion_minutes",
-                    "companion_day", "companion_today"}
+                    "companion_day", "companion_today", "memory_declined"}
 DURABLE_SETTING_PREFIXES = ("snooze:", "task_context_corrections:")
 SCRATCH_SETTINGS = {"pending_focus", "pending_feature", "active_offer", "last_advice", "task_context_draft",
                     "messages_last_id", "bgm_sync", "calendar_list", "calendar_sync", "google_state", "google_last_sync",
-                    "google_last_error", "google_cal_last_sync", "google_cal_error"}
+                    "google_last_error", "google_cal_last_sync", "google_cal_error", "memory_offer_at"}
 SCRATCH_SETTING_PREFIXES = ("linked:", "google_")
 _WRITE = re.compile(r"^(INSERT(?: OR \w+)? INTO|REPLACE INTO|UPDATE(?: OR \w+)?|DELETE FROM)\s+[\"`\[]?(\w+)", re.I)
 _SETTING_KEY = re.compile(r"(?:VALUES\s*\(\s*|\bkey\s*=\s*)'((?:[^']|'')*)'", re.I)

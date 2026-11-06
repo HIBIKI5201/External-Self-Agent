@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 import db
 import llm
+import memory_offer
 import projects
 import recurring
 import repeat_chat
@@ -1790,7 +1791,11 @@ def _choice_reply(selected, cfg, message_id=None):
         reply = 'いま有効な提案を特定できなかったよ。現在の提案のボタンか、やりたいことを言葉で教えてね。何も変更していないよ。'
     elif value == 'cancel':
         task_context.clear()
-        reply = 'わかった、今回はやめておくね。何も変更していないよ。'
+        if kind == 'memory' and isinstance(payload.get('content'), str):
+            memory_offer.decline(payload['content'])  # not offered again (#47)
+            reply = 'わかった、覚えないでおくね。'
+        else:
+            reply = 'わかった、今回はやめておくね。何も変更していないよ。'
     elif kind == 'mode' and payload.get('mode') in MODES:
         reply = set_mode(payload['mode'])
     elif kind == 'focus':
@@ -1822,6 +1827,9 @@ def _choice_reply(selected, cfg, message_id=None):
         reply, events = _finish_complete(payload)
     elif kind == 'repeat_add' and value in ('accept', 'plain', 'rule'):
         reply, events = repeat_chat.finish_add(payload, value, selected.get('rule'))
+    elif kind == 'memory' and value == 'accept' and isinstance(payload.get('content'), str):
+        mid = db.add_memory(payload['content'])  # the user's own sentence, as offered (#47)
+        reply, events = '覚えたよ。', [f"・ 覚えました（#{mid}）: {payload['content']}"]
     else:
         reply = 'その選択には対応していないよ。何も変更していないよ。'
     db.add_message('notice' if kind == 'stale' else 'assistant', reply)
@@ -2412,10 +2420,20 @@ def _chat(text, cfg, message_id=None, via=None):
 
     if late:
         reply = f"（さっきの「{text[:24]}」への返事）\n" + (reply or "")
+    talk_offer = (_TALK_START_RE.search(text) and db.get_setting('chat_mode', 'work') == 'work'
+                  and not db.get_setting('pending_focus') and not db.get_setting('pending_feature'))
+    # Something the user said about themselves: offered with a button, never saved by itself (#47).
+    remember = (None if late or talk_offer or events or intent in ACTION_INTENTS or intent == "remember"
+                or db.get_setting('pending_focus')
+                or db.get_setting('pending_feature') else memory_offer.candidate(text))
+    if remember:
+        reply = (reply or "").rstrip() + "\n" + memory_offer.line(remember)
     db.add_message("assistant", reply or "（返答なし）")
     if events:
         db.add_message("notice", "\n".join(events))
-    if (_TALK_START_RE.search(text) and db.get_setting('chat_mode', 'work') == 'work'
-            and not db.get_setting('pending_focus') and not db.get_setting('pending_feature')):
+    if talk_offer:
         choices.publish('mode', {'mode': 'talk'})
+    elif remember:
+        choices.publish('memory', {'content': remember})
+        memory_offer.offered()
     return {"reply": reply, "events": events, "handoffs": handoffs, "intent": intent}
