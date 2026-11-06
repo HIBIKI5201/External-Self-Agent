@@ -14,7 +14,7 @@
       "pathPattern": "(^|/)spec/test/preprocessor-71\\.md$"
     },
     {
-      "pathPattern": "(^|/)(tests/test_memory_intent\\.py|spec/test/memory-intent-46\\.md)$"
+      "pathPattern": "(^|/)(tests/test_memory_intent\\.py|spec/test/memory-intent-46\\.md|esagent/memory_offer\\.py|tests/test_memory_offer\\.py)$"
     },
     {
       "pathPattern": "(^|/)esagent/(brain|conversation_state|dates|reply_filters|status_question|task_apply|task_targets)\\.py$"

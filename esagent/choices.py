@@ -17,7 +17,7 @@ _PLAIN = re.compile(r'繰り?返し(?:は)?(?:なし|無し|いらない)|普通
 # A new request that names a task is not an answer to the pending question.
 _OTHER_TASK = re.compile(r'[「『"“＂#]')
 # Offers whose answer writes tasks: a spoken answer does not choose them, the button does (#174).
-WRITES = {'feature', 'project_add', 'repeat_bulk', 'repeat_add', 'complete', 'calendar_add'}
+WRITES = {'feature', 'project_add', 'repeat_bulk', 'repeat_add', 'complete', 'calendar_add', 'memory'}
 _NO = re.compile(r'^(?:いいえ|やめる|やめて|キャンセル|あとで|しない)[。！!\s]*$')
 
 
@@ -49,7 +49,8 @@ def invalidate():
 
 
 def publish(kind, payload=None):
-    labels = {'mode': '切り替える', 'focus': '集中を始める', 'feature': 'タスクに登録する', 'complete': '完了にする'}
+    labels = {'mode': '切り替える', 'focus': '集中を始める', 'feature': 'タスクに登録する', 'complete': '完了にする',
+              'memory': '覚えておく'}
     if kind == 'topic':
         options = [{'value': key, 'label': v[0]} for key, v in TOPICS.items()]
     elif kind in labels:
