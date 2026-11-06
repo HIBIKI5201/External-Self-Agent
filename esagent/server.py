@@ -23,6 +23,7 @@ import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
 import db  # noqa: E402
+import db_health  # noqa: E402
 import gauth  # noqa: E402
 import gsync  # noqa: E402
 import handoff  # noqa: E402
@@ -175,7 +176,8 @@ def failure(e, route=None, what="request"):
         return 404, {"error": str(e)}
     if isinstance(e, ValueError):  # bad input from the screen
         return 400, {"error": str(e)}
-    log.exception("%s failed", what)
+    if not db.health.repeated(e):  # a database outage's later failures are counted, not each logged (#300)
+        log.exception("%s failed", what)
     return 500, {"error": FAILED}
 
 
@@ -663,6 +665,15 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
+def _loop_failed(e, what):
+    """A background loop's failure. While the database file fails, the first one is logged with its
+    traceback and the loop rests, instead of failing every second for hours (#300)."""
+    if not db.health.repeated(e):
+        log.exception("%s failed", what)
+    if db_health.name(e):
+        time.sleep(db_health.BACKOFF)
+
+
 def _pending_loop():
     """Answer messages that arrived while the model was not ready, oldest first."""
     while True:
@@ -678,16 +689,16 @@ def _pending_loop():
                     break  # still not ready; keep the order and try again later
                 voice.reply(CFG, result, key=f"answered:{m['id']}")
                 events.push("answered", message_id=m["id"], lines=result.get("events") or [])
-        except Exception:
-            log.exception("answering waiting messages failed")
+        except Exception as e:
+            _loop_failed(e, "answering waiting messages")
 
 
 def _pomo_loop():
     while True:
         try:
             pomodoro.tick(CFG)
-        except Exception:
-            log.exception("pomodoro tick failed")
+        except Exception as e:
+            _loop_failed(e, "pomodoro tick")
         time.sleep(1)
 
 
@@ -714,8 +725,8 @@ def _recurring_loop():
         try:
             if recurring.tick():
                 gsync.request()
-        except Exception:
-            log.exception("recurring reset failed")
+        except Exception as e:
+            _loop_failed(e, "recurring reset")
         time.sleep(60)
 
 

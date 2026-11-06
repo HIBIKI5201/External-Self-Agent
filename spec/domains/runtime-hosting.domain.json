@@ -63,6 +63,9 @@
     },
     {
       "pathPattern": "(^|/)tests/test_atomic_write\\.py$"
+    },
+    {
+      "pathPattern": "(^|/)(esagent/db_health\\.py|tests/test_db_health\\.py)$"
     }
   ],
   "source": "manual",
