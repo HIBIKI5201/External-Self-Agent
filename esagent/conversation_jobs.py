@@ -19,7 +19,7 @@ _LIVE = {}  # (database path, id) -> revision; scoped to this server process
 # Whether a write inside a request means "something already happened" (a correction must then not rerun
 # the request). Every table and settings key is listed; a write to one that is not listed counts as
 # committed and is logged, so a new table or key is never silently treated as nothing done (#236).
-DURABLE_TABLES = {"tasks", "memories", "projects", "handoffs", "linked_items", "reply_feedback"}
+DURABLE_TABLES = {"tasks", "memories", "projects", "handoffs", "linked_items", "reply_feedback", "focus_log"}
 SCRATCH_TABLES = {
     "messages",           # the conversation itself; only /clear (DELETE) is durable
     "conversation_jobs",  # this bookkeeping

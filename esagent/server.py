@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import activity  # noqa: E402
 import admin  # noqa: E402
 import brain  # noqa: E402
 import conversation_state  # noqa: E402
@@ -74,6 +75,7 @@ def state():
         "choices": choices.public(),
         "mode": brain.shown_mode(),
         "companion": companion.stats(),
+        "activity": activity.stats(),
         "voice": voice.status(CFG),
     }
 
