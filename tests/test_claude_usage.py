@@ -77,3 +77,12 @@ def test_questions_reach_usage_and_slash_usage_works():
         assert not claude_usage.asked("Claude の使用量のメモを教えて")
         assert not claude_usage.asked("Claude の使用量はどうなってる？")
         assert claude_usage.asked("Claude の利用枠どれくらい？")
+
+
+def test_a_done_task_named_after_claude_still_reaches_the_task_lookup():
+    with Sandbox(copy_real=False) as sb, patch.object(brain.llm, "chat", side_effect=AssertionError("no model")):
+        claude_statusline.save(_payload(), claude_usage.path(), dt.datetime.now())
+        t = db.add_task("Claude の使用量")
+        db.update_task(t["id"], status="done", notes="Pro は 5 時間枠")
+        r = sb.chat("Claude の使用量の詳細を教えて")
+        assert "Pro は 5 時間枠" in r["reply"] and "% 使用" not in r["reply"], r

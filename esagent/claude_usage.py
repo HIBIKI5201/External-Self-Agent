@@ -80,4 +80,4 @@ def asked(text):
     text = text or ""
     if not QUESTION_RE.search(text) or TASK_RE.search(text):
         return False
-    return not any(len(t["title"]) >= 2 and t["title"] in text for t in db.list_tasks())
+    return not any(len(t["title"]) >= 2 and t["title"] in text for t in db.list_tasks(include_done=True))
