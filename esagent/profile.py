@@ -148,6 +148,14 @@ def observations(now=None):
     return out
 
 
+def basis():
+    """What usual_bedtime() rests on, cheap to read every second: removed and corrected observations and
+    the user's messages (a /clear drops them). The server works the bedtime out again when it changes."""
+    with db.connect() as con:
+        count, first = con.execute("SELECT COUNT(*), MIN(created_at) FROM messages WHERE role = 'user'").fetchone()
+    return db.get_setting("profile_hidden") or "", db.get_setting("profile_fixed") or "", count, first
+
+
 def usual_bedtime(now=None):
     """(hour, minute) of the usual bedtime for the cat's 「もう遅いね」, or None (unknown or removed)."""
     if "bedtime" in hidden():

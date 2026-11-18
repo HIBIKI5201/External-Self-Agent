@@ -71,12 +71,16 @@ def test_the_late_line_follows_the_usual_bedtime():
     assert not late(23, (1, 0)) and not late(0, (1, 0))        # before the usual time: not yet
     assert not late(23, (23, 45)) and late(0, (23, 45))
     assert late(22, (22, 0)) == {"記録だと、チャットの最後はいつも 22 時ごろだよね。今日もそろそろ休もう？"}
+    late_at = lambda hour, minute, bedtime: any(care.pick(hour, None, random.Random(i), bedtime=bedtime, minute=minute)[0] == "late"
+                                                for i in range(200))
+    assert not late_at(23, 5, (23, 20)) and late_at(23, 20, (23, 20))     # to the minute
+    assert late_at(3, 19, (23, 20)) and not late_at(3, 20, (23, 20))      # four hours, no more
 
 
 def test_the_cat_gets_the_bedtime_from_the_server():
     import server
     from unittest.mock import patch
-    with Sandbox(copy_real=False), patch.dict(server._BEDTIME, at=0.0, value=None):
+    with Sandbox(copy_real=False), patch.dict(server._BEDTIME, at=0.0, value=None, basis=None):
         assert server.pet_state()["bedtime"] is None
         with patch.object(profile, "usual_bedtime", return_value=(1, 0)) as worked:
             server._BEDTIME.update(at=0.0)
@@ -88,12 +92,29 @@ def test_the_cat_gets_the_bedtime_from_the_server():
 def test_the_cat_keeps_its_state_when_the_bedtime_cannot_be_worked_out():
     import server
     from unittest.mock import patch
-    with Sandbox(copy_real=False), patch.dict(server._BEDTIME, at=0.0, value=None):
+    with Sandbox(copy_real=False), patch.dict(server._BEDTIME, at=0.0, value=None, basis=None):
         with patch.object(profile, "usual_bedtime", side_effect=RuntimeError("db")):
             state = server.pet_state()
             assert state["bedtime"] is None and "mood" in state
         with patch.object(profile, "usual_bedtime", return_value=(1, 0)):
             assert server.pet_state()["bedtime"] == (1, 0)  # tried again on the next ask
+
+
+def test_the_cat_follows_forget_fix_and_clear_at_once():
+    import server
+    from unittest.mock import patch
+    with Sandbox(copy_real=False), patch.dict(server._BEDTIME, at=0.0, value=None, basis=None):
+        _evenings(8)
+        assert server.pet_state()["bedtime"] == (1, 0)
+        profile.describe("forget bedtime")
+        assert server.pet_state()["bedtime"] is None           # not after 10 minutes: now
+        profile.describe("restore bedtime")
+        profile.describe("fix bedtime 0:30")
+        assert server.pet_state()["bedtime"] == (0, 30)
+        profile.describe("unfix bedtime")
+        assert server.pet_state()["bedtime"] == (1, 0)
+        db.clear_messages()
+        assert server.pet_state()["bedtime"] is None           # the cleared messages are not used
 
 
 def test_a_corrected_observation_is_used_instead_of_the_records():

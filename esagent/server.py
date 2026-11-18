@@ -105,19 +105,21 @@ def pet_state():
             "bedtime": _bedtime()}
 
 
-_BEDTIME = {"at": 0.0, "value": None}
+_BEDTIME = {"at": 0.0, "value": None, "basis": None}
 
 
 def _bedtime():
     """The usual bedtime the cat's 「もう遅いね」 follows (#141), worked out at most every 10 minutes:
-    the cat asks every second."""
-    if time.monotonic() - _BEDTIME["at"] > 600 or not _BEDTIME["at"]:
-        try:
+    the cat asks every second. Worked out again at once when what it rests on changes (forget, restore,
+    fix, or /clear removing the messages it came from)."""
+    try:
+        basis = profile.basis()
+        if time.monotonic() - _BEDTIME["at"] > 600 or not _BEDTIME["at"] or basis != _BEDTIME.get("basis"):
             value = profile.usual_bedtime()
-        except Exception:  # the cat still gets its state; tried again on the next ask
-            log.exception("usual bedtime failed")
-            return None
-        _BEDTIME.update(at=time.monotonic(), value=value)
+            _BEDTIME.update(at=time.monotonic(), value=value, basis=basis)
+    except Exception:  # the cat still gets its state; tried again on the next ask
+        log.exception("usual bedtime failed")
+        return None
     return _BEDTIME["value"]
 
 
