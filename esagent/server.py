@@ -33,6 +33,7 @@ import llm  # noqa: E402
 import events  # noqa: E402
 import media  # noqa: E402
 import pomodoro  # noqa: E402
+import profile  # noqa: E402
 import timer_chat  # noqa: E402
 import projects  # noqa: E402
 import backup  # noqa: E402
@@ -100,7 +101,26 @@ def pet_state():
     return {"mood": mood, "pomo": pomo, "stage": prog["stage"], "overdue": overdue, "hearing": pet_react.hearing(),
             "last_event": events.last_id(), "port": CFG["port"],
             "enabled": pet_enabled(), "cat": CFG.get("pet_cat", 2), "scale": CFG.get("pet_scale", 3),
-            "voice": voice.status(CFG), "chat": db.get_setting("pet_chat", "1") == "1"}
+            "voice": voice.status(CFG), "chat": db.get_setting("pet_chat", "1") == "1",
+            "bedtime": _bedtime()}
+
+
+_BEDTIME = {"at": 0.0, "value": None, "basis": None}
+
+
+def _bedtime():
+    """The usual bedtime the cat's 「もう遅いね」 follows (#141), worked out at most every 10 minutes:
+    the cat asks every second. Worked out again at once when what it rests on changes (forget, restore,
+    fix, or /clear removing the messages it came from)."""
+    try:
+        basis = profile.basis()
+        if time.monotonic() - _BEDTIME["at"] > 600 or not _BEDTIME["at"] or basis != _BEDTIME.get("basis"):
+            value = profile.usual_bedtime()
+            _BEDTIME.update(at=time.monotonic(), value=value, basis=basis)
+    except Exception:  # the cat still gets its state; tried again on the next ask
+        log.exception("usual bedtime failed")
+        return None
+    return _BEDTIME["value"]
 
 
 def pet_enabled():

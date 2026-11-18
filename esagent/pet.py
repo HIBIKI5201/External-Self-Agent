@@ -293,6 +293,8 @@ class Pet:
             self.chat_on = st.get("chat", True)
             self.mood = st["mood"]
             self.hearing = bool(st.get("hearing"))
+            bedtime = st.get("bedtime")
+            self.bedtime = tuple(bedtime) if isinstance(bedtime, list) and len(bedtime) == 2 else None
             if self.last_event is None:
                 self.last_event = st["last_event"]  # don't replay what happened before we started
             for ev in api(f"/api/events?after={self.last_event}")["events"]:
@@ -306,6 +308,7 @@ class Pet:
             self._poll_fails = 0
         except Exception:
             self.online, self.mood, self.hearing = False, "sleep", False  # no server: nobody is heard
+            self.bedtime = None  # nor a usual bedtime that may since have been removed
             self._poll_fails = getattr(self, "_poll_fails", 0) + 1
         self.root.after(poll_delay_ms(getattr(self, "_poll_fails", 0)), self._poll)
 
@@ -495,7 +498,9 @@ class Pet:
         focusing = self.pomo.get("mode") == "focus" and not self.pomo.get("paused")
         if not care.due(care.idle_seconds(), focusing, busy=bool(self.asking or self.bubble)):
             return
-        self.care_kind, line = care.pick(time.localtime().tm_hour, self.care_kind)
+        now = time.localtime()
+        self.care_kind, line = care.pick(now.tm_hour, self.care_kind,
+                                         bedtime=getattr(self, "bedtime", None), minute=now.tm_min)
         self.say(line, kind="notice", source="care", wake_voice=False)
 
     @staticmethod
