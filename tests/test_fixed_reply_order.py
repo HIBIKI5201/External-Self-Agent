@@ -41,6 +41,7 @@ TABLE = (
     # #4: the Claude plan's usage, not a task.
     ("Claudeの残りは？", "usage"),
     ("Claude Code で開いて", "model"),
+    ("Claude Code の残りのタスクは？", "model"),
     ("明日の予定にES提出を追加してくれる？", "calendar_add"),
     # One or more sentences for the other entries.
     ("しりとりしよう", "game"),

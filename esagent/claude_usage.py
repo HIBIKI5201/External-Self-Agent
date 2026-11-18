@@ -16,6 +16,7 @@ STALE_MINUTES = 60  # older than this, the answer says how old it is first
 WINDOWS = (("five_hour", "5 時間の枠"), ("seven_day", "1 週間の枠"))
 QUESTION_RE = re.compile(r"(?:Claude|クロード)(?:の|って)?[^。？?\n]{0,12}(?:残り|残量|使用量|利用量|使用率|利用率|利用枠|枠|リミット|上限|制限)"
                          r"[^。\n]{0,12}(?:[?？]|教えて|見せて|どう|どれ|いくつ|何|ある)")
+TASK_RE = re.compile(r"タスク|メモ|締切|やること")  # 「Claude Code の残りのタスクは？」 asks about tasks
 
 
 def path():
@@ -64,7 +65,9 @@ def describe(now=None):
             lines.append(f"{label}: {used:.0f}% 使用" + (f"（{_clock(resets, now)} にリセット）" if resets and resets > now else ""))
     if not fetched or not lines:
         return ("Claude の利用枠はまだ記録がないよ。Claude Code（Pro/Max）のステータスラインが記録するので、"
-                "Claude Code で一度返事をもらうと見られるようになるよ。残りのトークン数は分からないので出さないね。")
+                "先に ~/.claude/settings.json の statusLine に tools/claude_statusline.py を設定してね"
+                "（手順は docs/claude-usage.md）。設定したあと Claude Code で一度返事をもらうと見られるようになるよ。"
+                "残りのトークン数は分からないので出さないね。")
     age = (now - fetched).total_seconds() / 60
     head = f"Claude の利用枠（{_clock(fetched, now)} に Claude Code が記録した値）"
     if age > STALE_MINUTES:
@@ -73,4 +76,8 @@ def describe(now=None):
 
 
 def asked(text):
-    return bool(QUESTION_RE.search(text or ""))
+    """A question about the plan's usage, not about a task whose name happens to start with Claude."""
+    text = text or ""
+    if not QUESTION_RE.search(text) or TASK_RE.search(text):
+        return False
+    return not any(len(t["title"]) >= 2 and t["title"] in text for t in db.list_tasks())

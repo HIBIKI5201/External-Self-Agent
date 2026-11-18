@@ -13,7 +13,7 @@
 {
   "statusLine": {
     "type": "command",
-    "command": "python C:\\ESAgent\\tools\\claude_statusline.py"
+    "command": "python \"C:/ESAgent/tools/claude_statusline.py\""
   }
 }
 ```

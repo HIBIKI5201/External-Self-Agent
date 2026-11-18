@@ -1,7 +1,7 @@
 """Claude Code status line for E.S. Agent (#4): saves the plan's rate limits for /usage, prints a short line.
 
 Set it in ~/.claude/settings.json (the user does this once; see docs/claude-usage.md):
-    "statusLine": {"type": "command", "command": "python C:\\ESAgent\\tools\\claude_statusline.py"}
+    "statusLine": {"type": "command", "command": "python \"C:/ESAgent/tools/claude_statusline.py\""}
 
 Claude Code passes the session as JSON on stdin. Only `rate_limits` is kept (percentages and reset
 times); nothing about the conversation is written. Any failure prints a plain line and exits 0, so the
@@ -45,7 +45,7 @@ def save(payload, out=OUT, now=None):
 
 def main():
     try:
-        line = save(json.loads(sys.stdin.read() or "{}"))
+        line = save(json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}"))
     except Exception:
         line = "E.S. Agent"
     print(line)

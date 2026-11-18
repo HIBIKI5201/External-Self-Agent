@@ -39,9 +39,21 @@ def test_status_line_keeps_only_the_rate_limits_and_prints_them():
         assert claude_statusline.main() == 0 and shown.call_args[0][0] == "E.S. Agent"
 
 
+def test_status_line_reads_stdin_as_utf8_whatever_the_locale():
+    """Japanese Windows decodes a pipe as cp932; Claude Code sends UTF-8 with Japanese folder names."""
+    raw = json.dumps(dict(_payload(), cwd="C:/Users/me/ドキュメント"), ensure_ascii=False).encode("utf-8")
+    stdin = io.TextIOWrapper(io.BytesIO(raw), encoding="cp932", errors="strict")
+    with tempfile.TemporaryDirectory() as d, patch.object(sys, "stdin", stdin), patch("builtins.print") as shown, \
+            patch.object(claude_statusline, "OUT", os.path.join(d, "u.json")), \
+            patch.object(claude_statusline.save, "__defaults__", (os.path.join(d, "u.json"), None)):
+        claude_statusline.main()
+        assert shown.call_args[0][0].startswith("5h "), shown.call_args
+
+
 def test_usage_says_percentages_reset_times_and_when_it_was_recorded():
     with Sandbox(copy_real=False):
-        assert "まだ記録がない" in claude_usage.describe(NOW)
+        empty = claude_usage.describe(NOW)
+        assert "まだ記録がない" in empty and "settings.json" in empty and "docs/claude-usage.md" in empty, empty
         claude_statusline.save(_payload(), claude_usage.path(), NOW)
         text = claude_usage.describe(NOW + dt.timedelta(minutes=5))
         assert "13:21 に Claude Code が記録した値" in text, text
@@ -59,3 +71,9 @@ def test_questions_reach_usage_and_slash_usage_works():
             assert "% 使用" in r["reply"], (text, r)
         assert "% 使用" in sb.skill("/usage")["reply"]
         assert not claude_usage.asked("Claude Code で開いて") and not claude_usage.asked("残りのタスクは？")
+        # A question about tasks, or about a task named after Claude, is not about the plan.
+        assert not claude_usage.asked("Claude Code の残りのタスクは？")
+        db.add_task("Claude の使用量")
+        assert not claude_usage.asked("Claude の使用量のメモを教えて")
+        assert not claude_usage.asked("Claude の使用量はどうなってる？")
+        assert claude_usage.asked("Claude の利用枠どれくらい？")
