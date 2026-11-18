@@ -112,7 +112,12 @@ def _bedtime():
     """The usual bedtime the cat's 「もう遅いね」 follows (#141), worked out at most every 10 minutes:
     the cat asks every second."""
     if time.monotonic() - _BEDTIME["at"] > 600 or not _BEDTIME["at"]:
-        _BEDTIME.update(at=time.monotonic(), value=profile.usual_bedtime())
+        try:
+            value = profile.usual_bedtime()
+        except Exception:  # the cat still gets its state; tried again on the next ask
+            log.exception("usual bedtime failed")
+            return None
+        _BEDTIME.update(at=time.monotonic(), value=value)
     return _BEDTIME["value"]
 
 

@@ -50,7 +50,7 @@ def pick(hour, last_kind=None, rng=random, bedtime=None):
             hours = late
             if hour == bedtime[0] and bedtime[1] >= 30:
                 continue  # 1:45 is not yet late at 1:05
-            line = f"いつもは {bedtime[0]} 時ごろには終わってるよね。今日もそろそろ休もう？"
+            line = f"記録だと、チャットの最後はいつも {bedtime[0]} 時ごろだよね。今日もそろそろ休もう？"
         if hour in hours and kind != last_kind:
             choices.append((kind, line))
     return rng.choice(choices)

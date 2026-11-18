@@ -59,7 +59,7 @@ def test_done_hour_counts_finished_tasks_only():
                 con.execute("UPDATE tasks SET done_at = ? WHERE id = ?",
                             ((NOW - dt.timedelta(days=i + 1)).replace(hour=10 if i < 6 else 20).isoformat(), t["id"]))
         obs = {o["key"]: o for o in profile.observations(NOW)}
-        assert obs["done_hour"]["value"] == "10 時台" and "8 件のうち 6 件" in obs["done_hour"]["evidence"]
+        assert obs["done_hour"]["value"] == "10 時台" and "8 日に終えた 8 件のうち 6 件" in obs["done_hour"]["evidence"]
 
 
 def test_the_late_line_follows_the_usual_bedtime():
@@ -67,19 +67,61 @@ def test_the_late_line_follows_the_usual_bedtime():
     late = lambda hour, bedtime: {line for _ in range(200)
                                   for kind, line in [care.pick(hour, None, rng, bedtime=bedtime)] if kind == "late"}
     assert late(23, None) and not late(22, None)               # without an observation: as before
-    assert late(1, (1, 0)) == {"いつもは 1 時ごろには終わってるよね。今日もそろそろ休もう？"}
+    assert late(1, (1, 0)) == {"記録だと、チャットの最後はいつも 1 時ごろだよね。今日もそろそろ休もう？"}
     assert not late(23, (1, 0)) and not late(0, (1, 0))        # before the usual time: not yet
     assert not late(23, (23, 45)) and late(0, (23, 45))
-    assert late(22, (22, 0)) == {"いつもは 22 時ごろには終わってるよね。今日もそろそろ休もう？"}
+    assert late(22, (22, 0)) == {"記録だと、チャットの最後はいつも 22 時ごろだよね。今日もそろそろ休もう？"}
 
 
 def test_the_cat_gets_the_bedtime_from_the_server():
     import server
     from unittest.mock import patch
-    with Sandbox(copy_real=False):
-        server._BEDTIME.update(at=0.0, value=None)
+    with Sandbox(copy_real=False), patch.dict(server._BEDTIME, at=0.0, value=None):
         assert server.pet_state()["bedtime"] is None
         with patch.object(profile, "usual_bedtime", return_value=(1, 0)) as worked:
             server._BEDTIME.update(at=0.0)
             assert server.pet_state()["bedtime"] == (1, 0) and server.pet_state()["bedtime"] == (1, 0)
             assert worked.call_count == 1  # the cat asks every second; worked out once per 10 minutes
+    assert server._BEDTIME["value"] != (1, 0)  # the mock does not outlive the test
+
+
+def test_the_cat_keeps_its_state_when_the_bedtime_cannot_be_worked_out():
+    import server
+    from unittest.mock import patch
+    with Sandbox(copy_real=False), patch.dict(server._BEDTIME, at=0.0, value=None):
+        with patch.object(profile, "usual_bedtime", side_effect=RuntimeError("db")):
+            state = server.pet_state()
+            assert state["bedtime"] is None and "mood" in state
+        with patch.object(profile, "usual_bedtime", return_value=(1, 0)):
+            assert server.pet_state()["bedtime"] == (1, 0)  # tried again on the next ask
+
+
+def test_a_corrected_observation_is_used_instead_of_the_records():
+    with Sandbox(copy_real=False) as sb:
+        _evenings(8)
+        assert "fix bedtime" in sb.skill("/profile")["reply"]
+        assert "1:30" in profile.describe("fix bedtime 1:30")
+        obs = {o["key"]: o for o in profile.observations(NOW)}
+        assert obs["bedtime"]["value"] == "1:30 ごろ" and "直した" in obs["bedtime"]["evidence"]
+        assert "記録では 1:00" in obs["bedtime"]["evidence"]
+        assert profile.usual_bedtime(NOW) == (1, 30)          # the cat follows the same value
+        assert "書いてね" in profile.describe("fix bedtime soon") and profile.usual_bedtime(NOW) == (1, 30)
+        profile.describe("forget bedtime")                     # removed wins over corrected
+        assert profile.usual_bedtime(NOW) is None and profile.observations(NOW) == []
+        profile.describe("restore bedtime")
+        profile.describe("unfix bedtime")
+        assert profile.usual_bedtime(NOW) == (1, 0)
+        assert "10 時台" in profile.describe("fix done_hour 10")   # known with no records behind it
+        assert {o["key"] for o in profile.observations(NOW)} == {"bedtime", "done_hour"}
+
+
+def test_observations_are_said_as_seen_in_the_records_not_as_facts():
+    with Sandbox(copy_real=False):
+        _evenings(8)
+        for o in profile.observations(NOW):
+            assert "ごろ" in o["value"] or "時台" in o["value"]
+            assert "日" in o["evidence"]                       # how many days it rests on
+    for _ in range(50):
+        kind, line = care.pick(1, None, random.Random(_), bedtime=(1, 0))
+        if kind == "late":
+            assert line.startswith("記録だと") and "ごろ" in line

@@ -28,7 +28,7 @@ SCRATCH_TABLES = {
 }
 DURABLE_SETTINGS = {"pomo", "chat_mode", "pending_mode", "voice", "pet_enabled", "pet_chat", "conversation_game", "deleted_memory_sources",
                     "calendar_selected", "gcal_calendar_id", "companion_sessions", "companion_minutes",
-                    "companion_day", "companion_today", "memory_declined", "profile_hidden"}
+                    "companion_day", "companion_today", "memory_declined", "profile_hidden", "profile_fixed"}
 DURABLE_SETTING_PREFIXES = ("snooze:", "task_context_corrections:")
 SCRATCH_SETTINGS = {"pending_focus", "pending_feature", "active_offer", "last_advice", "task_context_draft",
                     "messages_last_id", "bgm_sync", "calendar_list", "calendar_sync", "google_state", "google_last_sync",
