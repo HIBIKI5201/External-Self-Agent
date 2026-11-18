@@ -23,7 +23,7 @@ E.S. Agent は `data/esagent.db` を 1 日 1 回、`data/backups/esagent-YYYYMMD
    サーバーが止まっている間は同期も止まっています。
 
    ```powershell
-   python -c "import sqlite3; c = sqlite3.connect(r'C:\ESAgent\data\esagent.db'); [print(*r) for r in c.execute('SELECT id, title FROM tasks WHERE gtask_id IS NULL')]"
+   python -c "import sqlite3; c = sqlite3.connect(r'C:\ESAgent\data\esagent.db'); [print(*r) for r in c.execute('SELECT id, title, due, status, notes FROM tasks WHERE gtask_id IS NULL')]"
    ```
 
    ここに出たタスクは、コピーを取ったあとに Google へ送られたかもしれません。そのまま起動すると、
@@ -37,8 +37,9 @@ E.S. Agent は `data/esagent.db` を 1 日 1 回、`data/backups/esagent-YYYYMMD
      起動して同期が終わったら、E.S. Agent で同じ変更をし直します（チャットで「〇〇の期限を 11/30 にして」、
      完了は `/done 番号`、メモは `/note 番号 文`）。戻したコピーの長いメモや繰り返しはそのまま残り、し直した変更が Google に送られます。
      ただし長いメモは、Google には先頭だけが送られます（続きは E.S. Agent にだけあります）。後ろに書き足した文は Google では見えません。
-   - 同じタスクかどうか分からないとき、し直す手間をかけたくないときは、まだ起動しないでください。
-     Google 側を残して重複を受け入れる（起動後に E.S. Agent で片方を消す）か、上の手順で照合するかを決めてから起動します。
+   - 同じタスクかどうか分からないとき、Google 側の変更を書き留められない・し直せないとき、し直す手間をかけたくないときは、
+     **Google 側のタスクを消さず、まだ起動もしないでください**。
+     Google 側を残して重複を受け入れる（起動後に E.S. Agent で古いほうを消す）か、上の手順で照合するかを決めてから起動します。
 
 5. サーバーを起動します（`Start-ScheduledTask -TaskName ESAgent`）。
 
