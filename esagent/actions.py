@@ -115,6 +115,9 @@ def run_action(action, args, cfg):
         reply = _task_list(args or None)
     elif name == "/summary":
         reply = brain._summary_reply(today)
+    elif name == "/usage":
+        import claude_usage
+        reply = claude_usage.describe()
     elif name == "/next":
         with conversation_state.running("次にやることを考え中"):
             reply = brain._advice_reply(cfg, "何からやればいい？", today, args)
