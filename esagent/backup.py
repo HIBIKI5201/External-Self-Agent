@@ -65,8 +65,7 @@ def run(today=None, force=False):
         if not os.path.exists(db.DB_PATH):
             return None
         os.makedirs(folder(), exist_ok=True)
-        size = os.path.getsize(db.DB_PATH) + sum(os.path.getsize(p) for p in (db.DB_PATH + "-wal",)
-                                                  if os.path.exists(p))
+        size = os.path.getsize(db.DB_PATH) + _size(db.DB_PATH + "-wal")
         free = _free(folder())
         if free is not None and free < FREE_FACTOR * size:
             log.warning("backup skipped: free=%dMB is less than %d x db=%dKB",
@@ -92,10 +91,23 @@ def run(today=None, force=False):
             log.error("backup discarded: integrity_check said %s", str(result)[:200])
             _remove(part)
             return None
-        os.replace(part, target)
+        try:
+            os.replace(part, target)
+        except OSError as e:
+            log.error("backup failed: %s", e)
+            _remove(part)  # a left .part is never pruned
+            return None
         _prune()
         log.info("backup made: %s (%dKB)", os.path.basename(target), os.path.getsize(target) // 1024)
         return target
+
+
+def _size(path):
+    """0 for a file that is not there: SQLite removes the WAL when the last connection closes."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
 
 
 def _integrity(con):

@@ -62,3 +62,19 @@ def test_no_copy_when_the_disk_is_nearly_full():
             assert any("backup skipped" in t for t in lines.text), lines.text
     finally:
         backup.log.removeHandler(lines)
+
+
+def test_a_wal_that_vanishes_or_a_failed_rename_leaves_nothing_behind():
+    with Sandbox(copy_real=False), patch.dict(backup._tried, {"day": None}):
+        real = os.path.getsize
+
+        def gone(path):  # SQLite removed the WAL between the check and the size
+            if path.endswith("-wal"):
+                raise FileNotFoundError(path)
+            return real(path)
+        with patch.object(backup.os.path, "exists", lambda p: True if p.endswith("-wal") else os.path.lexists(p)), \
+                patch.object(backup.os.path, "getsize", gone):
+            assert backup.run(DAY)
+        with patch.object(backup.os, "replace", side_effect=PermissionError("locked")):
+            assert backup.run(DAY + dt.timedelta(days=1)) is None
+        assert not [p for p in os.listdir(backup.folder()) if p.endswith(".part")]

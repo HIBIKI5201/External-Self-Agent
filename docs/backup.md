@@ -19,7 +19,25 @@ E.S. Agent は `data/esagent.db` を 1 日 1 回、`data/backups/esagent-YYYYMMD
    Copy-Item C:\ESAgent\data\backups\esagent-20261117.db C:\ESAgent\data\esagent.db
    ```
 
-4. サーバーを起動します（`Start-ScheduledTask -TaskName ESAgent`）。
+4. **サーバーを起動する前に**、戻したコピーで Google ToDo にまだ送っていなかったタスクを確かめます。
+   サーバーが止まっている間は同期も止まっています。
+
+   ```powershell
+   python -c "import sqlite3; c = sqlite3.connect(r'C:\ESAgent\data\esagent.db'); [print(*r) for r in c.execute('SELECT id, title FROM tasks WHERE gtask_id IS NULL')]"
+   ```
+
+   ここに出たタスクは、コピーを取ったあとに Google へ送られたかもしれません。そのまま起動すると、
+   Google から取り込んだものと、戻したコピーから送り直したものが両方に重複します。
+   Google ToDo にすでにあるものだけを戻したコピーから消してください（次の同期で Google から取り込み直されます）。
+   Google にないものは消さずに残すと、起動後に送られます。
+
+   ```powershell
+   python -c "import sqlite3; c = sqlite3.connect(r'C:\ESAgent\data\esagent.db'); c.execute('DELETE FROM tasks WHERE id IN (12, 15)'); c.commit()"
+   ```
+
+   （`12, 15` は、上の一覧のうち Google ToDo にすでにあったタスクの番号に置き換えます。）
+
+5. サーバーを起動します（`Start-ScheduledTask -TaskName ESAgent`）。
 
 コピーを取った時刻より後の会話・記憶・集中の記録は戻りません。タスクは Google ToDo と同期しているので、
 次の同期で Google 側の変更が取り込まれます。
