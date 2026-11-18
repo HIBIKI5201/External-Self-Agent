@@ -47,6 +47,7 @@ powershell -ExecutionPolicy Bypass -File C:\ESAgent\install.ps1
 | `docs/youtube.md` | YouTube の接続の設定手順と再生の制限 |
 | `docs/conversation-eval.md` | 会話の評価（モデル・プロンプトの版の比べ方） |
 | `docs/log-diagnostics.md` | ローカルログの診断コマンド |
+| `docs/backup.md` | データベースのバックアップと戻し方 |
 | `CHANGELOG.md` | 変更履歴 |
 
 ## 開発する

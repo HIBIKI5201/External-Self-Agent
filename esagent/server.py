@@ -35,6 +35,7 @@ import media  # noqa: E402
 import pomodoro  # noqa: E402
 import timer_chat  # noqa: E402
 import projects  # noqa: E402
+import backup  # noqa: E402
 import recurring  # noqa: E402
 import skills  # noqa: E402
 import status_question  # noqa: E402
@@ -736,6 +737,10 @@ def _recurring_loop():
                 gsync.request()
         except Exception as e:
             _loop_failed(e, "recurring reset")
+        try:
+            backup.run()  # once a day, at the first chance (#306)
+        except Exception:
+            log.exception("backup failed")
         time.sleep(60)
 
 
