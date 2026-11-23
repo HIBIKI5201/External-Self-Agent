@@ -19,6 +19,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "esagent"))
 
 import db  # noqa: E402
+import gemini  # noqa: E402
+
+# Tests ask the local model (or a fake one) only: GEMINI_API_KEY on the PC must not send test
+# conversations to Google. Tests of gemini.py turn this off for themselves.
+gemini.BLOCKED = True
 
 REAL_DB = db.DB_PATH
 

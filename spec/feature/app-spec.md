@@ -42,6 +42,11 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 
 - **決定:** モデルは **Qwen3 8B**（`qwen3:8b`）、思考モードはオフ。旧モデル Phi-4-mini は削除した。
 - **意図:** Phi-4-mini（3.8B）は「それぞれに締切を」のような複数タスクの更新や、直前の話を指す依頼をこなせなかった。Qwen3 の思考モードは結果が同じで約 3.5 倍遅かった。
+- **決定: オンラインの間は Gemini、つながらないときは Qwen。** Gemini の API キーがあり（環境変数 `GEMINI_API_KEY`、名前は `gemini.api_key_env` で変えられる。`config.json` の `gemini.api_key` でもよい）、`gemini.enabled` が `false` でなく、Gemini のサーバー（`generativelanguage.googleapis.com:443`）に 1.5 秒以内につながる（30 秒覚える。プロキシ経由のときは要求そのもので判断）ときは、会話の判断・返事・スキルのツール呼び出しのすべてを Gemini（既定 `gemini-flash-latest`）に頼む（`esagent/gemini.py`）。キーがない・オフライン・Gemini が失敗した（接続できない・`gemini.timeout_seconds`（既定 30 秒）以内に返事がない・HTTP エラー・空の返事）ときは、同じ要求をそのまま Ollama の `qwen3:8b` に送る。失敗した後は `gemini.retry_seconds`（既定 60 秒）、キーかモデル名の誤り（401/403/404）なら 10 分、Gemini を試さずに Qwen を使う。
+  - **実装:** 要求と返事は Ollama の形のまま扱い、`gemini.py` が変換する（先頭の system は `systemInstruction`、途中の system は `[system]` 付きでその位置に残す。判断のスキーマは `responseJsonSchema`、ツールは `functionDeclarations`（`parametersJsonSchema`）、ツールの結果は `functionResponse`。Gemini 3 の関数呼び出しの `thoughtSignature` は `tool_calls` に持たせて送り返す）。Qwen 向けの `num_predict` は Gemini に渡さない（思考の分も出力上限に数えられ、返事が空になるため）。思考は `gemini.thinking_level`（既定 `low`）で、受け付けないモデルには付けずに送り直す。キーはヘッダー（`x-goog-api-key`）で送り、URL・ログ・`config.json` に書かない。
+  - **実装:** Gemini を使っている間は Qwen を読み込まない（`llm.warm` は何もしない。VRAM を他のアプリに空けておく）。Qwen に切り替わったときは、従来どおり読み込んでから要求する。状態（`llm.status`）は `backend`（`gemini` / `ollama`）と、Gemini を使えない理由（`gemini_error`）を返し、画面のヘッダーは「<Gemini のモデル>（オンライン）準備OK — オフライン時は qwen3:8b」と出す。待ち時間の質問にも Gemini で返事していることを答える。`llm-requests.jsonl` には `gemini:<モデル>` として記録する。
+  - **意図:** ネットがある間は大きいモデルで返事の質を上げ、ないときも今までどおり手元の 8B で動き続けるため。モデルの出力を検証してから使うコードの判断（下記）は、どちらのモデルでも変えない。
+  - **テスト:** テストは `tests/support.py` が `gemini.BLOCKED` を立てるので、PC に `GEMINI_API_KEY` があっても Google に会話を送らない（`tests/test_gemini_fallback.py` は偽の Gemini を相手にする）。
 - **決定:** **判断はプログラムが行い、モデルには狭い役割だけを任せる。** 小さいモデルは嘘・作り話・手本の丸写しをするため。
 - **決定（#140）: Es の人格。** モデルへの指示（`brain.PERSONA`）とプログラムの決まった返事は、この人格で書く。
   - **呼び方:** 一人称は「ボク」、利用者は「キミ」、ほかの人は「彼」「彼女」「あの人」。口調は「〇〇だよ」「〇〇だね」で、です・ます調にしない。
@@ -419,6 +424,7 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 
 - **決定:** カレンダーへの書き込み、規約への同意、アカウント操作など、取り消しにくい操作はユーザーが確認してから行う。
 - **実装（#36）:** ローカルCLI `esagent/diagnose.py` で、会話DBの完了件数・送信から完了までの中央値/p95/最大・遅延上位の時刻と待ち時間、モデル要求の時間分布と失敗件数、サーバーの警告/エラー件数と時刻を診断する。期間・上位件数・テキスト/JSONを選択でき、明示した場合だけ新規ファイルへ保存する（入力フォルダへの保存・既存ファイルの上書きは拒否）。DBは読み取り専用、モデルログの `.1` とサーバーログの既存ローテーションも対象。欠損・旧列・破損行・測定不能を報告する。会話本文・モデルの入出力・秘密情報・設定値・絶対パスは出さず、外部送信やアプリ初期化も行わない。共通IDがない会話とモデル要求の相関は不明とし、時刻だけで原因を断定しない。ログ停止設定は変更しない。指標の限界・利用方法は `docs/log-diagnostics.md`。
+- **実装（Gemini）:** Gemini の API キーを設定すると、オンラインの間は会話の内容（履歴・タスク・記憶を含むモデルへの指示）が Google の Gemini API に送られる（AS-02）。送りたくないときは `config.json` に `"gemini": {"enabled": false}` を書くか、キーを消す。
 - **実装:** サーバーは `127.0.0.1` だけで待ち受ける。Host ヘッダーが 127.0.0.1 / localhost 以外の要求は拒否する（DNS リバインディング対策）。書き込み系の API は独自ヘッダー `X-EsAgent: 1` を必須にする（#202: 改称前の名前のまま。空白を含む名前はヘッダーに使えない）（ほかのサイトから操作されないように）。
 - **実装:** Google の OAuth の一時コードと state は、ログに伏せ字で記録する。
 - **実装:** 静的ファイルは `static/` の中だけを返す（`..` などでフォルダの外に出られない）。

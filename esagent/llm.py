@@ -1,5 +1,6 @@
-"""Thin client for the local Ollama server."""
+"""Thin client for the model: Gemini while online (gemini.py), the local Ollama server otherwise."""
 import json
+import gemini
 import conversation_jobs as jobs
 import contextvars
 from contextlib import contextmanager
@@ -96,7 +97,6 @@ def chat(cfg, messages, schema=None, options=None, think=False, on_text=None, ti
         setting = pipeline.get(stage, {}) if isinstance(pipeline, dict) else {}
         cfg = {**cfg, "model": setting.get("model") or cfg["model"]}
         timeout = max(1, min(180, int(setting.get("timeout_seconds", 30))))
-        _load_first(cfg)
     body = {
         "model": cfg["model"],
         "messages": messages,
@@ -156,7 +156,32 @@ def _log(cfg, body, data, started, error=None):
         pass  # logging must never break a reply
 
 
+def _gemini(cfg, body, timeout):
+    """Gemini's Ollama-shaped answer, or None when it cannot answer now (then Ollama is asked)."""
+    if not gemini.usable(cfg):
+        return None
+    started = time.time()
+    try:
+        data = gemini.request(cfg, body, timeout)
+    except gemini.Unavailable as e:
+        _log(cfg, {**body, "model": "gemini:" + gemini.model_name(cfg)}, None, started, error=str(e))
+        log.warning("gemini: %s; using %s (%d ms)", e, cfg.get("model"), (time.time() - started) * 1000)
+        return None
+    _log(cfg, {**body, "model": "gemini:" + gemini.model_name(cfg)}, data, started)
+    LAST_ERROR.clear()
+    return data
+
+
 def _post(cfg, body, timeout, on_text=None):
+    data = _gemini(cfg, body, timeout)
+    if data is not None:
+        jobs.check()
+        text = _THINK_RE.sub("", data["message"]["content"]).strip()
+        if on_text:
+            on_text(text)
+        return text
+    if jobs.CURRENT.get():
+        _load_first(cfg)
     started = time.time()
     try:
         data = _request(cfg, body, timeout, on_text)
@@ -212,7 +237,6 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
         setting = cfg.get("local_pipeline", {}).get("tools", {})
         cfg = {**cfg, "model": setting.get("model") or cfg["model"]}
         timeout = max(1, min(180, int(setting.get("timeout_seconds", 30))))
-        _load_first(cfg)
     body = {
         "model": cfg["model"],
         "messages": messages,
@@ -223,6 +247,14 @@ def chat_tools(cfg, messages, tools, options=None, timeout=180):
     }
     if _thinks(cfg):
         body["think"] = False
+    data = _gemini(cfg, body, timeout)
+    if data is not None:
+        jobs.check()
+        msg = data["message"]
+        msg["content"] = _THINK_RE.sub("", msg.get("content") or "").strip()
+        return msg
+    if jobs.CURRENT.get():
+        _load_first(cfg)
     req = urllib.request.Request(_url(cfg, "/api/chat"), data=json.dumps(body).encode("utf-8"),
                                  headers={"Content-Type": "application/json"})
     started = time.time()
@@ -268,7 +300,10 @@ WARM_INTERVAL = 20  # seconds between two requests to load
 
 
 def warm(cfg, wait=False):
-    """Load the model without generating anything (Ollama /api/generate with no prompt)."""
+    """Load the model without generating anything (Ollama /api/generate with no prompt).
+    While Gemini answers, the local model is not loaded: its VRAM stays free for other apps."""
+    if gemini.usable(cfg):
+        return {**_WARM, "state": "gemini"}
     with _warm_lock:
         if _WARM["state"] == "loading" or time.time() - _WARM["at"] < WARM_INTERVAL:
             return dict(_WARM)
@@ -311,7 +346,20 @@ _STATUS = {}  # (ollama_url, model) -> (asked at, answer)
 
 
 def status(cfg):
-    """{'ollama': reachable, 'model': model pulled, 'loaded': in memory now, 'warming': being loaded}."""
+    """{'ollama': reachable, 'model': model pulled, 'loaded': in memory now, 'warming': being loaded,
+    'backend': 'gemini' or 'ollama'}. While Gemini answers, 'model' is true (a reply can be made) and
+    'name' is Gemini's model; 'local' keeps the Ollama model's name for the fallback."""
+    local = _local_status(cfg)
+    if gemini.usable(cfg):
+        return {**local, "model": True, "loaded": True, "warming": False, "backend": "gemini",
+                "name": gemini.model_name(cfg), "local": cfg["model"]}
+    out = {**local, "backend": "ollama", "local": cfg["model"]}
+    if gemini.configured(cfg) and gemini.STATE["error"]:
+        out["gemini_error"] = gemini.STATE["error"]
+    return out
+
+
+def _local_status(cfg):
     key = (cfg["ollama_url"], cfg["model"])
     hit = _STATUS.get(key)
     if hit and time.monotonic() - hit[0] < STATUS_TTL:

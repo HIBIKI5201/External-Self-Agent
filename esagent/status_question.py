@@ -105,7 +105,9 @@ def status_lines(now=None):
                      "（接続はできていて、遅かっただけ）。")
     cfg = conversation_state.STATE.cfg
     st = llm.status(cfg) if cfg else {}
-    if st and not st.get("ollama"):
+    if st.get("backend") == "gemini":
+        lines.append(f"いまはオンラインなので Gemini（{st.get('name')}）で返事しているよ。")
+    elif st and not st.get("ollama"):
         lines.append("いまモデル（Ollama）に接続できていないよ。")
     elif st and not st.get("model"):
         lines.append(f"いまモデル（{st.get('name')}）が見つからないよ。")
