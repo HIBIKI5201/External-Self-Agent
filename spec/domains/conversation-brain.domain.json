@@ -26,10 +26,10 @@
       "pathPattern": "(^|/)tests/test_read_queries\\.py$"
     },
     {
-      "pathPattern": "(^|/)esagent/llm\\.py$"
+      "pathPattern": "(^|/)esagent/(llm|gemini)\\.py$"
     },
     {
-      "pathPattern": "(^|/)(tests/test_warm_model\\.py|tests/test_llm_timeout\\.py|spec/test/warm-model-119\\.md)$"
+      "pathPattern": "(^|/)(tests/test_warm_model\\.py|tests/test_llm_timeout\\.py|tests/test_gemini_fallback\\.py|spec/test/warm-model-119\\.md)$"
     },
     {
       "pathPattern": "(^|/)(tests/test_output_retry\\.py|spec/test/output-retry-32\\.md)$"

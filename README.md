@@ -18,6 +18,7 @@
 - [Ollama](https://ollama.com/) と `qwen3:8b`
 - Microsoft Edge（チャット画面。会話モードはマイクと Edge の音声認識を使う。API キーは要らない）
 - Claude Code（引き継ぎ・MCP）
+- 任意: Gemini の API キー（オンラインの間は Gemini で返事する。オフラインでは Qwen）
 - 任意: [VOICEVOX](https://voicevox.hiroshiba.jp/)（読み上げ。`config.json` の `voicevox_*`）
 
 ## セットアップ
@@ -33,6 +34,7 @@ powershell -ExecutionPolicy Bypass -File C:\ESAgent\install.ps1
 - Google カレンダーを読む・予定を入れる場合は、カレンダー欄の「Google カレンダーに接続」から追加の権限（予定の読み書き `calendar.events`・カレンダー一覧の読み取り `calendar.calendarlist.readonly`）を許可する。表示するカレンダーは欄の中で選ぶ。
 - YouTube の検索・自分のプレイリストを使う場合は、同じ Google Cloud プロジェクトで YouTube Data API v3 を有効にし、BGM 欄の「GoogleでYouTubeに接続」から読み取りを許可する。[設定手順と再生の制限](docs/youtube.md)。
 - ほかのリポジトリの TODO（例: WarframeDocument の装備）をタスクに取り込む場合は、`config.json` の `linked_todos` に `{"name": "WarframeDocument 装備", "project": "Warframe", "file": "C:\\WarframeDocument\\TODO\\data\\01-equipment.toml"}` を足す。読み取りだけで、完了は元のファイルで付ける（仕様 AS-18）。
+- オンラインの間 Gemini を使う場合は、[Google AI Studio](https://aistudio.google.com/apikey) で API キーを作り、ユーザーの環境変数に置いてから E.S. Agent を再起動する（`setx GEMINI_API_KEY "<キー>"`。タスクスケジューラから起動するので、ユーザーの環境変数にする）。モデル名などは `config.json` の `gemini`（`config.example.json` を参照）。ネットにつながらないとき・Gemini が失敗したときは自動で `qwen3:8b` に切り替わる。Gemini を使っている間は、会話の内容が Google に送られる（仕様 AS-02・AS-17）。
 - 読み上げを使う場合は VOICEVOX を入れ、チャット画面の読み上げをオンにする。エンジン（`vv-engine\run.exe`）は Es が必要なときに起動し、しばらく話さないと止める。場所が既定と違うときは `voicevox_engine_path` を設定する。
 - 起動: ログオン時に自動。チャット画面は **Ctrl+Alt+E** または黒猫のダブルクリック。
 

@@ -73,7 +73,8 @@ def test_status_asks_ollama_at_most_once_per_ttl():
         FakeOllama.loaded, FakeOllama.calls = True, []
         answers = [llm.status(cfg) for _ in range(10)]
         assert len(FakeOllama.calls) == 2, FakeOllama.calls
-        assert all(a == {"ollama": True, "model": True, "name": "qwen3:8b", "loaded": True, "warming": False}
+        assert all(a == {"ollama": True, "model": True, "name": "qwen3:8b", "loaded": True, "warming": False,
+                                "backend": "ollama", "local": "qwen3:8b"}
                    for a in answers), answers
         answers[0]["model"] = False  # a caller changing its copy does not change the next answer
         assert llm.status(cfg)["model"] is True

@@ -15,7 +15,8 @@ E.S. Agent（External Self Agent）は、この Windows PC に常駐するロー
 
 - Python 3.12 の**標準ライブラリだけ**で書く（追加パッケージを入れない）。画面は素の HTML/JS。
 - サーバー `esagent/server.py`（127.0.0.1:8765）、デスクトップの黒猫 `esagent/pet.py`（tkinter）、
-  モデルは Ollama の `qwen3:8b`（`esagent/llm.py`）。
+  モデルはオンラインなら Gemini（`esagent/gemini.py`、キーは環境変数 `GEMINI_API_KEY`）、つながらないときは Ollama の `qwen3:8b`（`esagent/llm.py`）。
+  テストは Gemini を使わない（`tests/support.py` が止める）。
 - **判断はコードで行い、モデルには狭い役割だけを任せる**（`esagent/brain.py`）。
   8B モデルは嘘・作り話・手本の丸写しをする。モデルの出力は必ず検証してから使い、タスク操作後の返事はテンプレートにする。
   新しいモデル対策を入れたら、AS-02・AS-04 に書く。

@@ -5,6 +5,14 @@
   "keep_alive": "5m",
   "num_ctx": 8192,
   "history_tokens": 2000,
+  "gemini": {
+    "enabled": true,
+    "model": "gemini-flash-latest",
+    "api_key_env": "GEMINI_API_KEY",
+    "timeout_seconds": 30,
+    "retry_seconds": 60,
+    "thinking_level": "low"
+  },
   "local_pipeline": {
     "router": {"model": null, "timeout_seconds": 30},
     "reply": {"model": null, "timeout_seconds": 30},
