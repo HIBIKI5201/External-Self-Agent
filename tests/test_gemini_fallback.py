@@ -8,12 +8,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import gemini
 import llm
 
+REAL_ONLINE = gemini.online
+
 
 class Fake(BaseHTTPRequestHandler):
     """One server for both: /api/* is Ollama, /v1beta/* is Gemini."""
     calls = []
     gemini_status = 200
     gemini_answer = None
+    gemini_cut = False  # send half of the body, then close the connection
+
+    def _cut(self, code):
+        raw = json.dumps({"candidates": [{"content": {"parts": [{"text": "x" * 200}]}}]}).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw[:len(raw) // 2])
+        self.wfile.flush()
+        self.close_connection = True
 
     def log_message(self, *a):
         pass
@@ -34,6 +47,8 @@ class Fake(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if self.path.startswith("/v1beta/"):
             Fake.calls.append(("gemini", self.path, body, self.headers.get("x-goog-api-key")))
+            if Fake.gemini_cut:
+                return self._cut(Fake.gemini_status)
             if Fake.gemini_status != 200:
                 return self._send({"error": {"message": "overloaded"}}, Fake.gemini_status)
             return self._send(Fake.gemini_answer or {
@@ -51,7 +66,7 @@ class Setup:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         port = self.server.server_address[1]
-        Fake.calls, Fake.gemini_status, Fake.gemini_answer = [], 200, None
+        Fake.calls, Fake.gemini_status, Fake.gemini_answer, Fake.gemini_cut = [], 200, None, False
         self.saved = (gemini.API, gemini.BLOCKED, gemini.online, dict(gemini.STATE), os.environ.get("ESA_TEST_GEMINI"))
         gemini.API = f"http://127.0.0.1:{port}/v1beta"
         gemini.BLOCKED = False
@@ -196,3 +211,46 @@ def test_a_later_system_message_keeps_its_place():
 def test_tests_never_reach_the_real_gemini():
     import support  # noqa: F401
     assert gemini.BLOCKED and not gemini.usable({"gemini": {"api_key": "x"}})
+
+
+def test_a_reply_cut_midway_falls_back_to_qwen():
+    """CodeRabbit on #313: http.client.IncompleteRead was not caught, so the request failed outright."""
+    with Setup() as s:
+        Fake.gemini_cut = True
+        assert llm.chat(s.cfg, [{"role": "user", "content": "x"}]) == "クウェンだよ"
+        assert s.who() == ["gemini", "ollama"], Fake.calls
+        assert gemini.STATE["down_until"] > time.time()
+
+
+def test_an_error_whose_body_is_cut_still_falls_back():
+    """Reading the body of a 503 failed inside the HTTPError handler and escaped it (#313)."""
+    with Setup() as s:
+        Fake.gemini_cut, Fake.gemini_status = True, 503
+        assert llm.chat(s.cfg, [{"role": "user", "content": "x"}]) == "クウェンだよ"
+        assert "503" in gemini.STATE["error"]
+
+
+def test_an_empty_answer_rests_gemini_too():
+    with Setup() as s:
+        Fake.gemini_answer = {"candidates": [], "promptFeedback": {"blockReason": "OTHER"}}
+        assert llm.chat(s.cfg, [{"role": "user", "content": "x"}]) == "クウェンだよ"
+        assert llm.chat(s.cfg, [{"role": "user", "content": "y"}]) == "クウェンだよ"
+        assert s.who() == ["gemini", "ollama", "ollama"], Fake.calls
+        assert llm.status(s.cfg)["backend"] == "ollama"
+
+
+def test_a_system_proxy_skips_the_direct_probe():
+    """Windows' proxy settings reach urllib.request.getproxies(), not the environment (#313)."""
+    import socket
+    import urllib.request
+    saved = (urllib.request.getproxies, socket.create_connection, gemini.STATE["probe"])
+    probes = []
+    try:
+        urllib.request.getproxies = lambda: {"https": "http://proxy.local:8080"}
+        socket.create_connection = lambda *a, **k: probes.append(a) or (_ for _ in ()).throw(OSError("blocked"))
+        gemini.STATE["probe"] = (0.0, None)
+        assert REAL_ONLINE() is True and probes == []
+        urllib.request.getproxies = lambda: {}
+        assert REAL_ONLINE() is False and len(probes) == 1
+    finally:
+        urllib.request.getproxies, socket.create_connection, gemini.STATE["probe"] = saved
