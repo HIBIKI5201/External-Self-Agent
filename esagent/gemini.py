@@ -6,6 +6,7 @@ or "gemini": {"api_key": ...} in config.json) and "gemini": {"enabled": false} i
 Any failure (no network, timeout, quota, bad key, refused request) raises Unavailable; llm.py then asks
 Ollama, and Gemini is not tried again for a while (`retry_seconds`, longer for a key or model problem).
 """
+import http.client
 import json
 import os
 import socket
@@ -53,8 +54,9 @@ def configured(cfg):
 
 def online():
     """Whether Gemini's host can be reached now: a TCP connection with a short limit, kept PROBE_TTL
-    seconds. Behind a proxy the request itself decides (the proxy answers for any host)."""
-    if any(os.environ.get(v) for v in ("HTTPS_PROXY", "https_proxy")):
+    seconds. Behind a proxy the request itself decides (the proxy answers for any host). The proxy is
+    looked up as urllib does: the environment, and on Windows the system settings too."""
+    if urllib.request.getproxies().get("https"):
         return True
     at, ok = STATE["probe"]
     if ok is not None and time.monotonic() - at < PROBE_TTL:
@@ -201,13 +203,16 @@ def request(cfg, body, timeout=None):
     retry = int(s["retry_seconds"])
     req = build(cfg, body)
     url = f"{API}/models/{urllib.parse.quote(s['model'])}:generateContent"
-    http = urllib.request.Request(url, data=json.dumps(req).encode("utf-8"), method="POST",
-                                  headers={"Content-Type": "application/json", "x-goog-api-key": key(cfg) or ""})
+    request_ = urllib.request.Request(url, data=json.dumps(req).encode("utf-8"), method="POST",
+                                      headers={"Content-Type": "application/json", "x-goog-api-key": key(cfg) or ""})
     try:
-        with urllib.request.urlopen(http, timeout=limit) as r:
+        with urllib.request.urlopen(request_, timeout=limit) as r:
             data = json.load(r)
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except (OSError, http.client.HTTPException):  # the error's body stopped or was cut
+            detail = ""
         if e.code == 400 and "thinking" in detail.lower() and "thinkingConfig" in req["generationConfig"]:
             # An older model without thinking levels: remember and ask once more without them.
             _NO_LEVEL.add(s["model"])
@@ -217,14 +222,13 @@ def request(cfg, body, timeout=None):
         _down(f"Gemini がエラーを返しました ({e.code}): {detail}", retry)
     except (TimeoutError, socket.timeout):
         _down(f"Gemini の返事に {limit} 秒以上かかりました", retry)
-    except (urllib.error.URLError, ConnectionError, OSError) as e:
+    except (urllib.error.URLError, ConnectionError, OSError, http.client.HTTPException) as e:
         _down(f"Gemini に接続できません（{type(e).__name__}）", retry)
     except json.JSONDecodeError:
         _down("Gemini の返事を読めませんでした", retry)
     try:
         out = to_ollama(data)
-    except Unavailable as e:
-        STATE.update(error=str(e), at=time.time())
-        raise
+    except Unavailable as e:  # an empty answer: rest Gemini as after any other failure
+        _down(str(e), retry)
     STATE.update(down_until=0.0, error="")
     return out
