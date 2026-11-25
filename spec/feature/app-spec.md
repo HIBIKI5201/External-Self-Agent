@@ -257,7 +257,7 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 - **決定（#21）:** 引き継ぐのは、ユーザーが任せたいと言ったときだけ。「自分で直す」「もう頼んだ」という報告では引き継ぎを作らない（AS-02）。同じタスクの引き継ぎは 1 つだけで、重ねて頼まれたら「準備してある」と返す。
 - **実装:** `claude://code/new?folder=<作業フォルダ>&q=<依頼文>` を開く。依頼文は入力欄に入るだけで、**送信はユーザーが行う**（`esagent/handoff.py`）。作業フォルダは、Unity プロジェクトのタスクならそのプロジェクトのフォルダ、それ以外は `workspace/`。
 - **実装:** 依頼文 — タスク名・プロジェクト・締切・メモ・直近の会話・完了報告の依頼。全文を `data/handoffs/handoff-<番号>.md` に保存する。リンクが長すぎるとき（エンコード後 28,000 文字超）は会話を省き、全文ファイルの場所を書く。
-- **実装:** Claude Code には MCP サーバー `esagent` を登録してある（`esagent/mcp_server.py`）。ツール: list_tasks / get_task / add_task / update_task / complete_handoff。Claude Code は作業後に `complete_handoff` で結果をタスクのメモへ書き戻す。
+- **実装（#324）:** 共通 MCP サーバー `esagent`（`esagent/mcp_server.py`）は Claude Code / Codex / Antigravity / Gemini CLI すべてから利用できる External Self 基盤として 11 ツールを提供する: `list_tasks` / `get_task` / `add_task` / `update_task` / `complete_handoff` / `get_memories` / `add_memory` / `get_project_context` / `get_recent_chat` / `get_calendar_events` / `notify_es`。`notify_es` は `POST /api/es/notify` 経由で黒猫の吹き出し・発言ログ・音声（稼働時）へ外部 AI の進捗や完了を通知する（サーバー停止時は発言ログのみ記録）。導入手順は `docs/mcp-setup.md`。
 - **制約:** URL はコマンドライン引数として渡り、上限が約 32,767 文字。日本語 1 文字はエンコードで 9 文字になる。
 
 ## AS-10 Google ToDo リストとの同期

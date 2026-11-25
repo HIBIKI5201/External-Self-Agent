@@ -6,6 +6,7 @@ PR ごとに「未リリース」へ追記し、版を上げるときに見出�
 ## [未リリース]
 
 ### 追加
+- 共通 MCP サーバー（`esagent/mcp_server.py`）を External Self 基盤に拡張し、記憶・プロジェクト文脈・直近会話・カレンダー予定・黒猫への進捗通知（`notify_es`）を Claude Code / Codex / Antigravity / Gemini CLI で共有できるようにした（#324）。
 - ローカル AI（Ollama）を廃止し、Google AI Pro 定額枠で動く Gemini CLI（`gemini -p -o stream-json`、追加課金 0 円）に一本化した。オフライン時は返事待ちキューで復帰後に自動処理する（AS-02、#316）。
 - 生活の中心・Google 統合・マルチ AI 起点化（ローカル AI 廃止＆Gemini CLI 一本化・追加課金 0 円）の全体ロードマップを `spec/plan/life-hub-roadmap-2026-11-26.md` にまとめた（#326）。
 - ネットにつながっている間は Gemini で、つながらないときや Gemini が失敗したときは手元の Qwen（`qwen3:8b`）で返事するようにした。環境変数 `GEMINI_API_KEY` を設定すると有効になり、`config.json` の `gemini` で無効にもできる。Gemini を使っている間は Qwen を読み込まない（AS-02、#312）。
