@@ -6,6 +6,7 @@ PR ごとに「未リリース」へ追記し、版を上げるときに見出�
 ## [未リリース]
 
 ### 追加
+- マルチ AI 引き継ぎ基盤（`esagent/ai_hub.py`）を追加し、Claude Code に加えて Codex / Antigravity / Gemini CLI へ共通の引き継ぎパケット（タスク・会話・記憶・直近の予定）で渡せるようにした（#322）。
 - ローカル AI（Ollama）を廃止し、Google AI Pro 定額枠で動く Gemini CLI（`gemini -p -o stream-json`、追加課金 0 円）に一本化した。オフライン時は返事待ちキューで復帰後に自動処理する（AS-02、#316）。
 - 生活の中心・Google 統合・マルチ AI 起点化（ローカル AI 廃止＆Gemini CLI 一本化・追加課金 0 円）の全体ロードマップを `spec/plan/life-hub-roadmap-2026-11-26.md` にまとめた（#326）。
 - ネットにつながっている間は Gemini で、つながらないときや Gemini が失敗したときは手元の Qwen（`qwen3:8b`）で返事するようにした。環境変数 `GEMINI_API_KEY` を設定すると有効になり、`config.json` の `gemini` で無効にもできる。Gemini を使っている間は Qwen を読み込まない（AS-02、#312）。

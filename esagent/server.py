@@ -18,6 +18,7 @@ sys.path.insert(0, HERE)
 
 import activity  # noqa: E402
 import admin  # noqa: E402
+import ai_hub  # noqa: E402
 import brain  # noqa: E402
 import conversation_state  # noqa: E402
 import conversation_jobs as jobs
@@ -271,6 +272,7 @@ GET = _table({
     "/api/chat/bypass": Route(lambda q: {"pattern": status_question._STATUS_RE.pattern,
                                          "exclude": f"{status_question._TASK_REF_RE.pattern}|{timer_chat.TIMER_TEXT}"}),
     "/api/commands": Route(lambda q: skills.catalog()),
+    "/api/ai/providers": Route(lambda q: {"providers": ai_hub.providers_status()}),
     "/api/admin/tables": Route(lambda q: {"tables": admin.tables(), "db": db.DB_PATH}),
     "/api/admin/table": Route(_admin_table),
     "/api/admin/config": Route(lambda q: {"fields": admin.config(CFG), "file": db.CONFIG_PATH}),
@@ -356,11 +358,11 @@ def _update_task(body, task_id):
 def _delegate(body, task_id):
     if not db.get_task(int(task_id)):
         raise NotFound("task not found")
-    return brain.delegate(int(task_id), CFG)
+    return brain.delegate(int(task_id), CFG, provider=body.get("provider") or "claude")
 
 
 def _open_handoff(body, handoff_id):
-    h = handoff.open_in_claude(int(handoff_id))
+    h = handoff.open_in_claude(int(handoff_id), provider=body.get("provider"))
     if not h:
         raise NotFound("handoff not found")
     return h
