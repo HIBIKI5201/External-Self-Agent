@@ -259,6 +259,7 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 - **実装:** 依頼文 — タスク名・プロジェクト・締切・メモ・直近の会話・完了報告の依頼。全文を `data/handoffs/handoff-<番号>.md` に保存する。リンクが長すぎるとき（エンコード後 28,000 文字超）は会話を省き、全文ファイルの場所を書く。
 - **実装:** Claude Code には MCP サーバー `esagent` を登録してある（`esagent/mcp_server.py`）。ツール: list_tasks / get_task / add_task / update_task / complete_handoff。Claude Code は作業後に `complete_handoff` で結果をタスクのメモへ書き戻す。
 - **実装（#322）: マルチ AI 引き継ぎ基盤（`esagent/ai_hub.py`）。** Claude Code（`claude://code/new`）に加え、Codex CLI（`codex`）・Antigravity（`agy`）・Gemini CLI（`gemini`）をプロバイダアダプタとして統一的に扱える。引き継ぎパケット（`data/handoffs/handoff-<番号>.md`）にはタスク・会話に加えて Es の記憶と直近の予定も含める。`GET /api/ai/providers` で各 AI の導入状況を返し、`POST /api/tasks/<id>/delegate`・`POST /api/handoffs/<id>/open` で `provider` を指定できる（既定 `claude`）。
+- **実装（#323）: マルチ AI スキルと稼働セッション表示。** `/claude` に加え `/codex`・`/agy`・`/gemini` で各 AI 向けの引き継ぎを準備できる。`/ai`（引数なし）で各 AI の導入状況と進行中セッション一覧を表示し、`/ai <依頼文>` で最適な AI を提案する。チャット画面の右ペイン「AI への引き継ぎ」には引き継ぎ先プロバイダ名を表示する。
 - **制約:** URL はコマンドライン引数として渡り、上限が約 32,767 文字。日本語 1 文字はエンコードで 9 文字になる。
 
 ## AS-10 Google ToDo リストとの同期

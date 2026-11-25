@@ -256,7 +256,7 @@ body.hide-bar #scene #controls { display: none; }
   <aside>
     <section id="cal" class="pinned top"></section>
     <div id="sidescroll">
-      <h2>Claude Code への引き継ぎ</h2>
+      <h2>AI への引き継ぎ</h2>
       <div id="handoffs"></div>
       <h2>タスク</h2>
       <div id="tasks"></div>
@@ -351,15 +351,18 @@ function render() {
     ? "雑談モード：なんでも話してね（タスクの追加・完了もできます）"
     : "作業モード：例「金曜までにA社のES出す」「何からやる？」　/ でスキル";
 
-  $("#handoffs").innerHTML = S.handoffs.length ? S.handoffs.map((h) => `
+  $("#handoffs").innerHTML = S.handoffs.length ? S.handoffs.map((h) => {
+    const pname = h.provider_name || "Claude Code";
+    return `
     <div class="handoff">
       <div class="t">#${h.task_id} ${esc(h.task_title)}</div>
-      <div class="m">${esc(h.project || "未分類")} ・ ${h.status === "opened" ? "開いた（結果待ち）" : "未オープン"}</div>
+      <div class="m">${esc(h.project || "未分類")} ・ ${esc(pname)} ・ ${h.status === "opened" ? "開いた（結果待ち）" : "未オープン"}</div>
       <div class="row">
-        <button data-open="${h.id}">${h.status === "opened" ? "もう一度開く" : "Claude Codeで開く"}</button>
+        <button data-open="${h.id}">${h.status === "opened" ? "もう一度開く" : `${esc(pname)}で開く`}</button>
         <button class="ghost" data-dismiss="${h.id}">取り下げ</button>
       </div>
-    </div>`).join("") : `<div class="task"><span></span><span class="meta">なし</span></div>`;
+    </div>`;
+  }).join("") : `<div class="task"><span></span><span class="meta">なし</span></div>`;
 
   const groups = {};
   for (const t of S.tasks) (groups[t.project || "未分類"] ??= []).push(t);

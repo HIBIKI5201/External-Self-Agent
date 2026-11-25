@@ -6,6 +6,7 @@ PR ごとに「未リリース」へ追記し、版を上げるときに見出�
 ## [未リリース]
 
 ### 追加
+- マルチ AI スキル（`/codex`, `/agy`, `/gemini`, `/ai`）と、右ペインの AI プロバイダ別引き継ぎ表示・おすすめ AI 提案を追加した（#323）。
 - マルチ AI 引き継ぎ基盤（`esagent/ai_hub.py`）を追加し、Claude Code に加えて Codex / Antigravity / Gemini CLI へ共通の引き継ぎパケット（タスク・会話・記憶・直近の予定）で渡せるようにした（#322）。
 - ローカル AI（Ollama）を廃止し、Google AI Pro 定額枠で動く Gemini CLI（`gemini -p -o stream-json`、追加課金 0 円）に一本化した。オフライン時は返事待ちキューで復帰後に自動処理する（AS-02、#316）。
 - 生活の中心・Google 統合・マルチ AI 起点化（ローカル AI 廃止＆Gemini CLI 一本化・追加課金 0 円）の全体ロードマップを `spec/plan/life-hub-roadmap-2026-11-26.md` にまとめた（#326）。
