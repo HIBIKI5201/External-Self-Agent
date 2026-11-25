@@ -1,40 +1,45 @@
-"""Google Gemini as the model while the PC is online; llm.py falls back to local Ollama (Qwen) otherwise.
+"""Gemini CLI backend for E.S. Agent (Google AI Pro plan, zero extra API cost, #316).
 
-The requests and answers keep llm.py's Ollama shapes, so the rest of the app does not know which model
-answered. Gemini is used only when an API key is set (environment variable GEMINI_API_KEY by default,
-or "gemini": {"api_key": ...} in config.json) and "gemini": {"enabled": false} is not set.
-Any failure (no network, timeout, quota, bad key, refused request) raises Unavailable; llm.py then asks
-Ollama, and Gemini is not tried again for a while (`retry_seconds`, longer for a key or model problem).
+Runs the installed `gemini` CLI in headless mode (`-p " " -o stream-json --skip-trust`)
+with the prompt passed via stdin and an isolated empty working directory so the CLI
+does not read or modify repository files on its own.
 """
-import http.client
 import json
 import os
+import re
+import shutil
 import socket
+import subprocess
+import sys
+import threading
 import time
-import urllib.error
-import urllib.parse
 import urllib.request
 
-API = "https://generativelanguage.googleapis.com/v1beta"
 HOST = "generativelanguage.googleapis.com"
 DEFAULTS = {
-    "enabled": True,
-    "model": "gemini-flash-latest",
-    "api_key_env": "GEMINI_API_KEY",
-    "timeout_seconds": 30,
-    "retry_seconds": 60,
-    "thinking_level": "low",
+    "command": "gemini",
+    "model": "auto",
+    "timeout_seconds": 90,
+    "retry_seconds": 30,
+    "approval_mode": "plan",
 }
-PROBE_TTL = 30          # seconds the network check is trusted
-SETUP_RETRY = 600       # seconds before trying again after a key or model problem (401/403/404)
-BLOCKED = False         # tests/support.py sets this so no test reaches the real Gemini
+PROBE_TTL = 30
+BLOCKED = False  # tests/support.py sets this so offline tests never spawn the real CLI
 
-# Shared with llm.status and brain.status_lines: why Gemini is not used now.
+# Shared with llm.status and status_question.status_lines.
 STATE = {"down_until": 0.0, "error": "", "at": 0.0, "probe": (0.0, None)}
 
 
 class Unavailable(Exception):
-    """Gemini could not answer; ask Ollama instead."""
+    """Gemini CLI could not answer (not installed, offline, or non-zero exit)."""
+
+
+class TimedOut(Unavailable):
+    """Gemini CLI exceeded its time limit."""
+
+    def __init__(self, seconds):
+        self.seconds = seconds
+        super().__init__(f"返事に {seconds} 秒以上かかったので打ち切りました（Gemini CLI）。")
 
 
 def settings(cfg):
@@ -42,20 +47,21 @@ def settings(cfg):
     return {**DEFAULTS, **own}
 
 
-def key(cfg):
-    s = settings(cfg)
-    return s.get("api_key") or os.environ.get(s.get("api_key_env") or DEFAULTS["api_key_env"]) or None
+def executable(cfg):
+    cmd = str(settings(cfg).get("command") or DEFAULTS["command"]).strip()
+    if not cmd:
+        return None
+    if os.path.isabs(cmd) and os.path.isfile(cmd):
+        return cmd
+    return shutil.which(cmd)
 
 
 def configured(cfg):
-    """A key is set and Gemini is not turned off (whether or not the network is up now)."""
-    return not BLOCKED and bool(settings(cfg).get("enabled", True)) and bool(key(cfg))
+    return not BLOCKED and executable(cfg) is not None
 
 
 def online():
-    """Whether Gemini's host can be reached now: a TCP connection with a short limit, kept PROBE_TTL
-    seconds. Behind a proxy the request itself decides (the proxy answers for any host). The proxy is
-    looked up as urllib does: the environment, and on Windows the system settings too."""
+    """Whether Google's Gemini endpoint is reachable (cached for PROBE_TTL seconds)."""
     if urllib.request.getproxies().get("https"):
         return True
     at, ok = STATE["probe"]
@@ -71,164 +77,304 @@ def online():
 
 
 def usable(cfg):
-    """Use Gemini for the next request: configured, not resting after a failure, and online."""
     return configured(cfg) and time.time() >= STATE["down_until"] and online()
 
 
-def _down(error, seconds):
+def model_name(cfg):
+    m = str(settings(cfg).get("model") or "auto").strip()
+    return m or "auto"
+
+
+def _down(error, seconds, offline_hint=False):
     STATE.update(down_until=time.time() + seconds, error=error, at=time.time())
-    if "接続" in error or "時間" in error:
+    if offline_hint:
         STATE["probe"] = (time.monotonic(), False)
     raise Unavailable(error)
 
 
-def model_name(cfg):
-    return settings(cfg)["model"]
+def _cwd():
+    import db
+    path = os.path.join(db.DATA_DIR, "gemini-cwd")
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
-# ---- messages: Ollama -> Gemini ------------------------------------------------------
-
-# Gemini 3 checks that a function call sent back carries the signature it came with; this documented
-# value skips that check for calls that have none (e.g. made by Qwen earlier in the same skill run).
-_NO_SIGNATURE = "skip_thought_signature_validator"
-
-
-def _parts(m):
-    role = m.get("role")
-    content = m.get("content") or ""
-    if role == "tool":
-        return "user", [{"functionResponse": {"name": m.get("tool_name") or m.get("name") or "tool",
-                                              "response": {"result": content}}}]
-    parts = [{"text": content}] if content else []
-    for c in m.get("tool_calls") or []:
-        fn = c.get("function", {}) if isinstance(c, dict) else {}
-        args = fn.get("arguments")
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except json.JSONDecodeError:
-                args = {}
-        parts.append({"functionCall": {"name": fn.get("name", ""), "args": args if isinstance(args, dict) else {}},
-                      "thoughtSignature": c.get("thought_signature") or _NO_SIGNATURE})
-    return ("model" if role == "assistant" else "user"), parts
-
-
-def to_request(messages):
-    """(systemInstruction text, contents). Leading system messages become the instruction; a system
-    message later in the conversation stays in place as a user turn, so its position still counts."""
-    system, contents, leading = [], [], True
-    for m in messages:
-        if m.get("role") == "system" and leading:
-            system.append(m.get("content") or "")
-            continue
-        leading = False
-        role, parts = _parts(m)
-        if m.get("role") == "system":
-            parts = [{"text": "[system]\n" + (m.get("content") or "")}]
-        if not parts:
-            continue
-        if contents and contents[-1]["role"] == role:  # Gemini wants the turns to alternate
-            contents[-1]["parts"].extend(parts)
-        else:
-            contents.append({"role": role, "parts": parts})
-    if not contents:
-        contents = [{"role": "user", "parts": [{"text": ""}]}]
-    return "\n\n".join(s for s in system if s), contents
-
-
-def build(cfg, body):
-    """The generateContent request for an Ollama /api/chat body (llm.chat / llm.chat_tools)."""
-    system, contents = to_request(body["messages"])
-    options = body.get("options") or {}
-    gen = {"temperature": options.get("temperature", 0.2)}
-    # num_predict is not passed on: Gemini counts its thinking in maxOutputTokens, so the short limits
-    # tuned for Qwen would cut replies to nothing. Gemini is fast enough without them.
-    if body.get("format"):
-        gen["responseMimeType"] = "application/json"
-        gen["responseJsonSchema"] = body["format"]
-    level = settings(cfg).get("thinking_level")
-    if level and not body.get("think") and settings(cfg)["model"] not in _NO_LEVEL:
-        gen["thinkingConfig"] = {"thinkingLevel": level}
-    req = {"contents": contents, "generationConfig": gen}
-    if system:
-        req["systemInstruction"] = {"parts": [{"text": system}]}
-    if body.get("tools"):
-        req["tools"] = [{"functionDeclarations": [
-            {"name": t["function"]["name"], "description": t["function"].get("description", ""),
-             "parametersJsonSchema": t["function"].get("parameters") or {"type": "object", "properties": {}}}
-            for t in body["tools"] if isinstance(t, dict) and isinstance(t.get("function"), dict)]}]
-    return req
-
-
-# Models that refused thinkingLevel (older ones). Kept apart from cfg, which the admin page saves (#233).
-_NO_LEVEL = set()
-
-
-# ---- answers: Gemini -> Ollama ----------------------------------------------------------
-
-def to_ollama(data):
-    """The Ollama-shaped answer ({"message": {...}, token counts}) for a generateContent answer."""
-    cands = data.get("candidates") or []
-    if not cands:
-        reason = (data.get("promptFeedback") or {}).get("blockReason") or "候補なし"
-        raise Unavailable(f"Gemini が返事を返しませんでした（{reason}）")
-    cand = cands[0]
-    text, calls = "", []
-    for p in (cand.get("content") or {}).get("parts") or []:
-        if p.get("thought"):
-            continue
-        if "text" in p:
-            text += p["text"]
-        if "functionCall" in p:
-            fc = p["functionCall"]
-            call = {"function": {"name": fc.get("name", ""), "arguments": fc.get("args") or {}}}
-            if p.get("thoughtSignature"):
-                call["thought_signature"] = p["thoughtSignature"]
-            calls.append(call)
-    if not text and not calls:
-        raise Unavailable(f"Gemini の返事が空でした（{cand.get('finishReason')}）")
-    usage = data.get("usageMetadata") or {}
-    msg = {"role": "assistant", "content": text}
-    if calls:
-        msg["tool_calls"] = calls
-    return {"message": msg, "done_reason": (cand.get("finishReason") or "").lower() or None,
-            "prompt_eval_count": usage.get("promptTokenCount"),
-            "eval_count": usage.get("candidatesTokenCount")}
-
-
-def request(cfg, body, timeout=None):
-    """Ask Gemini for an Ollama /api/chat body. Returns the Ollama-shaped answer or raises Unavailable."""
-    s = settings(cfg)
-    limit = max(1, min(int(timeout or s["timeout_seconds"]), int(s["timeout_seconds"])))
-    retry = int(s["retry_seconds"])
-    req = build(cfg, body)
-    url = f"{API}/models/{urllib.parse.quote(s['model'])}:generateContent"
-    request_ = urllib.request.Request(url, data=json.dumps(req).encode("utf-8"), method="POST",
-                                      headers={"Content-Type": "application/json", "x-goog-api-key": key(cfg) or ""})
-    try:
-        with urllib.request.urlopen(request_, timeout=limit) as r:
-            data = json.load(r)
-    except urllib.error.HTTPError as e:
+def _kill_tree(proc):
+    """Terminate the CLI and any child Node.js process on Windows so pipes never hang."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
         try:
-            detail = e.read().decode("utf-8", "replace")[:300]
-        except (OSError, http.client.HTTPException):  # the error's body stopped or was cut
-            detail = ""
-        if e.code == 400 and "thinking" in detail.lower() and "thinkingConfig" in req["generationConfig"]:
-            # An older model without thinking levels: remember and ask once more without them.
-            _NO_LEVEL.add(s["model"])
-            return request(cfg, body, timeout)
-        if e.code in (401, 403, 404):
-            _down(f"Gemini の API キーかモデル名（{s['model']}）が使えません ({e.code}): {detail}", SETUP_RETRY)
-        _down(f"Gemini がエラーを返しました ({e.code}): {detail}", retry)
-    except (TimeoutError, socket.timeout):
-        _down(f"Gemini の返事に {limit} 秒以上かかりました", retry)
-    except (urllib.error.URLError, ConnectionError, OSError, http.client.HTTPException) as e:
-        _down(f"Gemini に接続できません（{type(e).__name__}）", retry)
-    except json.JSONDecodeError:
-        _down("Gemini の返事を読めませんでした", retry)
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=5, creationflags=flags,
+            )
+            return
+        except Exception:
+            pass
     try:
-        out = to_ollama(data)
-    except Unavailable as e:  # an empty answer: rest Gemini as after any other failure
-        _down(str(e), retry)
+        proc.kill()
+    except OSError:
+        pass
+
+
+# ---- prompt building & parsing -------------------------------------------------------
+
+def format_prompt(messages, schema=None, tools=None):
+    """Render chat messages (plus optional JSON schema or tool specs) into a single prompt."""
+    parts = [
+        "以下は会話の指示と履歴です。指示に従って最新のユーザー発言にのみ応答してください。",
+        "ワークスペースのファイル操作やシェル実行は行わず、テキスト応答のみを返してください。",
+    ]
+    for m in messages:
+        role = m.get("role") or "user"
+        content = (m.get("content") or "").strip()
+        if role == "tool":
+            name = m.get("tool_name") or m.get("name") or "tool"
+            parts.append(f"[tool_result:{name}]\n{content}")
+            continue
+        block = content
+        if m.get("tool_calls"):
+            calls_json = json.dumps(m["tool_calls"], ensure_ascii=False)
+            block = (block + "\n" if block else "") + f"[tool_calls]\n{calls_json}"
+        if block:
+            parts.append(f"[{role}]\n{block}")
+
+    if schema:
+        parts.append(
+            "[output_format]\n"
+            "次の JSON Schema に厳密に従う単一の JSON オブジェクトだけを出力してください。"
+            "マークダウンのコードブロック（```）や前後の説明文は一切書かないでください。\n"
+            + json.dumps(schema, ensure_ascii=False)
+        )
+    elif tools:
+        specs = []
+        for t in tools:
+            fn = t.get("function") if isinstance(t, dict) else None
+            if isinstance(fn, dict):
+                specs.append({
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+                })
+        parts.append(
+            "[available_tools]\n"
+            "次のツールを使う必要がある場合のみ、余計な文章を書かずに単一の JSON オブジェクトで返してください:\n"
+            '{"tool_calls": [{"name": "ツール名", "arguments": { ... }}]}\n'
+            "ツールを呼ばずユーザーへ最終返答する場合は、JSON にせず通常の日本語テキストだけを返してください。\n"
+            + json.dumps(specs, ensure_ascii=False)
+        )
+    return "\n\n".join(parts) + "\n"
+
+
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.S)
+
+
+def extract_json(text):
+    """Strip optional markdown code fences and return the JSON object string if present."""
+    s = (text or "").strip()
+    m = _FENCE_RE.match(s)
+    if m:
+        s = m.group(1).strip()
+    try:
+        json.loads(s)
+        return s
+    except json.JSONDecodeError:
+        pass
+    start, end = s.find("{"), s.rfind("}")
+    if 0 <= start < end:
+        candidate = s[start:end + 1]
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    return s
+
+
+def parse_tool_reply(text):
+    """Parse a reply from a tool-enabled turn into {'role': 'assistant', 'content': ..., 'tool_calls': ...}."""
+    s = (text or "").strip()
+    candidate = extract_json(s)
+    if candidate.startswith("{"):
+        try:
+            obj = json.loads(candidate)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict) and isinstance(obj.get("tool_calls"), list):
+            calls = []
+            for c in obj["tool_calls"]:
+                if not isinstance(c, dict):
+                    continue
+                fn = c.get("function") if isinstance(c.get("function"), dict) else c
+                name = fn.get("name")
+                if not name:
+                    continue
+                args = fn.get("arguments") or fn.get("args") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                calls.append({"function": {"name": name, "arguments": args if isinstance(args, dict) else {}}})
+            if calls:
+                return {"role": "assistant", "content": "", "tool_calls": calls}
+    return {"role": "assistant", "content": s}
+
+
+# ---- CLI invocation ------------------------------------------------------------------
+
+def build_command(cfg, exe):
+    s = settings(cfg)
+    args = [exe, "-p", " ", "-o", "stream-json", "--skip-trust"]
+    mode = str(s.get("approval_mode") or "plan").strip()
+    if mode:
+        args += ["--approval-mode", mode]
+    model = model_name(cfg)
+    if model and model.lower() != "auto":
+        args += ["-m", model]
+    return args
+
+
+def request(cfg, body, timeout=None, on_text=None, cancel_check=None):
+    """Run Gemini CLI and return an Ollama-shaped response dict for llm.py."""
+    s = settings(cfg)
+    exe = executable(cfg)
+    if not exe or BLOCKED:
+        raise Unavailable("Gemini CLI が見つかりません。`gemini` コマンドをインストールしてログインしてください。")
+    if not online():
+        _down("Gemini に接続できません（オフライン）。ネット接続を確認してください。", int(s["retry_seconds"]), offline_hint=True)
+
+    limit = max(1, int(timeout or s["timeout_seconds"]))
+    retry = int(s["retry_seconds"])
+    schema = body.get("format")
+    tools = body.get("tools")
+    prompt = format_prompt(body["messages"], schema=schema, tools=tools)
+    cmd = build_command(cfg, exe)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    cwd = _cwd()
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
+            creationflags=flags,
+        )
+    except OSError as e:
+        _down(f"Gemini CLI を起動できませんでした（{e}）", retry)
+
+    timed_out = threading.Event()
+    cancelled = threading.Event()
+
+    def _on_timeout():
+        timed_out.set()
+        _kill_tree(proc)
+
+    timer = threading.Timer(limit, _on_timeout)
+    timer.daemon = True
+    timer.start()
+
+    stderr_chunks = []
+
+    def _drain_stderr():
+        try:
+            stderr_chunks.append(proc.stderr.read())
+        except Exception:
+            pass
+
+    err_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    err_thread.start()
+
+    text = ""
+    stats = {}
+    stream_error = None
+    stream_visible = on_text is not None and not schema and not tools
+
+    try:
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except OSError:
+            pass
+
+        for raw_line in proc.stdout:
+            if cancel_check:
+                try:
+                    cancel_check()
+                except Exception:
+                    cancelled.set()
+                    _kill_tree(proc)
+                    raise
+            line = raw_line.strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            etype = ev.get("type")
+            if etype == "message" and ev.get("role") == "assistant":
+                piece = ev.get("content") or ""
+                if piece:
+                    if ev.get("delta", True):
+                        text += piece
+                    else:
+                        text = piece
+                    if stream_visible:
+                        on_text(text)
+            elif etype == "error":
+                stream_error = ev.get("message") or ev.get("error") or str(ev)
+            elif etype == "result":
+                stats = ev.get("stats") or {}
+                if ev.get("status") == "error" and not stream_error:
+                    stream_error = ev.get("error") or "Gemini CLI error"
+        proc.wait(timeout=5)
+    except Exception:
+        _kill_tree(proc)
+        raise
+    finally:
+        timer.cancel()
+        err_thread.join(timeout=2)
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                if pipe:
+                    pipe.close()
+            except OSError:
+                pass
+
+    if timed_out.is_set():
+        raise TimedOut(limit)
+
+    stderr_text = "".join(stderr_chunks).strip()
+    if proc.returncode != 0 and not text.strip():
+        detail = (stream_error or stderr_text or f"exit {proc.returncode}")[:300]
+        offline_hint = any(w in detail.lower() for w in ("enotfound", "econnrefused", "etimedout", "network", "fetch failed"))
+        _down(f"Gemini CLI がエラーを返しました: {detail}", retry, offline_hint=offline_hint)
+
+    if not text.strip():
+        detail = (stream_error or stderr_text or "空の返事")[:200]
+        _down(f"Gemini CLI の返事が空でした（{detail}）", retry)
+
     STATE.update(down_until=0.0, error="")
-    return out
+    if schema:
+        msg = {"role": "assistant", "content": extract_json(text)}
+    elif tools:
+        msg = parse_tool_reply(text)
+    else:
+        msg = {"role": "assistant", "content": text.strip()}
+
+    return {
+        "message": msg,
+        "done_reason": "stop",
+        "prompt_eval_count": stats.get("input_tokens"),
+        "eval_count": stats.get("output_tokens"),
+        "total_duration": (stats.get("duration_ms") or 0) * 1_000_000,
+    }

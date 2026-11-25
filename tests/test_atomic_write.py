@@ -58,22 +58,9 @@ def test_failed_token_write_keeps_the_connection():
             gauth.SECRETS_DIR, gauth.TOKEN_PATH = paths
 
 
-def test_no_think_finding_is_not_saved_to_the_config():
-    cfg = {"model": "no-think-test:1b", "ollama_url": "http://127.0.0.1:1"}
-    sent = []
-
-    def post(cfg, body, timeout, on_text):
-        sent.append("think" in body)
-        if "think" in body:
-            raise llm.LLMError('"no-think-test:1b" does not support thinking')
-        return "ok"
-
-    with patch.object(llm, "_post", post):
+def test_llm_chat_does_not_mutate_config():
+    cfg = {"gemini": {"command": "gemini", "model": "auto"}}
+    before = json.dumps(cfg, sort_keys=True)
+    with patch.object(llm, "_post", return_value="ok"):
         assert llm.chat(cfg, [{"role": "user", "content": "hi"}]) == "ok"
-        assert llm.chat(dict(cfg), [{"role": "user", "content": "hi"}]) == "ok"
-        assert llm.chat(dict(cfg, model="other:1b"), [{"role": "user", "content": "hi"}]) == "ok"
-    assert "supports_think" not in cfg, cfg
-    assert sent == [True, False, False, True, False], sent
-    llm._NO_THINK.discard("other:1b")
-    llm._NO_THINK.discard("no-think-test:1b")
-    assert json.dumps(cfg)
+    assert json.dumps(cfg, sort_keys=True) == before, cfg

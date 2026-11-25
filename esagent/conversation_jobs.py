@@ -363,17 +363,17 @@ def resume(message, cfg, run):
 
 
 def _model_unready(error, cfg):
-    """Whether the request failed because Ollama or the model was not there, judged by the failure itself
-    (the model may be ready by the time it is checked again)."""
+    """Whether the request failed because Gemini CLI was unavailable or offline."""
     import llm
     if error:
-        return llm.CONNECT_ERROR in error or "が見つかりません" in error
+        return (llm.CONNECT_ERROR in error or "接続できません" in error
+                or "見つかりません" in error or "オフライン" in error)
     return not llm.status(cfg).get("model")
 
 
 def waiting_note(reason=""):
     """What the screen says when a message waits for the model (#192): why, and that it will be answered."""
-    when = "Ollama が起動したら" if "接続できません" in reason else "モデルの準備ができたら"
+    when = "オンラインに戻ったら" if ("接続できません" in reason or "オフライン" in reason) else "モデルの準備ができたら"
     return (reason + "\n" if reason else "") + f"この発言は残しておいて、{when}自動で返事するね。"
 
 
@@ -382,7 +382,7 @@ def stopped_reply(reason=""):
     time limit, #190/#198) is said as it is: the conversation stopped before any task change, so it does
     not ask to check the tasks."""
     if reason:
-        when = "Ollama が起動したら、" if "接続できません" in reason else ""
+        when = "ネット接続を確認してから、" if ("接続できません" in reason or "オフライン" in reason) else ""
         return f"{reason}\nこの発言にはまだ返事できていないよ。{when}もう一度送ってね。"
     return "処理を完了できませんでした。自動再実行はせず、履歴とタスクを確認してください。"
 

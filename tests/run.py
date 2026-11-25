@@ -23,7 +23,7 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     offline = "--offline" in sys.argv
-    llm_ok = not offline and support.ollama_ready()
+    llm_ok = not offline and support.gemini_ready()
     passed = failed = skipped = 0
     for fname in sorted(os.listdir(HERE)):
         if not (fname.startswith("test_") and fname.endswith(".py")):

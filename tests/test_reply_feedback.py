@@ -29,8 +29,9 @@ def test_rating_rewrite_list_delete_and_export():
         template = db.recent_messages(1, roles=("assistant",))[-1]
         assert db.recent_messages(5, roles=("assistant",))[-2]["intent"] == "chat"
 
+        import gemini
         row = feedback.rate(chat["id"], rating=-1, cfg=sb.cfg)
-        assert row["kind"] == "chat" and row["rating"] == -1 and row["model"] == sb.cfg["model"]
+        assert row["kind"] == "chat" and row["rating"] == -1 and row["model"] == gemini.model_name(sb.cfg)
         assert json.loads(row["context"])[-1] == {"role": "user", "content": "今日はカレーを作ったよ"}
         feedback.rate(chat["id"], rewrite="カレーいいね！スパイスから作ったの？", cfg=sb.cfg)
         feedback.rate(template["id"], rating=1, cfg=sb.cfg)
