@@ -410,6 +410,16 @@ def _es_said(body):  # a line the cat or the chat window showed (#139)
     return {"recorded": mid is not None}
 
 
+def _es_notify(body):  # progress / completion notice from an external AI via MCP (#324)
+    msg = str(body.get("message") or "").strip()[:200]
+    if not msg:
+        raise ValueError("message is empty")
+    ev = events.push("ai_notify", text=msg, source_ai=str(body.get("source_ai") or "AI")[:30])
+    utterances.record(msg, source="system", kind="notice", key=ev["key"])
+    voice.say(CFG, msg, key=ev["key"], wake=False)
+    return {"ok": True, "key": ev["key"]}
+
+
 def _voice_stop(body):
     voice.stop()
     return voice.status(CFG)
@@ -526,6 +536,7 @@ POST = _table({
     "/api/listen/diag": Route(_listen_diag),
     "/api/listen/log": Route(_listen_log),
     "/api/es/said": Route(_es_said),
+    "/api/es/notify": Route(_es_notify),
     # a line the cat or the chat window shows
     "/api/voice/say": Route(lambda body: {"queued": voice.say(CFG, str(body.get("text") or "")[:500], key=body.get("key"),
                                                                   wake=body.get("wake", True) is not False)}, **_LOCAL),
