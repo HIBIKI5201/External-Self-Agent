@@ -43,13 +43,13 @@ def require_windows():
 
 
 def ollama_ready(cfg=None):
+    """Compatibility alias for gemini_ready (Ollama was removed in #316)."""
+    return gemini_ready(cfg)
+
+
+def gemini_ready(cfg=None):
     cfg = cfg or db.load_config()
-    try:
-        with urllib.request.urlopen(cfg["ollama_url"].rstrip("/") + "/api/tags", timeout=2) as r:
-            names = [m["name"] for m in json.load(r).get("models", [])]
-    except Exception:
-        return False
-    return any(n == cfg["model"] or n.split(":")[0] == cfg["model"] for n in names)
+    return gemini.executable(cfg) is not None and gemini.online()
 
 
 def voicevox_ready(cfg=None):

@@ -1,22 +1,12 @@
 {
   "port": 8765,
-  "ollama_url": "http://127.0.0.1:11434",
-  "model": "qwen3:8b",
-  "keep_alive": "5m",
-  "num_ctx": 8192,
-  "history_tokens": 2000,
+  "history_tokens": 4000,
   "gemini": {
-    "enabled": true,
-    "model": "gemini-flash-latest",
-    "api_key_env": "GEMINI_API_KEY",
-    "timeout_seconds": 30,
-    "retry_seconds": 60,
-    "thinking_level": "low"
-  },
-  "local_pipeline": {
-    "router": {"model": null, "timeout_seconds": 30},
-    "reply": {"model": null, "timeout_seconds": 30},
-    "tools": {"model": null, "timeout_seconds": 30}
+    "command": "gemini",
+    "model": "auto",
+    "timeout_seconds": 90,
+    "retry_seconds": 30,
+    "approval_mode": "plan"
   },
   "natural_action_replies": true,
   "llm_log": true,
@@ -42,7 +32,6 @@
   "linked_todos": [],
   "default_folder": "C:\\ESAgent\\workspace",
   "edge_path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-  "think_router": false,
   "bgm": [
     {
       "title": "Lofi Girl ライブ（YouTube ウィンドウ向け）",

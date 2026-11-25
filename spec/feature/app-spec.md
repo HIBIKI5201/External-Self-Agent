@@ -40,13 +40,14 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 
 ## AS-02 モデルと判断の流れ
 
-- **決定:** モデルは **Qwen3 8B**（`qwen3:8b`）、思考モードはオフ。旧モデル Phi-4-mini は削除した。
-- **意図:** Phi-4-mini（3.8B）は「それぞれに締切を」のような複数タスクの更新や、直前の話を指す依頼をこなせなかった。Qwen3 の思考モードは結果が同じで約 3.5 倍遅かった。
-- **決定: オンラインの間は Gemini、つながらないときは Qwen。** Gemini の API キーがあり（環境変数 `GEMINI_API_KEY`、名前は `gemini.api_key_env` で変えられる。`config.json` の `gemini.api_key` でもよい）、`gemini.enabled` が `false` でなく、Gemini のサーバー（`generativelanguage.googleapis.com:443`）に 1.5 秒以内につながる（30 秒覚える。プロキシ経由のとき（環境変数か Windows のシステム設定、`urllib.request.getproxies()`）は要求そのもので判断）ときは、会話の判断・返事・スキルのツール呼び出しのすべてを Gemini（既定 `gemini-flash-latest`）に頼む（`esagent/gemini.py`）。キーがない・オフライン・Gemini が失敗した（接続できない・`gemini.timeout_seconds`（既定 30 秒）以内に返事がない・HTTP エラー・返事やエラー本文の途中切れ・空の返事）ときは、同じ要求をそのまま Ollama の `qwen3:8b` に送る。失敗した後は `gemini.retry_seconds`（既定 60 秒）、キーかモデル名の誤り（401/403/404）なら 10 分、Gemini を試さずに Qwen を使う。
-  - **実装:** 要求と返事は Ollama の形のまま扱い、`gemini.py` が変換する（先頭の system は `systemInstruction`、途中の system は `[system]` 付きでその位置に残す。判断のスキーマは `responseJsonSchema`、ツールは `functionDeclarations`（`parametersJsonSchema`）、ツールの結果は `functionResponse`。Gemini 3 の関数呼び出しの `thoughtSignature` は `tool_calls` に持たせて送り返す）。Qwen 向けの `num_predict` は Gemini に渡さない（思考の分も出力上限に数えられ、返事が空になるため）。思考は `gemini.thinking_level`（既定 `low`）で、受け付けないモデルには付けずに送り直す。キーはヘッダー（`x-goog-api-key`）で送り、URL・ログ・`config.json` に書かない。
-  - **実装:** Gemini を使っている間は Qwen を読み込まない（`llm.warm` は何もしない。VRAM を他のアプリに空けておく）。Qwen に切り替わったときは、従来どおり読み込んでから要求する。状態（`llm.status`）は `backend`（`gemini` / `ollama`）と、Gemini を使えない理由（`gemini_error`）を返し、画面のヘッダーは「<Gemini のモデル>（オンライン）準備OK — オフライン時は qwen3:8b」と出す。待ち時間の質問にも Gemini で返事していることを答える。`llm-requests.jsonl` には `gemini:<モデル>` として記録する。
-  - **意図:** ネットがある間は大きいモデルで返事の質を上げ、ないときも今までどおり手元の 8B で動き続けるため。モデルの出力を検証してから使うコードの判断（下記）は、どちらのモデルでも変えない。
-  - **テスト:** テストは `tests/support.py` が `gemini.BLOCKED` を立てるので、PC に `GEMINI_API_KEY` があっても Google に会話を送らない（`tests/test_gemini_fallback.py` は偽の Gemini を相手にする）。
+- **決定（#316）: ローカル AI（Ollama）を廃止し、Gemini CLI（Google AI Pro 定額枠・追加課金 0 円）に一本化する。**
+  - 実行コマンドは `gemini -p " " -o stream-json --skip-trust --approval-mode plan`（`esagent/gemini.py`）。プロンプトは標準入力から渡し、作業ディレクトリは空の隔離フォルダ `data/gemini-cwd` に固定してリポジトリのファイルを誤操作しないようにする。
+  - 既定モデルは `auto`（`config.json` の `gemini.model` で変更可、`gemini.command` で実行ファイル上書き可、`gemini.timeout_seconds` は既定 90 秒）。Windows では `CREATE_NO_WINDOW` でコンソールを出さず、タイムアウト・キャンセル時はプロセスツリーごと終了させる。
+  - ストリーミング出力（`stream-json` の `message` イベント）で返事を逐次表示し、構造化 JSON 判定（`schema`）と手順スキルのツール呼び出し（`chat_tools`）も同じ CLI 経由で扱う。
+  - オフライン時や CLI 未導入・エラー時は Ollama にフォールバックせず、既存の「返事待ちキュー（AS-16）」に積んでオンライン復帰後に自動処理し、モデル不要の固定応答（タスク一覧・保存済みカレンダー照会・タイマー操作等）はそのまま動く。
+  - VRAM の事前読み込み（`/api/warm`・`keep_alive`）は不要になった（`/api/warm` は互換用の no-op として残す）。
+  - 状態（`llm.status`）は `backend: "gemini-cli"`、`cli`、`online`、`model`（利用可否）、`name` を返し、画面のヘッダーは「Gemini CLI（<モデル>）準備OK」または未接続状態を表示する。`llm-requests.jsonl` には `gemini-cli:<モデル>` として記録する。
+  - **テスト:** `tests/support.py` が `gemini.BLOCKED` を立てるので、オフラインテストが実 CLI を起動することはない（`tests/test_gemini_fallback.py` は偽プロセスを相手にする）。
 - **決定:** **判断はプログラムが行い、モデルには狭い役割だけを任せる。** 小さいモデルは嘘・作り話・手本の丸写しをするため。
 - **決定（#140）: Es の人格。** モデルへの指示（`brain.PERSONA`）とプログラムの決まった返事は、この人格で書く。
   - **呼び方:** 一人称は「ボク」、利用者は「キミ」、ほかの人は「彼」「彼女」「あの人」。口調は「〇〇だよ」「〇〇だね」で、です・ます調にしない。

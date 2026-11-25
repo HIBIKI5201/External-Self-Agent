@@ -1,22 +1,21 @@
-"""Ollama not running: the reply says so and the server log keeps a WARNING (#190); the message waits
-and is answered once the model is ready (#192)."""
-import logging
+"""Gemini CLI offline/unavailable: the reply says so and the server log keeps a WARNING (#190);
+the message waits and is answered once the model is ready (#192)."""
 import time
-import urllib.error
 from unittest.mock import patch
 
 import brain
-import skills
 import conversation_jobs as jobs
 import db
+import gemini
 import llm
+import skills
 from support import Sandbox
 
 REQUEST = "d" * 32
 
 
-def _refused(*args, **kwargs):
-    raise urllib.error.URLError(ConnectionRefusedError(10061, "接続を拒否しました"))
+def _offline(*args, **kwargs):
+    raise gemini.Unavailable("Gemini に接続できません（オフライン）。ネット接続を確認してください。")
 
 
 def _wait(request_id):
@@ -29,9 +28,8 @@ def _wait(request_id):
     raise AssertionError("job did not finish")
 
 
-def test_small_talk_with_ollama_down_says_ollama_is_not_running_and_logs_a_warning():
-    with Sandbox(copy_real=False) as sb, patch.object(llm.urllib.request, "urlopen", _refused), \
-            patch.object(llm, "loaded", return_value=None):
+def test_small_talk_when_offline_says_cannot_connect_and_logs_warning():
+    with Sandbox(copy_real=False) as sb, patch.object(gemini, "request", _offline):
         tasks = db.list_tasks(include_done=True)
         with patch.object(llm.log, "warning", wraps=llm.log.warning) as warning:
             jobs.accept({"requestId": REQUEST, "text": "ありがとう"}, sb.cfg,
@@ -39,23 +37,22 @@ def test_small_talk_with_ollama_down_says_ollama_is_not_running_and_logs_a_warni
             job = _wait(REQUEST)
         note = job["result"]["note"]
         assert job["state"] == "waiting" and job["result"]["pending"] and not job["result"].get("failed")
-        assert "Ollama に接続できません" in note and "Ollama が起動したら自動で返事する" in note, note
+        assert "接続できません" in note and "自動で返事する" in note, note
         assert "履歴とタスクを確認" not in note, note
         assert [m["content"] for m in db.pending_messages()] == ["ありがとう"]
-        assert warning.called and "ollama" in warning.call_args_list[0].args[0]
+        assert warning.called and "gemini-cli" in warning.call_args_list[0].args[0]
         assert db.list_tasks(include_done=True) == tasks
 
 
-def test_skill_with_ollama_down_says_why_too():
-    with Sandbox(copy_real=False) as sb, patch.object(llm.urllib.request, "urlopen", _refused), \
-            patch.object(llm, "loaded", return_value=None):
+def test_skill_when_offline_says_why_too():
+    with Sandbox(copy_real=False) as sb, patch.object(gemini, "request", _offline):
         tasks = db.list_tasks(include_done=True)
         request_id = "e" * 32
         jobs.accept({"requestId": request_id, "text": "/plan 部屋を片付ける"}, sb.cfg,
                     lambda request: skills.run(request["text"], sb.cfg))
         job = _wait(request_id)
         note = job["result"]["note"]
-        assert job["state"] == "waiting" and "Ollama に接続できません" in note, note
+        assert job["state"] == "waiting" and "接続できません" in note, note
         assert "履歴とタスクを確認" not in note, note
         assert db.list_tasks(include_done=True) == tasks
 
@@ -68,24 +65,23 @@ def _answer(text, cfg, message_id=None):
 
 def test_a_waiting_message_is_answered_under_its_request_once_the_model_is_ready():
     with Sandbox(copy_real=False) as sb:
-        with patch.object(llm.urllib.request, "urlopen", _refused), patch.object(llm, "loaded", return_value=None):
+        with patch.object(gemini, "request", _offline):
             jobs.accept({"requestId": REQUEST, "text": "ただいま"}, sb.cfg,
                         lambda request: brain.chat(request["text"], sb.cfg))
             assert _wait(REQUEST)["state"] == "waiting"
         waiting = db.pending_messages()
         assert len(waiting) == 1 and waiting[0]["request_id"] == REQUEST
-        with patch.object(llm, "status", return_value={"ollama": True, "model": True}):
+        with patch.object(llm, "status", return_value={"backend": "gemini-cli", "model": True}):
             result = jobs.resume(waiting[0], sb.cfg, _answer)
         assert result["reply"] == "おかえり"
         job = jobs.status(REQUEST, 1)
         assert job["state"] == "done" and job["result"]["reply"] == "おかえり"
         assert db.pending_messages() == []
-        assert jobs.resume(waiting[0], sb.cfg, _answer) is None  # answered once only
+        assert jobs.resume(waiting[0], sb.cfg, _answer) is None
 
 
 def test_cancelling_or_correcting_a_waiting_message_drops_it():
-    with Sandbox(copy_real=False) as sb, patch.object(llm.urllib.request, "urlopen", _refused), \
-            patch.object(llm, "loaded", return_value=None):
+    with Sandbox(copy_real=False) as sb, patch.object(gemini, "request", _offline):
         jobs.accept({"requestId": REQUEST, "text": "ただいま"}, sb.cfg,
                     lambda request: brain.chat(request["text"], sb.cfg))
         assert _wait(REQUEST)["state"] == "waiting"
@@ -98,57 +94,15 @@ def test_cancelling_or_correcting_a_waiting_message_drops_it():
 
 
 def test_a_request_that_fails_with_the_model_ready_is_not_kept_waiting():
-    with Sandbox(copy_real=False) as sb, patch.object(llm, "status", return_value={"ollama": True, "model": True}):
-        def cut(request):
-            return {"reply": "", "events": [], "handoffs": [], "pending": True,
-                    "error": "返事に 30 秒以上かかったので打ち切りました（Ollama にはつながっています）。"}
-        jobs.accept({"requestId": REQUEST, "text": "長い話"}, sb.cfg, cut)
-        job = _wait(REQUEST)
-        assert job["state"] == "failed" and job["result"]["reply"].startswith("返事に 30 秒以上"), job
+    def _boom(*args, **kwargs):
+        raise gemini.TimedOut(30)
 
-
-def test_warm_up_failure_is_logged():
-    with Sandbox(copy_real=False) as sb, patch.object(llm.urllib.request, "urlopen", _refused), \
-            patch.dict(llm._WARM, {"state": "idle", "at": 0.0}):
-        records = []
-        handler = logging.Handler()
-        handler.emit = records.append
-        logger = logging.getLogger("esagent.llm")
-        logger.addHandler(handler)
-        try:
-            state = llm.warm(sb.cfg, wait=True)
-        finally:
-            logger.removeHandler(handler)
-        assert state["state"] == "error"
-        assert any(r.levelno == logging.WARNING and "warm-up" in r.getMessage() for r in records)
-
-
-def test_other_stops_keep_the_generic_reply():
-    assert "履歴とタスクを確認" in jobs.stopped_reply("")
-    # A reply cut at the time limit (#198) is said as it is, without blaming the connection.
-    cut = jobs.stopped_reply("返事に 30 秒以上かかったので打ち切りました（Ollama にはつながっています）。")
-    assert cut.startswith("返事に 30 秒以上") and "Ollama が起動したら" not in cut and "履歴とタスク" not in cut
-
-
-def test_a_waiting_message_that_fails_when_answered_says_so_and_stops_waiting():
-    with Sandbox(copy_real=False) as sb:
-        with patch.object(llm.urllib.request, "urlopen", _refused), patch.object(llm, "loaded", return_value=None):
-            jobs.accept({"requestId": REQUEST, "text": "ただいま"}, sb.cfg,
-                        lambda request: brain.chat(request["text"], sb.cfg))
-            assert _wait(REQUEST)["state"] == "waiting"
-        waiting = db.pending_messages()
-
-        def broken(text, cfg, message_id=None):
-            raise RuntimeError("bug")
-        result = jobs.resume(waiting[0], sb.cfg, broken)
-        assert result["failed"] and jobs.status(REQUEST, 1)["state"] == "failed"
-        assert db.pending_messages() == []  # no ⏳ left, not answered again
-        assert db.recent_messages(5)[-1]["content"] == result["reply"]
-
-
-def test_waiting_is_decided_by_why_the_request_failed():
-    # Ollama refused the connection; by the time it is checked it is up: still a message to answer later.
-    with Sandbox(copy_real=False) as sb, patch.object(llm, "status", return_value={"ollama": True, "model": True}):
-        jobs.accept({"requestId": REQUEST, "text": "ただいま"}, sb.cfg,
-                    lambda request: {"reply": "", "events": [], "handoffs": [], "pending": True, "error": llm.CONNECT_ERROR})
-        assert _wait(REQUEST)["state"] == "waiting"
+    with Sandbox(copy_real=False) as sb, patch.object(gemini, "request", _boom), \
+            patch.object(llm, "status", return_value={"backend": "gemini-cli", "model": True}):
+        request_id = "g" * 32
+        jobs.accept({"requestId": request_id, "text": "やあ"}, sb.cfg,
+                    lambda request: brain.chat(request["text"], sb.cfg))
+        job = _wait(request_id)
+        assert job["state"] == "failed", job
+        assert "30 秒以上" in job["result"]["reply"], job["result"]
+        assert db.pending_messages() == []

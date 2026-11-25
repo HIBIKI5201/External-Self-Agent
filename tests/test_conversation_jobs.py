@@ -162,12 +162,13 @@ def test_duplicate_reload_stale_revision_and_server_restart_are_safe():
 
 def test_stale_model_completion_cannot_publish_or_run_operations():
     with Sandbox(copy_real=False) as sb:
+        import gemini
         entered, release = threading.Event(), threading.Event()
-        def request(cfg, request, timeout, on_text=None):
+        def request(cfg, body_arg, timeout=None, on_text=None, cancel_check=None):
             entered.set()
             assert release.wait(5)
             return {"message": {"content": "古い返答"}}
-        with patch.object(llm, "_request", request):
+        with patch.object(gemini, "request", request):
             jobs.accept(body(), sb.cfg, lambda request: {"reply": llm.chat(sb.cfg, [{"role": "user", "content": request["text"]}]), "events": []})
             assert entered.wait(5)
             jobs.accept(body(B, "取り消して", relation="cancel", targetId=A, targetRevision=1), sb.cfg, lambda request: {})
@@ -194,16 +195,13 @@ def test_voice_cancel_during_synthesis_drops_old_audio():
         voice.stop()
 
 
-def test_local_stages_use_selected_model_and_timeout_without_external_calls():
+def test_gemini_config_passes_model_and_timeout():
     with Sandbox(copy_real=False) as sb:
         jobs._LIVE[(db.DB_PATH, A)] = 1
-        cfg = {**sb.cfg, "local_pipeline": {"router": {"model": "local-router", "timeout_seconds": 7},
-                                            "reply": {"model": "local-reply", "timeout_seconds": 9}}}
+        cfg = {**sb.cfg, "gemini": {"command": "gemini", "model": "gemini-3-flash-preview", "timeout_seconds": 17}}
         with jobs.scope(A, 1), patch.object(llm, "_post", return_value="{}") as model:
             llm.chat(cfg, [], schema={"type": "object"})
-            assert model.call_args.args[0]["model"] == "local-router" and model.call_args.args[2] == 7
-            llm.chat(cfg, [])
-            assert model.call_args.args[0]["model"] == "local-reply" and model.call_args.args[2] == 9
+            assert model.call_args.args[1]["model"] == "gemini-3-flash-preview" and model.call_args.args[2] == 17
         jobs._LIVE.pop((db.DB_PATH, A), None)
 
 
