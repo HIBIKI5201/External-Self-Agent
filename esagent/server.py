@@ -23,6 +23,7 @@ import conversation_state  # noqa: E402
 import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
+import contacts_inbox  # noqa: E402
 import db  # noqa: E402
 import db_health  # noqa: E402
 import gauth  # noqa: E402
@@ -260,6 +261,9 @@ GET = _table({
     r"/static/(.+)": Route(_static),
     "/api/chat/job": Route(_chat_job),
     "/api/calendar": Route(_calendar),
+    "/api/contacts": Route(lambda q: {**contacts_inbox.contacts_status(),
+                                      "contacts": contacts_inbox.search_contacts(q.get("q", ""), limit=50),
+                                      "birthdays": contacts_inbox.upcoming_birthdays()}),
     "/api/health": Route(lambda q: {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION}),
     "/api/state": Route(lambda q: state()),
     "/api/pomo": Route(lambda q: pomodoro.state(CFG)),
@@ -501,6 +505,13 @@ def _pet_chat(body):  # show chat replies in the cat's bubble (#121), from its r
     return pet_state()
 
 
+def _contacts_connect(body):
+    url = gauth.begin(redirect_uri(), contacts=True)
+    if body.get("open", True):
+        os.startfile(url)
+    return {"ok": True, "url": url}
+
+
 def _google_connect(body):
     url = gauth.begin(redirect_uri())
     if body.get("open", True):
@@ -520,6 +531,8 @@ POST = _table({
     "/api/calendar/select": Route(_calendar_select, **_CALENDAR),
     "/api/calendar/sync": Route(lambda body: {"count": calendar_view.sync()}, **_CALENDAR),
     "/api/calendar/add": Route(_calendar_add, **_CALENDAR),
+    "/api/contacts/connect": Route(_contacts_connect, **_LOCAL),
+    "/api/contacts/sync": Route(lambda body: {"count": contacts_inbox.sync_contacts()}, **_LOCAL),
     "/api/youtube/connect": Route(_youtube_connect, **_LOCAL),
     "/api/youtube/playlists": Route(lambda body: youtube.playlists(body.get("page", "")), **_LOCAL),
     "/api/youtube/items": Route(lambda body: youtube.playlist_items(body.get("playlist", ""), body.get("page", "")), **_LOCAL),

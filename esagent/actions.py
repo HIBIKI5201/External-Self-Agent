@@ -118,6 +118,12 @@ def run_action(action, args, cfg):
     elif name == "/usage":
         import claude_usage
         reply = claude_usage.describe()
+    elif name == "/inbox":
+        import contacts_inbox
+        reply = contacts_inbox.run_inbox_skill(args)
+    elif name == "/contacts":
+        import contacts_inbox
+        reply = contacts_inbox.run_contacts_skill(args)
     elif name == "/next":
         with conversation_state.running("次にやることを考え中"):
             reply = brain._advice_reply(cfg, "何からやればいい？", today, args)

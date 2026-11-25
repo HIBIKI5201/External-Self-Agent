@@ -31,7 +31,9 @@ YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
 # The user's own calendars (#157): read the list, read and add events. Asked for separately, like YouTube.
 CALENDAR_VIEW_SCOPES = ["https://www.googleapis.com/auth/calendar.events",
                         "https://www.googleapis.com/auth/calendar.calendarlist.readonly"]
-EXTRA = {"youtube": [YOUTUBE_SCOPE], "calendar": CALENDAR_VIEW_SCOPES}
+# Google Contacts (#321): read-only contact lookup and birthdays.
+CONTACTS_SCOPES = ["https://www.googleapis.com/auth/contacts.readonly"]
+EXTRA = {"youtube": [YOUTUBE_SCOPE], "calendar": CALENDAR_VIEW_SCOPES, "contacts": CONTACTS_SCOPES}
 SCOPES = [TASKS_SCOPE, CALENDAR_SCOPE]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -148,7 +150,8 @@ def status():
     granted = (tok or {}).get("scope", "").split()
     return {"client": _client() is not None, "connected": bool(tok and tok.get("refresh_token")),
             "calendar": CALENDAR_SCOPE in granted, "youtube": YOUTUBE_SCOPE in granted,
-            "calendar_view": set(CALENDAR_VIEW_SCOPES).issubset(granted)}
+            "calendar_view": set(CALENDAR_VIEW_SCOPES).issubset(granted),
+            "contacts": set(CONTACTS_SCOPES).issubset(granted)}
 
 
 def _post_form(url, fields, parse_json=True):
@@ -169,14 +172,14 @@ def _post_form(url, fields, parse_json=True):
         raise OfflineError(str(e))
 
 
-def begin(redirect_uri, youtube=False, calendar=False):
+def begin(redirect_uri, youtube=False, calendar=False, contacts=False):
     client = _client()
     if not client:
         raise AuthError(f"{CLIENT_PATH} がありません。Google Cloud で作った OAuth クライアントの JSON を置いてください。")
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     state = secrets.token_urlsafe(24)
-    purpose = "youtube" if youtube else "calendar" if calendar else "tasks"
+    purpose = "youtube" if youtube else "calendar" if calendar else "contacts" if contacts else "tasks"
     scopes = SCOPES + EXTRA.get(purpose, [])
     with _lock:
         for old in [k for k, v in _pending.items() if time.time() - v[2] > PENDING_SECONDS]:
