@@ -343,6 +343,9 @@ class Pet:
             mark = "🎙 " if ev.get("via") == "voice" else ""
             self.say(f"{mark}送信: {ev.get('said', '')}\nEs: {ev.get('reply', '')}", voice=False, record=False,
                      secs=max(6, len(ev.get("reply", "")) * 0.2), on_click=self._open_chat)
+        elif kind == "reminder":
+            self.say(ev.get("text") or f"⏰ {ev.get('title', 'リマインダー')}", secs=12,
+                     kind="notice", source="reminder", ukey=ev.get("key"), voice=False)
         elif kind == "chat_events":
             lines, key = ev.get("lines") or [], f"event:{ev['id']}"
             # The server chose and recorded the line (ev["text"]); the cat shows that same line.

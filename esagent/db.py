@@ -344,7 +344,21 @@ def _v4_focus_log(con):
     con.execute("CREATE INDEX IF NOT EXISTS focus_log_ended ON focus_log(ended_at)")
 
 
-VERSIONS = [_v1_baseline, _v2_chat_request_age, _v3_gtask_index, _v4_focus_log]
+def _v5_reminders(con):
+    # Time-based user reminders and upcoming Google Calendar event alerts (#317).
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS reminders("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "title TEXT NOT NULL, remind_at TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'pending', "
+        "source TEXT NOT NULL DEFAULT 'user', "
+        "event_key TEXT, created_at TEXT NOT NULL, fired_at TEXT)"
+    )
+    con.execute("CREATE INDEX IF NOT EXISTS reminders_pending ON reminders(status, remind_at)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS reminders_event_key ON reminders(event_key) WHERE event_key IS NOT NULL")
+
+
+VERSIONS = [_v1_baseline, _v2_chat_request_age, _v3_gtask_index, _v4_focus_log, _v5_reminders]
 KEEP_DAYS = 7  # finished chat requests and conversation jobs are kept this long
 
 
