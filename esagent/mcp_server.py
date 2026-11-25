@@ -164,7 +164,8 @@ def call_tool(name, args):
         text = str(args.get("text") or "").strip()[:300]
         if not text:
             return {"error": "text is required"}
-        return db.add_memory(text)
+        mid = db.add_memory(text)
+        return {"id": mid, "content": text}
     if name == "get_project_context":
         q = (args.get("project") or "").strip().lower()
         items = db.list_projects()
