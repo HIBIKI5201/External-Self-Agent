@@ -23,6 +23,9 @@
       "pathPattern": "(^|/)(esagent/calendar_view\\.py|esagent/static/calendar\\.js|tests/test_calendar_pane\\.js|tests/test_calendar_days\\.js|tests/test_calendar_view\\.py|tests/test_calendar_chat_add\\.py|spec/test/calendar-view-157\\.md)$"
     },
     {
+      "pathPattern": "(^|/)(esagent/gmail_view\\.py|tests/test_gmail_view\\.py|skills/mail/SKILL\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)esagent/youtube\\.py$"
     },
     {

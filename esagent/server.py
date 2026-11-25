@@ -44,6 +44,7 @@ import choices  # noqa: E402
 import task_context  # noqa: E402
 import utterances  # noqa: E402
 import calendar_view  # noqa: E402
+import gmail_view  # noqa: E402
 import gapi  # noqa: E402
 import feedback  # noqa: E402
 import pet_react  # noqa: E402
@@ -260,6 +261,9 @@ GET = _table({
     r"/static/(.+)": Route(_static),
     "/api/chat/job": Route(_chat_job),
     "/api/calendar": Route(_calendar),
+    "/api/gmail": Route(lambda q: {**gmail_view.status(),
+                                   "messages": gmail_view.list_messages(unread_only=q.get("unread") == "1",
+                                                                        query=q.get("q", ""), limit=30)}),
     "/api/health": Route(lambda q: {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION}),
     "/api/state": Route(lambda q: state()),
     "/api/pomo": Route(lambda q: pomodoro.state(CFG)),
@@ -491,6 +495,13 @@ def _pet_chat(body):  # show chat replies in the cat's bubble (#121), from its r
     return pet_state()
 
 
+def _gmail_connect(body):
+    url = gauth.begin(redirect_uri(), gmail=True)
+    if body.get("open", True):
+        os.startfile(url)
+    return {"ok": True, "url": url}
+
+
 def _google_connect(body):
     url = gauth.begin(redirect_uri())
     if body.get("open", True):
@@ -510,6 +521,12 @@ POST = _table({
     "/api/calendar/select": Route(_calendar_select, **_CALENDAR),
     "/api/calendar/sync": Route(lambda body: {"count": calendar_view.sync()}, **_CALENDAR),
     "/api/calendar/add": Route(_calendar_add, **_CALENDAR),
+    "/api/gmail/connect": Route(_gmail_connect, **_LOCAL),
+    "/api/gmail/sync": Route(lambda body: {"count": gmail_view.sync()}, **_LOCAL),
+    "/api/gmail/draft": Route(lambda body: gmail_view.create_draft(body.get("to"), body.get("subject"),
+                                                                   body.get("body"), body.get("thread_id")), **_LOCAL),
+    "/api/gmail/to-task": Route(lambda body: gmail_view.to_task(body["msg_id"], project=body.get("project"),
+                                                                due=body.get("due")), syncs=True),
     "/api/youtube/connect": Route(_youtube_connect, **_LOCAL),
     "/api/youtube/playlists": Route(lambda body: youtube.playlists(body.get("page", "")), **_LOCAL),
     "/api/youtube/items": Route(lambda body: youtube.playlist_items(body.get("playlist", ""), body.get("page", "")), **_LOCAL),

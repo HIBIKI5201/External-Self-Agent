@@ -118,6 +118,9 @@ def run_action(action, args, cfg):
     elif name == "/usage":
         import claude_usage
         reply = claude_usage.describe()
+    elif name == "/mail":
+        import gmail_view
+        reply = gmail_view.run_skill(args)
     elif name == "/next":
         with conversation_state.running("次にやることを考え中"):
             reply = brain._advice_reply(cfg, "何からやればいい？", today, args)
