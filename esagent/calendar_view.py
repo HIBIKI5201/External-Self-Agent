@@ -384,3 +384,162 @@ def finish_add(payload, cfg=None):
     day = dt.date.fromisoformat(payload["date"])
     return (f"{day.month}月{day.day}日の予定に「{r['title']}」を追加したよ（{r['calendar']}・終日）。",
             [f"📅 {payload['date']} {r['title']}（{r['calendar']}・終日）"])
+
+
+# ---- #320: free slots, deadline congestion warnings, update/delete ----------------
+
+def _to_local_dt(value):
+    t = dt.datetime.fromisoformat(value)
+    return t.astimezone().replace(tzinfo=None) if t.tzinfo is not None else t
+
+
+def free_slots(day_iso, work_start=9, work_end=21, min_minutes=30):
+    """Return free (start_HHMM, end_HHMM, minutes) slots on `day_iso` from cached timed events."""
+    day = dt.date.fromisoformat(day_iso)
+    win_start = dt.datetime(day.year, day.month, day.day, work_start, 0)
+    win_end = dt.datetime(day.year, day.month, day.day, work_end, 0)
+    busy = []
+    with db.connect() as con:
+        rows = con.execute(
+            "SELECT start, end FROM calendar_events WHERE all_day = 0 AND start LIKE ? ORDER BY start ASC",
+            (day_iso + "%",),
+        ).fetchall()
+    for r in rows:
+        try:
+            s = max(win_start, _to_local_dt(r["start"]))
+            e = min(win_end, _to_local_dt(r["end"]))
+        except ValueError:
+            continue
+        if e > s:
+            busy.append((s, e))
+    busy.sort()
+    merged = []
+    for s, e in busy:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+
+    slots = []
+    cur = win_start
+    for s, e in merged:
+        mins = int((s - cur).total_seconds() // 60)
+        if mins >= min_minutes:
+            slots.append({"start": cur.strftime("%H:%M"), "end": s.strftime("%H:%M"), "minutes": mins})
+        cur = max(cur, e)
+    tail_mins = int((win_end - cur).total_seconds() // 60)
+    if tail_mins >= min_minutes:
+        slots.append({"start": cur.strftime("%H:%M"), "end": win_end.strftime("%H:%M"), "minutes": tail_mins})
+    return slots
+
+
+def busy_deadline_warnings(today=None, days=5, busy_event_threshold=3, busy_hours_threshold=4.0):
+    """Find open tasks whose due date falls on a congested calendar day."""
+    today = today or dt.date.today()
+    end_day = today + dt.timedelta(days=days)
+    tasks = [t for t in db.list_tasks() if t.get("due") and today.isoformat() <= t["due"] <= end_day.isoformat()]
+    if not tasks:
+        return []
+    by_day = {}
+    with db.connect() as con:
+        rows = con.execute(
+            "SELECT start, end, title FROM calendar_events WHERE all_day = 0 AND start >= ? AND start <= ?",
+            (today.isoformat(), end_day.isoformat() + "T23:59:59"),
+        ).fetchall()
+    for r in rows:
+        day_key = r["start"][:10]
+        try:
+            dur = max(0.0, (_to_local_dt(r["end"]) - _to_local_dt(r["start"])).total_seconds() / 3600.0)
+        except ValueError:
+            dur = 1.0
+        entry = by_day.setdefault(day_key, {"count": 0, "hours": 0.0})
+        entry["count"] += 1
+        entry["hours"] += dur
+
+    warnings = []
+    for t in tasks:
+        info = by_day.get(t["due"])
+        if info and (info["count"] >= busy_event_threshold or info["hours"] >= busy_hours_threshold):
+            warnings.append({
+                "task_id": t["id"],
+                "title": t["title"],
+                "due": t["due"],
+                "event_count": info["count"],
+                "busy_hours": round(info["hours"], 1),
+                "message": (f"⚠ #{t['id']}「{t['title']}」の締切日（{t['due']}）は予定が "
+                            f"{info['count']} 件（約 {info['hours']:.1f} 時間）詰まっているよ。前倒しがおすすめ！"),
+            })
+    return warnings
+
+
+def update_event(cal_id, event_id, title=None, start=None, end=None, cfg=None):
+    """Update an existing Google Calendar event on a writable calendar and refresh cache."""
+    if not ready():
+        raise CalendarError("Google カレンダーに接続されていません。")
+    cal = next((c for c in calendars() if c["id"] == cal_id and c["writable"]), None)
+    if not cal:
+        raise CalendarError("書き込みできるカレンダーが選べていません。")
+    patch_body = {}
+    if title is not None:
+        t = str(title).strip()[:200]
+        if not t:
+            raise ValueError("予定の名前が空です。")
+        patch_body["summary"] = t
+    tz = (cfg or db.load_config()).get("timezone", "Asia/Tokyo")
+    if start is not None:
+        patch_body["start"] = {"date": start} if len(start) == 10 else {"dateTime": start, "timeZone": tz}
+    if end is not None:
+        patch_body["end"] = {"date": end} if len(end) == 10 else {"dateTime": end, "timeZone": tz}
+    if not patch_body:
+        raise ValueError("変更する項目がありません。")
+    res = _req("PATCH", f"/calendars/{_quote(cal_id)}/events/{_quote(event_id)}", body=patch_body)
+    with db.connect() as con:
+        if title is not None:
+            con.execute("UPDATE calendar_events SET title = ? WHERE cal_id = ? AND event_id = ?",
+                        (patch_body["summary"], cal_id, event_id))
+        if start is not None:
+            con.execute("UPDATE calendar_events SET start = ? WHERE cal_id = ? AND event_id = ?",
+                        (start, cal_id, event_id))
+        if end is not None:
+            con.execute("UPDATE calendar_events SET end = ? WHERE cal_id = ? AND event_id = ?",
+                        (end, cal_id, event_id))
+    return {"id": (res or {}).get("id", event_id), "cal_id": cal_id, "updated": list(patch_body)}
+
+
+def delete_event(cal_id, event_id):
+    """Delete an existing Google Calendar event on a writable calendar and drop from cache."""
+    if not ready():
+        raise CalendarError("Google カレンダーに接続されていません。")
+    cal = next((c for c in calendars() if c["id"] == cal_id and c["writable"]), None)
+    if not cal:
+        raise CalendarError("書き込みできるカレンダーが選べていません。")
+    _req("DELETE", f"/calendars/{_quote(cal_id)}/events/{_quote(event_id)}")
+    with db.connect() as con:
+        con.execute("DELETE FROM calendar_events WHERE cal_id = ? AND event_id = ?", (cal_id, event_id))
+    return {"ok": True, "cal_id": cal_id, "event_id": event_id}
+
+
+def run_free_skill(args, today=None):
+    """Handler for `/free [今日|明日|YYYY-MM-DD]`."""
+    today = today or dt.date.today()
+    arg = (args or "").strip()
+    if arg in ("", "今日", "きょう"):
+        day_iso = today.isoformat()
+    elif arg in ("明日", "あした"):
+        day_iso = (today + dt.timedelta(days=1)).isoformat()
+    elif db.valid_date(arg):
+        day_iso = arg
+    else:
+        return "使い方: /free [今日|明日|YYYY-MM-DD]"
+    slots = free_slots(day_iso)
+    lines = [f"📅 {day_iso} の空き時間（9:00〜21:00）:"]
+    if slots:
+        for s in slots:
+            lines.append(f"  - {s['start']}〜{s['end']}（{s['minutes']}分）")
+    else:
+        lines.append("  空き時間（30分以上）は見つからなかったよ。")
+    warns = busy_deadline_warnings(today=today)
+    if warns:
+        lines.append("\n締切と予定の突き合わせ:")
+        lines += [f"  {w['message']}" for w in warns[:5]]
+    return "\n".join(lines)

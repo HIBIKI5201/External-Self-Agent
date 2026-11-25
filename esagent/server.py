@@ -260,6 +260,11 @@ GET = _table({
     r"/static/(.+)": Route(_static),
     "/api/chat/job": Route(_chat_job),
     "/api/calendar": Route(_calendar),
+    "/api/calendar/free": Route(lambda q: {
+        "date": (d := q.get("date") or dt.date.today().isoformat()),
+        "slots": calendar_view.free_slots(d),
+        "warnings": calendar_view.busy_deadline_warnings(),
+    }),
     "/api/health": Route(lambda q: {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION}),
     "/api/state": Route(lambda q: state()),
     "/api/pomo": Route(lambda q: pomodoro.state(CFG)),
@@ -520,6 +525,11 @@ POST = _table({
     "/api/calendar/select": Route(_calendar_select, **_CALENDAR),
     "/api/calendar/sync": Route(lambda body: {"count": calendar_view.sync()}, **_CALENDAR),
     "/api/calendar/add": Route(_calendar_add, **_CALENDAR),
+    "/api/calendar/update": Route(lambda body: calendar_view.update_event(
+        body["calendar"], body["event_id"], title=body.get("title"),
+        start=body.get("start"), end=body.get("end"), cfg=CFG), **_CALENDAR),
+    "/api/calendar/delete": Route(lambda body: calendar_view.delete_event(
+        body["calendar"], body["event_id"]), **_CALENDAR),
     "/api/youtube/connect": Route(_youtube_connect, **_LOCAL),
     "/api/youtube/playlists": Route(lambda body: youtube.playlists(body.get("page", "")), **_LOCAL),
     "/api/youtube/items": Route(lambda body: youtube.playlist_items(body.get("playlist", ""), body.get("page", "")), **_LOCAL),

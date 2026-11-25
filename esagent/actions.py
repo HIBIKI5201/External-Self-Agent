@@ -118,6 +118,9 @@ def run_action(action, args, cfg):
     elif name == "/usage":
         import claude_usage
         reply = claude_usage.describe()
+    elif name == "/free":
+        import calendar_view
+        reply = calendar_view.run_free_skill(args, today=today)
     elif name == "/next":
         with conversation_state.running("次にやることを考え中"):
             reply = brain._advice_reply(cfg, "何からやればいい？", today, args)
