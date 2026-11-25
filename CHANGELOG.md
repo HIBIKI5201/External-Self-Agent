@@ -6,6 +6,7 @@ PR ごとに「未リリース」へ追記し、版を上げるときに見出�
 ## [未リリース]
 
 ### 追加
+- Daily OS 統合ブリーフィングと夜レビュー（`esagent/daily_os.py`、`/brief`・`/brief night`、`GET /api/daily/brief`・`GET /api/daily/review`）を追加し、予定・締切・未読メール・AI 引き継ぎ・集中時間を一望できるようにした（#325）。
 - 共通 MCP サーバー（`esagent/mcp_server.py`）を External Self 基盤に拡張し、記憶・プロジェクト文脈・直近会話・カレンダー予定・黒猫への進捗通知（`notify_es`）を Claude Code / Codex / Antigravity / Gemini CLI で共有できるようにした（#324）。
 - ローカル AI（Ollama）を廃止し、Google AI Pro 定額枠で動く Gemini CLI（`gemini -p -o stream-json`、追加課金 0 円）に一本化した。オフライン時は返事待ちキューで復帰後に自動処理する（AS-02、#316）。
 - 生活の中心・Google 統合・マルチ AI 起点化（ローカル AI 廃止＆Gemini CLI 一本化・追加課金 0 円）の全体ロードマップを `spec/plan/life-hub-roadmap-2026-11-26.md` にまとめた（#326）。

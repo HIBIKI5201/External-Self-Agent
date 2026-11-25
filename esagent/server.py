@@ -23,6 +23,7 @@ import conversation_state  # noqa: E402
 import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
+import daily_os  # noqa: E402
 import db  # noqa: E402
 import db_health  # noqa: E402
 import gauth  # noqa: E402
@@ -260,6 +261,8 @@ GET = _table({
     r"/static/(.+)": Route(_static),
     "/api/chat/job": Route(_chat_job),
     "/api/calendar": Route(_calendar),
+    "/api/daily/brief": Route(lambda q: daily_os.morning_brief()),
+    "/api/daily/review": Route(lambda q: daily_os.evening_review()),
     "/api/health": Route(lambda q: {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION}),
     "/api/state": Route(lambda q: state()),
     "/api/pomo": Route(lambda q: pomodoro.state(CFG)),
