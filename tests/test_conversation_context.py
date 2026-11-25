@@ -65,7 +65,7 @@ def test_old_request_is_only_reference_data_and_total_budget_is_bounded():
         messages = [{"role": "system", "content": "規則" * 300}]
         extra = context.augment(messages, "前に話したゲームの話を続けよう", sb.cfg, history, 2000)
         assert any("現在の実行許可でも" in r["content"] for r in extra)
-        assert context.STATS.get()["input_tokens"] + 768 <= sb.cfg["num_ctx"]
+        assert context.STATS.get()["input_tokens"] + 768 <= sb.cfg.get("num_ctx", 8192)
         assert not db.list_tasks()
 
 

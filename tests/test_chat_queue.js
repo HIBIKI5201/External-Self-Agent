@@ -123,7 +123,7 @@ vm.runInContext(liveSource, voice);
 
 // #179: a message sent while the screen refreshes after a reply must not start a second pump loop
 // (the two loops answered the same message and one read queue[0] after the other had emptied it).
-const pumpSource = source.slice(source.indexOf('let pumping = false;'), source.indexOf('// Load the model before'));
+const pumpSource = source.slice(source.indexOf('let pumping = false;'), source.indexOf('$("#input").addEventListener'));
 const said = [], reacted = [], waited = [];
 let releaseRefresh = null;
 const pumpCtx = vm.createContext({

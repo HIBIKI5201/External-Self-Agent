@@ -38,11 +38,12 @@ def rate(message_id, rating=None, rewrite=None, cfg=None):
         # reply. Keep it, under a number no message will have, and start a new one for this reply.
         con.execute("UPDATE reply_feedback SET message_id = -id WHERE message_id = ? AND reply != ?",
                     (msg["id"], msg["content"]))
+        import gemini
         con.execute(
             "INSERT INTO reply_feedback(message_id, rating, rewrite, reply, kind, context, model, prompt_version, "
             "created_at, updated_at) VALUES(?, 0, '', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO NOTHING",
             (msg["id"], msg["content"], kind, json.dumps(context, ensure_ascii=False),
-             (cfg or db.load_config()).get("model", ""), prompt_version(), now, now))
+             gemini.model_name(cfg or db.load_config()), prompt_version(), now, now))
         if rating is not None:
             con.execute("UPDATE reply_feedback SET rating = ?, updated_at = ? WHERE message_id = ?",
                         (max(-1, min(1, int(rating))), now, msg["id"]))
