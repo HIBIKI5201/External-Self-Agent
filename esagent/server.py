@@ -66,7 +66,9 @@ def state():
         "tasks": db.list_tasks(),
         "done": db.recently_done(),
         "projects": db.list_projects(),
-        "handoffs": db.list_handoffs(),
+        "handoffs": [{**h, "provider": (pid := ai_hub.provider_of(h["id"])),
+                      "provider_name": ai_hub.PROVIDERS.get(pid, {}).get("name", "Claude Code")}
+                     for h in db.list_handoffs()],
         # Es's murmurs and button feedback are in the log and the context, not in the chat (#139).
         "messages": (shown := [m for m in db.recent_messages(160) if m.get("shown") != 0][-80:]),
         "feedback": feedback.ratings(m["id"] for m in shown if m["role"] == "assistant"),
