@@ -118,6 +118,9 @@ def run_action(action, args, cfg):
     elif name == "/usage":
         import claude_usage
         reply = claude_usage.describe()
+    elif name == "/remind":
+        import reminders
+        reply = reminders.run_skill(args)
     elif name == "/brief":
         import daily_os
         reply = daily_os.run_skill(args, today=today)

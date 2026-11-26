@@ -38,6 +38,7 @@ import timer_chat  # noqa: E402
 import projects  # noqa: E402
 import backup  # noqa: E402
 import recurring  # noqa: E402
+import reminders  # noqa: E402
 import skills  # noqa: E402
 import status_question  # noqa: E402
 import youtube  # noqa: E402
@@ -266,6 +267,7 @@ GET = _table({
     "/api/health": Route(lambda q: {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION}),
     "/api/state": Route(lambda q: state()),
     "/api/pomo": Route(lambda q: pomodoro.state(CFG)),
+    "/api/reminders": Route(lambda q: {"reminders": reminders.list_reminders(include_fired=q.get("all") == "1")}),
     "/api/voice": Route(lambda q: voice.status(CFG)),
     "/api/events": Route(_events),
     "/api/pet": Route(lambda q: pet_state()),
@@ -550,6 +552,9 @@ POST = _table({
     "/api/warm": Route(lambda body: llm.warm(CFG)),
     "/api/focus/done": Route(lambda body: companion.focus_done(body.get("task_id"), int(body.get("minutes") or 25)), syncs=True),
     "/api/pomo": Route(_pomo),
+    "/api/reminders": Route(lambda body: reminders.add(body.get("title", ""), body["remind_at"]), **_LOCAL),
+    r"/api/reminders/(\d+)/cancel": Route(lambda body, rid: reminders.cancel(int(rid)) or (_ for _ in ()).throw(NotFound("reminder not found")), **_LOCAL),
+    r"/api/reminders/(\d+)/snooze": Route(lambda body, rid: reminders.snooze(int(rid), int(body.get("minutes") or reminders.DEFAULT_SNOOZE_MINUTES)) or (_ for _ in ()).throw(NotFound("reminder not found")), **_LOCAL),
     "/api/playback/open": Route(lambda body: playback.current.open()),
     "/api/playback/state": Route(lambda body: playback.current.update(body)),
     "/api/bgm/sync": Route(_bgm_sync),
@@ -717,6 +722,15 @@ def _pending_loop():
             _loop_failed(e, "answering waiting messages")
 
 
+def _reminder_loop():
+    while True:
+        try:
+            reminders.tick(CFG)
+        except Exception as e:
+            _loop_failed(e, "reminders tick")
+        time.sleep(5)
+
+
 def _pomo_loop():
     while True:
         try:
@@ -791,6 +805,7 @@ def main():
     linked_todos.start(CFG)
     threading.Thread(target=_recurring_loop, name="recurring", daemon=True).start()
     threading.Thread(target=_pomo_loop, name="pomodoro", daemon=True).start()
+    threading.Thread(target=_reminder_loop, name="reminders", daemon=True).start()
     threading.Thread(target=_pending_loop, name="pending", daemon=True).start()
     if pet_enabled():
         _start_pet()
