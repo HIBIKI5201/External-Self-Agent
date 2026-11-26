@@ -6,7 +6,7 @@
 (() => {
   // How long a pause ends what you are saying (#116, config listen_silence_ms / listen_incomplete_ms):
   // longer when the words so far stop in the middle of a sentence (「〜を」「〜とかの」「〜けど」).
-  let timing = { silence: 1200, incomplete: 3000, confidence: 0.5 };
+  let timing = { silence: 1200, incomplete: 3000, confidence: 0.5, wake_delay: 1500, wake_idle: 60000 };
   const ECHO_SECS = 8;       // Es's lines this recent can come back through the mic
   const MAX_FAILS = 3;       // give up after this many network errors in a row
   const STALL_MS = 20000;    // a session with no result, end or error for this long is reopened (#168)
@@ -113,13 +113,24 @@
     };
   }
 
-  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor, fixHeard, makeVad, sureness, unsure }; return; }
+  // Wake word (#338): only a standalone call to Es ("Es", "エス", "ねえEs", "おいエス" etc.)
+  // activates conversation mode after a short delay, so ordinary words ("ESの提出", "エスプレッソ",
+  // "Sサイズ", "ですね") never trigger a false wake.
+  const WAKE_RE = /^(?:(?:ねえ|ねぇ|ねー|おい|ちょっと|あの|ねえねえ|ねぇねぇ|もしもし))?(?:es|えす|エス|s)(?:さん|ちゃん)?$/;
+  function isWakeCall(text) {
+    const n = norm(text);
+    return !!n && WAKE_RE.test(n);
+  }
+
+  if (typeof module !== "undefined") { module.exports = { isEcho, words, norm, silenceFor, fixHeard, makeVad, sureness, unsure, isWakeCall }; return; }
 
   // ---- the page -----------------------------------------------------------------------
   const $ = (s) => document.querySelector(s);
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("es-listen") : null;
-  let rec = null, on = false, heard = "", timer = null, restart = null, epoch = 0;
+  let rec = null, on = false, mode = "off", wakePref = false;
+  let heard = "", timer = null, restart = null, epoch = 0;
+  let wakeTimer = null, wakeClear = null, idleTimer = null;
   let parts = [];  // [final text, confidence] of what is being said, for sureness (#174)
   let fails = 0, barged = false, checking = false;
   // The microphone Edge listens with (#93): the Windows default input device, named by the track the
@@ -150,20 +161,65 @@
 
   function show(state, text = "") {
     const btn = $("#listen");
-    btn.classList.toggle("on", on);
-    btn.setAttribute("aria-pressed", on ? "true" : "false");
-    btn.textContent = on ? "会話モード：オン" : "会話モード";
+    const active = on && mode === "active";
+    btn.classList.toggle("on", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+    btn.textContent = active ? "会話モード：オン" : "会話モード";
+    const wbtn = $("#wake");
+    if (wbtn && wbtn !== $("#listen-line") && wbtn !== btn) {
+      wbtn.classList.toggle("on", wakePref);
+      wbtn.setAttribute("aria-pressed", wakePref ? "true" : "false");
+      wbtn.textContent = wakePref ? (mode === "wake" ? "Es 待機中" : "Es 待機：オン") : "Es 待機";
+    }
     const line = $("#listen-line");
     line.hidden = !on && !state && !text;  // a reason the mode stopped stays visible
-    const which = on && /^聞いています/.test(state) ? `（マイク：${mic || "不明"}）` : "";
+    const which = on && /^(?:聞いています|「Es」待機中)/.test(state) ? `（マイク：${mic || "不明"}）` : "";
     line.textContent = text ? `${state}${text}` : state + which;
+  }
+
+  function resetIdle() {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+    if (!on || mode !== "active" || !wakePref) return;
+    const ms = Number(timing.wake_idle) || 0;
+    if (ms <= 0) return;
+    const turn = epoch;
+    idleTimer = setTimeout(() => {
+      if (!on || turn !== epoch || mode !== "active" || !wakePref || heard || timer) return;
+      mode = "wake";
+      show("「Es」待機中…");
+    }, ms);
+  }
+
+  function cancelWakePending(reason = "") {
+    if (!wakeTimer) return;
+    clearTimeout(wakeTimer);
+    wakeTimer = null;
+    if (on && mode === "wake") show(reason ? `「Es」待機中…（${reason}）` : "「Es」待機中…");
+  }
+
+  async function confirmWake(turn) {
+    wakeTimer = null;
+    const text = heard.trim(), said = parts;
+    heard = ""; parts = [];
+    if (!on || turn !== epoch || mode !== "wake") return;
+    if (!isWakeCall(text)) return show("「Es」待機中…");
+    if (unsure(said)) return show("「Es」待機中…");
+    if (isEcho(text, await esLines())) return;
+    if (!on || turn !== epoch || mode !== "wake") return;
+    mode = "active";
+    barged = false;
+    note("wake", "es");
+    window.Es?.say?.("なあに？", { ms: 2500 });
+    show("聞いています…");
+    resetIdle();
   }
 
   function watchQuiet(turn) {
     clearTimeout(quiet);
     quiet = setTimeout(() => {
       if (!on || turn !== epoch) return;
-      if (Date.now() - lastHeard >= QUIET_MS && !heard) {
+      if (mode === "active" && Date.now() - lastHeard >= QUIET_MS && !heard) {
         show("聞いています…");
         $("#listen-line").textContent += " 何も聞き取れていません。Windows の既定の入力デバイス（設定 → システム → サウンド → 入力）が話しているマイクか確認してください。";
       }
@@ -275,7 +331,8 @@
     const fixed = fixHeard(text);
     show("送信：", fixed === text ? text : `${fixed}（聞き取り「${text}」を直しました）`);
     window.EsHooks?.send?.(fixed, null, { via: "voice" });
-    setTimeout(() => on && turn === epoch && show("聞いています…"), 1500);
+    resetIdle();
+    setTimeout(() => on && turn === epoch && mode === "active" && show("聞いています…"), 1500);
   }
 
   function retry() {
@@ -314,9 +371,27 @@
       heard += w.final;
       const now = (heard + w.interim).trim();
       if (!now) return;
+      if (mode === "wake") {
+        clearTimeout(wakeClear);
+        if (isWakeCall(now)) {
+          if (!wakeTimer) {
+            const delay = Math.max(300, Number(timing.wake_delay) || 1500);
+            show("「Es」を検知… ", `${(delay / 1000).toFixed(1)} 秒後に会話モードにします（別の言葉が続くとキャンセル）`);
+            wakeTimer = setTimeout(() => confirmWake(turn), delay);
+          }
+        } else {
+          // Another word followed "Es" or unrelated speech was heard: cancel pending wake to avoid false trigger.
+          cancelWakePending("別の言葉が続いたためキャンセル");
+          wakeClear = setTimeout(() => {
+            if (current() && mode === "wake" && !wakeTimer) { heard = ""; parts = []; show("「Es」待機中…"); }
+          }, 800);
+        }
+        return;
+      }
       show("認識中：", now);
       catsListen();
       heardSome(now);
+      resetIdle();
       clearTimeout(timer);
       timer = setTimeout(finish, silenceFor(now));
     };
@@ -341,7 +416,7 @@
     lastSign = Date.now();
     dlog("start");
     try { r.start(); } catch { note("start-failed"); return startFailed(); }
-    if (current() && !quietly) show("聞いています…");
+    if (current() && !quietly) show(mode === "wake" ? "「Es」待機中…" : "聞いています…");
   }
 
   function startFailed() {
@@ -353,9 +428,13 @@
 
   function stop() {
     on = false;
+    mode = "off";
     epoch++;
     clearTimeout(restart); restart = null;
     clearTimeout(timer); timer = null; heard = ""; parts = [];
+    clearTimeout(wakeTimer); wakeTimer = null;
+    clearTimeout(wakeClear); wakeClear = null;
+    clearTimeout(idleTimer); idleTimer = null;
     clearTimeout(quiet); quiet = null;
     clearTimeout(stallWatch); stallWatch = null;
     stopEar();
@@ -381,24 +460,61 @@
     }
   }
 
-  async function toggle() {
-    if (on) return stop();
-    on = true; fails = 0;
+  async function startMode(targetMode) {
+    on = true; mode = targetMode; fails = 0;
     const turn = ++epoch;
     channel?.postMessage("on");  // only one window listens
     fetch("/api/voice").then(r => r.json()).then(v => {
-      if (v.listen) { timing = v.listen; corrections = v.listen.corrections || {}; }
+      if (v.listen) { timing = { ...timing, ...v.listen }; corrections = v.listen.corrections || {}; }
     }).catch(() => {});
     show("マイクの許可を確認しています…");
     const problem = await askMic();
     if (!on || turn !== epoch) return;  // turned off or restarted while permission was pending
     if (problem) { stop(); return show(problem); }
     lastHeard = Date.now();
-    note("on");
+    note("on", targetMode === "wake" ? "wake" : "");
     startEar(turn).catch((e) => dlog("diag-error", { error: String(e.name || e) }));
     watchQuiet(turn);
     watchStall(turn);
     start();
+    if (mode === "active") resetIdle();
+  }
+
+  async function toggle() {
+    if (on && mode === "active") {
+      if (wakePref) {
+        mode = "wake";
+        clearTimeout(timer); timer = null; heard = ""; parts = [];
+        clearTimeout(idleTimer); idleTimer = null;
+        return show("「Es」待機中…");
+      }
+      return stop();
+    }
+    if (on && mode === "wake") {
+      clearTimeout(wakeTimer); wakeTimer = null;
+      clearTimeout(wakeClear); wakeClear = null;
+      heard = ""; parts = [];
+      mode = "active";
+      show("聞いています…");
+      resetIdle();
+      return;
+    }
+    return startMode("active");
+  }
+
+  async function toggleWake() {
+    wakePref = !wakePref;
+    try { localStorage.setItem("es.wake", wakePref ? "1" : "0"); } catch {}
+    if (wakePref) {
+      if (!on) return startMode("wake");
+      if (mode === "active") resetIdle();
+      return show("聞いています…");
+    }
+    clearTimeout(wakeTimer); wakeTimer = null;
+    clearTimeout(wakeClear); wakeClear = null;
+    clearTimeout(idleTimer); idleTimer = null;
+    if (on && mode === "wake") return stop();
+    show(on ? "聞いています…" : "");
   }
 
   channel && (channel.onmessage = (e) => { if (e.data === "on" && on) { note("off", "other-window"); stop(); } });
@@ -410,8 +526,15 @@
   window.EsListen = {
     init() {
       $("#listen").onclick = toggle;
+      const wbtn = $("#wake");
+      if (wbtn && wbtn !== $("#listen-line") && wbtn !== $("#listen")) {
+        wbtn.onclick = toggleWake;
+        if (!Rec) wbtn.title = "この画面では音声認識を使えません";
+      }
       if (!Rec) $("#listen").title = "この画面では音声認識を使えません";
+      try { wakePref = typeof localStorage !== "undefined" && localStorage.getItem("es.wake") === "1"; } catch {}
       show("");
+      if (wakePref && Rec) startMode("wake");
     },
   };
 })();
