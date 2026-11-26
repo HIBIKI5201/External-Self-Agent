@@ -23,6 +23,7 @@ import conversation_state  # noqa: E402
 import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
+import daily_os  # noqa: E402
 import db  # noqa: E402
 import db_health  # noqa: E402
 import gauth  # noqa: E402
@@ -261,6 +262,8 @@ GET = _table({
     r"/static/(.+)": Route(_static),
     "/api/chat/job": Route(_chat_job),
     "/api/calendar": Route(_calendar),
+    "/api/daily/brief": Route(lambda q: daily_os.morning_brief()),
+    "/api/daily/review": Route(lambda q: daily_os.evening_review()),
     "/api/health": Route(lambda q: {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION}),
     "/api/state": Route(lambda q: state()),
     "/api/pomo": Route(lambda q: pomodoro.state(CFG)),
@@ -399,7 +402,7 @@ def _listen_diag(body):  # ?listen-diag: times of sound and of recognition only 
 def _listen_log(body):  # what 会話モード's recogniser did, never the words (#168)
     event = str(body.get("event") or "")
     detail = str(body.get("detail") or "")
-    if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed", "unsure") \
+    if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed", "unsure", "wake") \
             or not re.fullmatch(r"[a-z0-9.-]{0,30}", detail):
         raise ValueError("unknown listen event")
     log.info("listen: %s%s", event, f" ({detail})" if detail else "")
@@ -410,6 +413,16 @@ def _es_said(body):  # a line the cat or the chat window showed (#139)
     mid = utterances.record(str(body.get("text") or ""), source=str(body.get("source") or "pet"),
                             kind=str(body.get("kind") or "notice"), key=body.get("key"))
     return {"recorded": mid is not None}
+
+
+def _es_notify(body):  # progress / completion notice from an external AI via MCP (#324)
+    msg = str(body.get("message") or "").strip()[:200]
+    if not msg:
+        raise ValueError("message is empty")
+    ev = events.push("ai_notify", text=msg, source_ai=str(body.get("source_ai") or "AI")[:30])
+    utterances.record(msg, source="system", kind="notice", key=ev["key"])
+    voice.say(CFG, msg, key=ev["key"], wake=False)
+    return {"ok": True, "key": ev["key"]}
 
 
 def _voice_stop(body):
@@ -528,6 +541,7 @@ POST = _table({
     "/api/listen/diag": Route(_listen_diag),
     "/api/listen/log": Route(_listen_log),
     "/api/es/said": Route(_es_said),
+    "/api/es/notify": Route(_es_notify),
     # a line the cat or the chat window shows
     "/api/voice/say": Route(lambda body: {"queued": voice.say(CFG, str(body.get("text") or "")[:500], key=body.get("key"),
                                                                   wake=body.get("wake", True) is not False)}, **_LOCAL),

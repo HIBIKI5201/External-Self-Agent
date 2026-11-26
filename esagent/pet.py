@@ -346,6 +346,9 @@ class Pet:
         elif kind == "reminder":
             self.say(ev.get("text") or f"⏰ {ev.get('title', 'リマインダー')}", secs=12,
                      kind="notice", source="reminder", ukey=ev.get("key"), voice=False)
+        elif kind == "ai_notify":
+            self.say(ev.get("text") or "AI からのお知らせだよ。", secs=10,
+                     kind="notice", source="system", ukey=ev.get("key"), voice=False)
         elif kind == "chat_events":
             lines, key = ev.get("lines") or [], f"event:{ev['id']}"
             # The server chose and recorded the line (ev["text"]); the cat shows that same line.

@@ -26,6 +26,9 @@
       "pathPattern": "(^|/)(esagent/companion\\.py|esagent/activity\\.py|esagent/care\\.py|tests/test_care\\.py|tests/test_pet_care\\.py|tests/test_activity\\.py)$"
     },
     {
+      "pathPattern": "(^|/)(esagent/daily_os\\.py|tests/test_daily_os\\.py|skills/brief/SKILL\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)esagent/static/cat/"
     },
     {
