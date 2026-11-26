@@ -128,11 +128,11 @@ def _add_title_grounded(title, text, context=""):
     return bool(name) and name in flat(source)
 
 
-def delegate(task_id, cfg):
+def delegate(task_id, cfg, provider="claude"):
     task = db.get_task(task_id)
     convo = db.recent_messages(8, roles=("user", "assistant"))
     folder = task.get("folder") or cfg["default_folder"]
-    return handoff.prepare(task, convo, folder)
+    return handoff.prepare(task, convo, folder, provider=provider)
 
 
 def _narrow_bulk_updates(actions, user_text):

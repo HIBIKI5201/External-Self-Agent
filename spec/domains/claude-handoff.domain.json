@@ -8,6 +8,9 @@
       "pathPattern": "(^|/)esagent/handoff\\.py$"
     },
     {
+      "pathPattern": "(^|/)(esagent/ai_hub\\.py|tests/test_ai_hub\\.py)$"
+    },
+    {
       "pathPattern": "(^|/)(esagent/mcp_server\\.py|tests/test_mcp_server\\.py|docs/mcp-setup\\.md)$"
     }
   ],
