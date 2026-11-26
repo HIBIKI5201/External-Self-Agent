@@ -7,6 +7,14 @@ PR ごとに「未リリース」へ追記し、版を上げるときに見出�
 
 ### 追加
 - Google Contacts（読み取り専用 `/contacts`・誕生日確認）と、Google Keep 代替となる Google ToDo 同期クイックメモ（`/inbox`）を追加した（#321）。
+- Google Drive / Docs / Sheets 統合を追加した。最小権限（`drive.readonly`, `drive.file`）でファイル検索（`/drive`）・Docs/Sheets テキスト抽出・日次ログの Google Docs 書き出しを行える（#319）。
+- Gmail 統合を追加した。追加の最小権限（`gmail.readonly`, `gmail.compose`、自動送信は非対応）で未読・重要メールの同期・検索（`/mail`）・タスク化・返信下書き作成を行える（#318）。
+- Google カレンダー高度化（空き時間検索 `/free`、予定が詰まった日の締切前倒し警告、予定の編集・削除 API）を追加した（#320）。
+- マルチ AI スキル（`/codex`, `/agy`, `/gemini`, `/ai`）と、右ペインの AI プロバイダ別引き継ぎ表示・おすすめ AI 提案を追加した（#323）。
+- マルチ AI 引き継ぎ基盤（`esagent/ai_hub.py`）を追加し、Claude Code に加えて Codex / Antigravity / Gemini CLI へ共通の引き継ぎパケット（タスク・会話・記憶・直近の予定）で渡せるようにした（#322）。
+- 時間ベースのリマインダー・アラーム基盤を追加した。「15分後に教えて」「18:30に会議を知らせて」や `/remind` で登録でき、時刻到来時および Google カレンダーの予定開始前（既定 10 分前）に黒猫の吹き出しと音声で通知する（#317）。
+- 常時「Es（エス）」と呼びかけると会話モードを起動するウェイクワード待機（「Es 待機」ボタン）を追加した。呼びかけ単体だけを検知し、既定 1.5 秒の待ち時間中に別の言葉が続いたら誤爆としてキャンセルする（AS-20、#338）。
+- Daily OS 統合ブリーフィングと夜レビュー（`esagent/daily_os.py`、`/brief`・`/brief night`、`GET /api/daily/brief`・`GET /api/daily/review`）を追加し、予定・締切・未読メール・AI 引き継ぎ・集中時間を一望できるようにした（#325）。
 - 共通 MCP サーバー（`esagent/mcp_server.py`）を External Self 基盤に拡張し、記憶・プロジェクト文脈・直近会話・カレンダー予定・黒猫への進捗通知（`notify_es`）を Claude Code / Codex / Antigravity / Gemini CLI で共有できるようにした（#324）。
 - ローカル AI（Ollama）を廃止し、Google AI Pro 定額枠で動く Gemini CLI（`gemini -p -o stream-json`、追加課金 0 円）に一本化した。オフライン時は返事待ちキューで復帰後に自動処理する（AS-02、#316）。
 - 生活の中心・Google 統合・マルチ AI 起点化（ローカル AI 廃止＆Gemini CLI 一本化・追加課金 0 円）の全体ロードマップを `spec/plan/life-hub-roadmap-2026-11-26.md` にまとめた（#326）。
