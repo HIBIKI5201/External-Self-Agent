@@ -130,8 +130,8 @@ form#send { position: relative; }
 .msg.notice { align-self: flex-start; background: var(--notice); color: var(--muted); font-size: 12.5px; border-radius: 8px; }
 .empty { color: var(--muted); margin: auto; text-align: center; }
 form#send { display: flex; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line); background: var(--panel); }
-#listen { white-space: nowrap; }
-#listen.on { background: var(--user); color: var(--accent); border-color: var(--accent); }
+#listen, #wake { white-space: nowrap; }
+#listen.on, #wake.on { background: var(--user); color: var(--accent); border-color: var(--accent); }
 #listen-line { padding: 4px 18px; font-size: 12.5px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
 textarea {
   flex: 1; resize: none; height: 46px; max-height: 160px; padding: 11px 12px; border-radius: 10px;
@@ -243,6 +243,7 @@ body.hide-bar #scene #controls { display: none; }
     <form id="send">
       <div id="cmdpop" hidden></div>
       <textarea id="input" placeholder="例: 金曜までにA社のES出す / SymphonyKillChordのジャンプのバグ直したい" autofocus></textarea>
+      <button id="wake" type="button" class="ghost" title="オンの間は「Es」と呼びかけて少し待つと自動で会話モードになります">Es 待機</button>
       <button id="listen" type="button" class="ghost" title="オンの間は話しかけるだけで送ります（Edge の音声認識）">会話モード</button>
       <select id="request-relation" title="前の依頼との関係">
         <option value="auto">自動</option><option value="independent">別の依頼</option>
@@ -256,7 +257,7 @@ body.hide-bar #scene #controls { display: none; }
   <aside>
     <section id="cal" class="pinned top"></section>
     <div id="sidescroll">
-      <h2>Claude Code への引き継ぎ</h2>
+      <h2>AI への引き継ぎ</h2>
       <div id="handoffs"></div>
       <h2>タスク</h2>
       <div id="tasks"></div>
@@ -351,15 +352,18 @@ function render() {
     ? "雑談モード：なんでも話してね（タスクの追加・完了もできます）"
     : "作業モード：例「金曜までにA社のES出す」「何からやる？」　/ でスキル";
 
-  $("#handoffs").innerHTML = S.handoffs.length ? S.handoffs.map((h) => `
+  $("#handoffs").innerHTML = S.handoffs.length ? S.handoffs.map((h) => {
+    const pname = h.provider_name || "Claude Code";
+    return `
     <div class="handoff">
       <div class="t">#${h.task_id} ${esc(h.task_title)}</div>
-      <div class="m">${esc(h.project || "未分類")} ・ ${h.status === "opened" ? "開いた（結果待ち）" : "未オープン"}</div>
+      <div class="m">${esc(h.project || "未分類")} ・ ${esc(pname)} ・ ${h.status === "opened" ? "開いた（結果待ち）" : "未オープン"}</div>
       <div class="row">
-        <button data-open="${h.id}">${h.status === "opened" ? "もう一度開く" : "Claude Codeで開く"}</button>
+        <button data-open="${h.id}">${h.status === "opened" ? "もう一度開く" : `${esc(pname)}で開く`}</button>
         <button class="ghost" data-dismiss="${h.id}">取り下げ</button>
       </div>
-    </div>`).join("") : `<div class="task"><span></span><span class="meta">なし</span></div>`;
+    </div>`;
+  }).join("") : `<div class="task"><span></span><span class="meta">なし</span></div>`;
 
   const groups = {};
   for (const t of S.tasks) (groups[t.project || "未分類"] ??= []).push(t);

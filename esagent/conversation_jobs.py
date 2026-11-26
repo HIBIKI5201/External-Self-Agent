@@ -19,7 +19,7 @@ _LIVE = {}  # (database path, id) -> revision; scoped to this server process
 # Whether a write inside a request means "something already happened" (a correction must then not rerun
 # the request). Every table and settings key is listed; a write to one that is not listed counts as
 # committed and is logged, so a new table or key is never silently treated as nothing done (#236).
-DURABLE_TABLES = {"tasks", "memories", "projects", "handoffs", "linked_items", "reply_feedback", "focus_log"}
+DURABLE_TABLES = {"tasks", "memories", "projects", "handoffs", "linked_items", "reply_feedback", "focus_log", "reminders"}
 SCRATCH_TABLES = {
     "messages",           # the conversation itself; only /clear (DELETE) is durable
     "conversation_jobs",  # this bookkeeping
@@ -33,7 +33,7 @@ DURABLE_SETTING_PREFIXES = ("snooze:", "task_context_corrections:")
 SCRATCH_SETTINGS = {"pending_focus", "pending_feature", "active_offer", "last_advice", "task_context_draft",
                     "messages_last_id", "bgm_sync", "calendar_list", "calendar_sync", "google_state", "google_last_sync",
                     "google_last_error", "google_cal_last_sync", "google_cal_error", "memory_offer_at"}
-SCRATCH_SETTING_PREFIXES = ("linked:", "google_")
+SCRATCH_SETTING_PREFIXES = ("linked:", "google_", "handoff_provider:")
 _WRITE = re.compile(r"^(INSERT(?: OR \w+)? INTO|REPLACE INTO|UPDATE(?: OR \w+)?|DELETE FROM)\s+[\"`\[]?(\w+)", re.I)
 _SETTING_KEY = re.compile(r"(?:VALUES\s*\(\s*|\bkey\s*=\s*)'((?:[^']|'')*)'", re.I)
 ID = re.compile(r"[A-Za-z0-9_-]{16,80}")
