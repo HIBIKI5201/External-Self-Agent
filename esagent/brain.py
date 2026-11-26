@@ -2202,7 +2202,12 @@ def _fixed_usage(t):
 
 
 def _fixed_alarm(t):
-    alarm = _alarm_flow(t.text)  # 「7時半に起こして」: no alarm exists, answered by code (#205)
+    import reminders
+    hit = reminders.handle_chat(t.text, via=t.via)
+    if hit:
+        reply, evs = hit
+        return Fixed(reply, "alarm", events=evs)
+    alarm = _alarm_flow(t.text)
     return Fixed(alarm, "alarm") if alarm else None
 
 
