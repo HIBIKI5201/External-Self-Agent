@@ -269,6 +269,11 @@ GET = _table({
     "/api/gmail": Route(lambda q: {**gmail_view.status(),
                                    "messages": gmail_view.list_messages(unread_only=q.get("unread") == "1",
                                                                         query=q.get("q", ""), limit=30)}),
+    "/api/calendar/free": Route(lambda q: {
+        "date": (d := q.get("date") or dt.date.today().isoformat()),
+        "slots": calendar_view.free_slots(d),
+        "warnings": calendar_view.busy_deadline_warnings(),
+    }),
     "/api/daily/brief": Route(lambda q: daily_os.morning_brief()),
     "/api/daily/review": Route(lambda q: daily_os.evening_review()),
     "/api/health": Route(lambda q: {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION}),
@@ -546,6 +551,11 @@ POST = _table({
                                                                    body.get("body"), body.get("thread_id")), **_LOCAL),
     "/api/gmail/to-task": Route(lambda body: gmail_view.to_task(body["msg_id"], project=body.get("project"),
                                                                 due=body.get("due")), syncs=True),
+    "/api/calendar/update": Route(lambda body: calendar_view.update_event(
+        body["calendar"], body["event_id"], title=body.get("title"),
+        start=body.get("start"), end=body.get("end"), cfg=CFG), **_CALENDAR),
+    "/api/calendar/delete": Route(lambda body: calendar_view.delete_event(
+        body["calendar"], body["event_id"]), **_CALENDAR),
     "/api/youtube/connect": Route(_youtube_connect, **_LOCAL),
     "/api/youtube/playlists": Route(lambda body: youtube.playlists(body.get("page", "")), **_LOCAL),
     "/api/youtube/items": Route(lambda body: youtube.playlist_items(body.get("playlist", ""), body.get("page", "")), **_LOCAL),

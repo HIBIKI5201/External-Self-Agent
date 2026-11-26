@@ -121,6 +121,9 @@ def run_action(action, args, cfg):
     elif name == "/mail":
         import gmail_view
         reply = gmail_view.run_skill(args)
+    elif name == "/free":
+        import calendar_view
+        reply = calendar_view.run_free_skill(args, today=today)
     elif name == "/remind":
         import reminders
         reply = reminders.run_skill(args)
