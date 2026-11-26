@@ -1,6 +1,6 @@
 // 会話モード (#89): telling Es's own voice (heard through the mic) from the user's words.
 const assert = require('node:assert/strict');
-const { isEcho, words, silenceFor, fixHeard, makeVad, sureness, unsure } = require('../esagent/static/listen.js');
+const { isEcho, words, silenceFor, fixHeard, makeVad, sureness, unsure, isWakeCall } = require('../esagent/static/listen.js');
 
 const es = ['今は手をつけるべきタスクがありません。新しくやりたいことがあれば教えてください。'];
 
@@ -72,6 +72,7 @@ function page(startErrors = 0) {
   let time = 0, id = 0;
   const jobs = new Map(), sessions = [], sent = [], posts = [];
   const button = { classList: { toggle() {} }, setAttribute() {} };
+  const wakeButton = { classList: { toggle() {} }, setAttribute() {} };
   const line = {};
   class Recognition {
     constructor() { sessions.push(this); }
@@ -81,7 +82,7 @@ function page(startErrors = 0) {
   }
   const window = { SpeechRecognition: Recognition, EsHooks: { send: text => sent.push(text) } };
   const docEvents = {};
-  const context = { window, navigator: {}, document: { querySelector: s => s === '#listen' ? button : line,
+  const context = { window, navigator: {}, document: { querySelector: s => s === '#listen' ? button : s === '#wake' ? wakeButton : line,
       visibilityState: 'visible', addEventListener: (name, fn) => { docEvents[name] = fn; } },
     fetch: async (path, options) => { if (options) posts.push(path); return { ok: true, json: async () => ({ recent: [] }) }; },
     setTimeout: (fn, delay) => { jobs.set(++id, { fn, at: time + delay }); return id; },
@@ -98,7 +99,8 @@ function page(startErrors = 0) {
     }
     time = end; await flush();
   };
-  return { sessions, sent, posts, line, button, context, flush, tick, docEvents, toggle: () => button.onclick() };
+  return { sessions, sent, posts, line, button, wakeButton, context, flush, tick, docEvents,
+    toggle: () => button.onclick(), toggleWake: () => wakeButton.onclick() };
 }
 async function lifecycle() {
   const p = page(); await p.toggle();
@@ -194,6 +196,38 @@ async function lifecycle() {
   noisy.sessions[0].onresult({ results: [sure('旅行したいんだお客様どうぞご紹介', 0.3), sure('洗濯をタスクに追加して', 0.9)] });
   await noisy.tick(1500);
   assert.deepEqual(noisy.sent, ['洗濯をタスクに追加して'], 'the next sentence starts fresh');
-  console.log('test_listen.js ok (echo + lifecycle + midway pause + microphone + stall + confidence)');
+
+  // #338: wake word ("Es") waits for delay before activating, cancels if another word follows, and returns to wake on idle.
+  for (const ok of ['Es', 'Es。', 'エス', 'えす', 'ねえEs', 'おいエス', 'ちょっとEs', 'ねえS']) {
+    assert.equal(isWakeCall(ok), true, ok);
+  }
+  for (const ng of ['ESの提出', 'エスプレッソ', 'Sサイズ', 'ですね', 'Es 今日の予定は？', '']) {
+    assert.equal(isWakeCall(ng), false, ng);
+  }
+  const w = page();
+  await w.toggleWake();
+  assert.match(w.line.textContent, /「Es」待機中/);
+  // False wake cancelled when another word follows within 1.5s
+  w.sessions[0].onresult({ results: [r('エス', false)] });
+  assert.match(w.line.textContent, /「Es」を検知/);
+  await w.tick(500);
+  w.sessions[0].onresult({ results: [r('エスプレッソ飲みたい', true)] });
+  await w.tick(2000);
+  assert.equal(w.button.textContent, '会話モード', 'must stay in wake standby when another word follows');
+  assert.deepEqual(w.sent, [], 'standby must never send');
+  // Standalone "Es" + 1.5s pause activates conversation mode, then sends speech, then returns to wake after idle
+  w.sessions[0].onresult({ results: [r('エスプレッソ飲みたい', true), r('Es', true)] });
+  await w.tick(1000);
+  assert.equal(w.button.textContent, '会話モード', 'not active before delay');
+  await w.tick(600);
+  assert.equal(w.button.textContent, '会話モード：オン', 'active after 1.5s delay');
+  w.sessions[0].onresult({ results: [r('エスプレッソ飲みたい', true), r('Es', true), r('今日の予定を教えて', true)] });
+  await w.tick(1300);
+  assert.deepEqual(w.sent, ['今日の予定を教えて']);
+  await w.tick(60000);
+  assert.equal(w.button.textContent, '会話モード', 'returns to wake standby after 60s idle');
+  assert.match(w.line.textContent, /「Es」待機中/);
+
+  console.log('test_listen.js ok (echo + lifecycle + midway pause + microphone + stall + confidence + wake)');
 }
 lifecycle().catch(error => { console.error(error); process.exitCode = 1; });

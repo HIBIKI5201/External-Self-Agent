@@ -101,7 +101,8 @@ def status(cfg):
             # 会話モード's timing (#116): silence that ends a sentence, a longer wait after a sentence
             # that stops midway, and how long a next piece still joins the previous message.
             "listen": {**{k: int(cfg.get("listen_" + k + "_ms", d)) for k, d in
-                          (("silence", 1200), ("incomplete", 3000), ("merge", 15000))},
+                          (("silence", 1200), ("incomplete", 3000), ("merge", 15000),
+                           ("wake_delay", 1500), ("wake_idle", 60000))},
                        # Below this recognition confidence a line is not sent (#174).
                        "confidence": listen_confidence(cfg),
                        "corrections": listen_corrections(cfg)}}

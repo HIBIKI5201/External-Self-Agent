@@ -15,11 +15,11 @@ def test_alarm_requests_are_recognised():
         assert not brain.alarm_request(t), t
 
 
-def test_wake_up_request_gets_no_promise_and_no_model_call():
+def test_wake_up_request_registers_reminder_without_model_call():
     with Sandbox(copy_real=False) as sb:
         with patch.object(llm, "chat", side_effect=AssertionError("no model")):
             r = sb.chat("えこ、 7時半に起こして。")
-        assert "機能は、まだボクにはない" in r["reply"] and "7時半" in r["reply"], r
+        assert "07:30" in r["reply"] and "スマホも併用" in r["reply"], r
         assert "起こしてあげる" not in r["reply"] and brain.NO_CHANGE_NOTE not in r["reply"], r
 
 
