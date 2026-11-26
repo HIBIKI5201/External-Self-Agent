@@ -400,7 +400,7 @@ def _listen_diag(body):  # ?listen-diag: times of sound and of recognition only 
 def _listen_log(body):  # what 会話モード's recogniser did, never the words (#168)
     event = str(body.get("event") or "")
     detail = str(body.get("detail") or "")
-    if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed", "unsure") \
+    if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed", "unsure", "wake") \
             or not re.fullmatch(r"[a-z0-9.-]{0,30}", detail):
         raise ValueError("unknown listen event")
     log.info("listen: %s%s", event, f" ({detail})" if detail else "")
