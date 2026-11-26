@@ -301,6 +301,9 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 ### Google Drive / Docs / Sheets 統合（#319）
 - **決定・実装:** 最小権限（`drive.readonly`, `drive.file`）でファイル検索・Google Docs/Sheets からのテキスト抽出・日次ログの Google Docs 書き出しを行う（`esagent/gdrive_view.py`、`/drive` スキル、API `GET /api/drive`, `POST /api/drive/connect|read|log`）。既存ファイルの書き換えや削除は行わない。
 
+### Google Contacts と Inbox メモ（#321）
+- **決定・実装:** Google Contacts は読み取り専用（`contacts.readonly`）でキャッシュ同期・検索・誕生日確認を行う（`esagent/contacts_inbox.py`, `/contacts`, `GET /api/contacts`, `POST /api/contacts/connect|sync`）。公式 API が個人アカウント非対応の Google Keep の代替として、Google ToDo の `Inbox` リストと双方向同期するクイックメモ（`/inbox`）を提供する。
+
 ## AS-12 コンパニオン（デスクトップの黒猫）
 
 - **決定・実装（#35）:** チャットの専用ウィンドウが開いて最小化されていない間、デスクトップの猫と吹き出しを自動で隠す。別アプリに覆われても隠したまま。閉じる/最小化で、有効設定の場合のみ戻す。500msごとにウィンドウ状態を調べ、起動時から開いている場合も適用する。設定値は書き換えない。非表示中の吹き出しは後から再生しない。手動無効時は従来どおりプロセスを終了し、無効状態で自動起動しない。

@@ -118,6 +118,12 @@ def run_action(action, args, cfg):
     elif name == "/usage":
         import claude_usage
         reply = claude_usage.describe()
+    elif name == "/inbox":
+        import contacts_inbox
+        reply = contacts_inbox.run_inbox_skill(args)
+    elif name == "/contacts":
+        import contacts_inbox
+        reply = contacts_inbox.run_contacts_skill(args)
     elif name == "/drive":
         import gdrive_view
         reply = gdrive_view.run_skill(args)

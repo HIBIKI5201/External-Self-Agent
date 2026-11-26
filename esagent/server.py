@@ -24,6 +24,7 @@ import conversation_state  # noqa: E402
 import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
+import contacts_inbox  # noqa: E402
 import daily_os  # noqa: E402
 import db  # noqa: E402
 import db_health  # noqa: E402
@@ -267,6 +268,9 @@ GET = _table({
     r"/static/(.+)": Route(_static),
     "/api/chat/job": Route(_chat_job),
     "/api/calendar": Route(_calendar),
+    "/api/contacts": Route(lambda q: {**contacts_inbox.contacts_status(),
+                                      "contacts": contacts_inbox.search_contacts(q.get("q", ""), limit=50),
+                                      "birthdays": contacts_inbox.upcoming_birthdays()}),
     "/api/drive": Route(lambda q: {**gdrive_view.status(),
                                    "files": gdrive_view.search(q.get("q", ""), limit=20) if gdrive_view.ready() else []}),
     "/api/gmail": Route(lambda q: {**gmail_view.status(),
@@ -522,6 +526,8 @@ def _pet_chat(body):  # show chat replies in the cat's bubble (#121), from its r
     return pet_state()
 
 
+def _contacts_connect(body):
+    url = gauth.begin(redirect_uri(), contacts=True)
 def _drive_connect(body):
     url = gauth.begin(redirect_uri(), drive=True)
 def _gmail_connect(body):
@@ -550,6 +556,8 @@ POST = _table({
     "/api/calendar/select": Route(_calendar_select, **_CALENDAR),
     "/api/calendar/sync": Route(lambda body: {"count": calendar_view.sync()}, **_CALENDAR),
     "/api/calendar/add": Route(_calendar_add, **_CALENDAR),
+    "/api/contacts/connect": Route(_contacts_connect, **_LOCAL),
+    "/api/contacts/sync": Route(lambda body: {"count": contacts_inbox.sync_contacts()}, **_LOCAL),
     "/api/drive/connect": Route(_drive_connect, **_LOCAL),
     "/api/drive/read": Route(lambda body: gdrive_view.read_text(body["file_id"], body.get("mime_type", "")), **_LOCAL),
     "/api/drive/log": Route(lambda body: gdrive_view.export_daily_log(body.get("title", ""), body.get("content", "")), **_LOCAL),

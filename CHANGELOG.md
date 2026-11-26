@@ -6,6 +6,7 @@ PR ごとに「未リリース」へ追記し、版を上げるときに見出�
 ## [未リリース]
 
 ### 追加
+- Google Contacts（読み取り専用 `/contacts`・誕生日確認）と、Google Keep 代替となる Google ToDo 同期クイックメモ（`/inbox`）を追加した（#321）。
 - Google Drive / Docs / Sheets 統合を追加した。最小権限（`drive.readonly`, `drive.file`）でファイル検索（`/drive`）・Docs/Sheets テキスト抽出・日次ログの Google Docs 書き出しを行える（#319）。
 - Gmail 統合を追加した。追加の最小権限（`gmail.readonly`, `gmail.compose`、自動送信は非対応）で未読・重要メールの同期・検索（`/mail`）・タスク化・返信下書き作成を行える（#318）。
 - Google カレンダー高度化（空き時間検索 `/free`、予定が詰まった日の締切前倒し警告、予定の編集・削除 API）を追加した（#320）。
