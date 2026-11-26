@@ -121,6 +121,18 @@ def run_action(action, args, cfg):
     elif name == "/drive":
         import gdrive_view
         reply = gdrive_view.run_skill(args)
+    elif name == "/mail":
+        import gmail_view
+        reply = gmail_view.run_skill(args)
+    elif name == "/free":
+        import calendar_view
+        reply = calendar_view.run_free_skill(args, today=today)
+    elif name == "/remind":
+        import reminders
+        reply = reminders.run_skill(args)
+    elif name == "/brief":
+        import daily_os
+        reply = daily_os.run_skill(args, today=today)
     elif name == "/next":
         with conversation_state.running("次にやることを考え中"):
             reply = brain._advice_reply(cfg, "何からやればいい？", today, args)
@@ -172,17 +184,45 @@ def run_action(action, args, cfg):
             else:
                 db.update_task(task["id"], due=due)
                 reply = f"#{task['id']} {task['title']} の締切を {due} にしました。"
-    elif name == "/claude":
+    elif name in ("/claude", "/codex", "/agy", "/gemini"):
+        import ai_hub
+        provider = ai_hub.normalize_provider(name[1:])
+        pname = ai_hub.PROVIDERS[provider]["name"]
         if not args:
-            reply = "使い方: /claude 番号 または /claude 依頼文"
+            reply = f"使い方: {name} 番号 または {name} 依頼文"
         else:
             task = db.get_task(int(args.lstrip("#"))) if args.lstrip("#").isdigit() else None
             if not task:
                 title, due, project = _split_args(args, today)
                 task = db.add_task(title[:60], project=project or "全般", due=due, notes=args)
-            h = brain.delegate(task["id"], cfg)
+            h = brain.delegate(task["id"], cfg, provider=provider)
             handoffs.append(h)
-            reply = f"→ #{task['id']} {task['title']} を Claude Code に引き継ぐ準備ができました。\n右の「Claude Codeで開く」から始められます。"
+            reply = (f"→ #{task['id']} {task['title']} を {pname} に引き継ぐ準備ができたよ。\n"
+                     f"右の「{pname}で開く」から始められるよ。")
+    elif name == "/ai":
+        import ai_hub
+        if args:
+            rec = ai_hub.recommend_provider(args)
+            cmd = "/agy" if rec["provider"] == "antigravity" else "/" + rec["provider"]
+            reply = (f"おすすめは **{rec['name']}** だよ（{rec['reason']}）。\n"
+                     f"引き継ぐなら `{cmd} {args}` と送ってね。")
+        else:
+            lines = ["利用できる AI プロバイダ:"]
+            for p in ai_hub.providers_status():
+                mark = "OK" if p["installed"] else "未導入"
+                cmd = "/agy" if p["id"] == "antigravity" else "/" + p["id"]
+                lines.append(f"  - {p['name']} (`{cmd}`) [{mark}] — {p['summary']}")
+            active = db.list_handoffs()
+            if active:
+                lines.append("\n進行中の AI 引き継ぎ:")
+                for h in active[:10]:
+                    pid = ai_hub.provider_of(h["id"])
+                    pname = ai_hub.PROVIDERS.get(pid, {}).get("name", pid)
+                    st = "開いた（結果待ち）" if h["status"] == "opened" else "未オープン"
+                    lines.append(f"  - #{h['task_id']} {h['task_title']} → {pname}（{st}）")
+            else:
+                lines.append("\n進行中の AI 引き継ぎ: なし")
+            reply = "\n".join(lines)
     elif name == "/repeat":
         ref, _, rule_text = args.partition(" ")
         task, cands = _find_task(ref) if ref else (None, [])

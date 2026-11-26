@@ -18,11 +18,13 @@ sys.path.insert(0, HERE)
 
 import activity  # noqa: E402
 import admin  # noqa: E402
+import ai_hub  # noqa: E402
 import brain  # noqa: E402
 import conversation_state  # noqa: E402
 import conversation_jobs as jobs
 import chat_requests  # noqa: E402
 import companion  # noqa: E402
+import daily_os  # noqa: E402
 import db  # noqa: E402
 import db_health  # noqa: E402
 import gauth  # noqa: E402
@@ -37,6 +39,7 @@ import timer_chat  # noqa: E402
 import projects  # noqa: E402
 import backup  # noqa: E402
 import recurring  # noqa: E402
+import reminders  # noqa: E402
 import skills  # noqa: E402
 import status_question  # noqa: E402
 import youtube  # noqa: E402
@@ -45,6 +48,7 @@ import task_context  # noqa: E402
 import utterances  # noqa: E402
 import calendar_view  # noqa: E402
 import gdrive_view  # noqa: E402
+import gmail_view  # noqa: E402
 import gapi  # noqa: E402
 import feedback  # noqa: E402
 import pet_react  # noqa: E402
@@ -64,7 +68,9 @@ def state():
         "tasks": db.list_tasks(),
         "done": db.recently_done(),
         "projects": db.list_projects(),
-        "handoffs": db.list_handoffs(),
+        "handoffs": [{**h, "provider": (pid := ai_hub.provider_of(h["id"])),
+                      "provider_name": ai_hub.PROVIDERS.get(pid, {}).get("name", "Claude Code")}
+                     for h in db.list_handoffs()],
         # Es's murmurs and button feedback are in the log and the context, not in the chat (#139).
         "messages": (shown := [m for m in db.recent_messages(160) if m.get("shown") != 0][-80:]),
         "feedback": feedback.ratings(m["id"] for m in shown if m["role"] == "assistant"),
@@ -263,9 +269,20 @@ GET = _table({
     "/api/calendar": Route(_calendar),
     "/api/drive": Route(lambda q: {**gdrive_view.status(),
                                    "files": gdrive_view.search(q.get("q", ""), limit=20) if gdrive_view.ready() else []}),
+    "/api/gmail": Route(lambda q: {**gmail_view.status(),
+                                   "messages": gmail_view.list_messages(unread_only=q.get("unread") == "1",
+                                                                        query=q.get("q", ""), limit=30)}),
+    "/api/calendar/free": Route(lambda q: {
+        "date": (d := q.get("date") or dt.date.today().isoformat()),
+        "slots": calendar_view.free_slots(d),
+        "warnings": calendar_view.busy_deadline_warnings(),
+    }),
+    "/api/daily/brief": Route(lambda q: daily_os.morning_brief()),
+    "/api/daily/review": Route(lambda q: daily_os.evening_review()),
     "/api/health": Route(lambda q: {"ok": True, "app": "E.S. Agent", **db.CODE_VERSION}),
     "/api/state": Route(lambda q: state()),
     "/api/pomo": Route(lambda q: pomodoro.state(CFG)),
+    "/api/reminders": Route(lambda q: {"reminders": reminders.list_reminders(include_fired=q.get("all") == "1")}),
     "/api/voice": Route(lambda q: voice.status(CFG)),
     "/api/events": Route(_events),
     "/api/pet": Route(lambda q: pet_state()),
@@ -274,6 +291,7 @@ GET = _table({
     "/api/chat/bypass": Route(lambda q: {"pattern": status_question._STATUS_RE.pattern,
                                          "exclude": f"{status_question._TASK_REF_RE.pattern}|{timer_chat.TIMER_TEXT}"}),
     "/api/commands": Route(lambda q: skills.catalog()),
+    "/api/ai/providers": Route(lambda q: {"providers": ai_hub.providers_status()}),
     "/api/admin/tables": Route(lambda q: {"tables": admin.tables(), "db": db.DB_PATH}),
     "/api/admin/table": Route(_admin_table),
     "/api/admin/config": Route(lambda q: {"fields": admin.config(CFG), "file": db.CONFIG_PATH}),
@@ -359,11 +377,11 @@ def _update_task(body, task_id):
 def _delegate(body, task_id):
     if not db.get_task(int(task_id)):
         raise NotFound("task not found")
-    return brain.delegate(int(task_id), CFG)
+    return brain.delegate(int(task_id), CFG, provider=body.get("provider") or "claude")
 
 
 def _open_handoff(body, handoff_id):
-    h = handoff.open_in_claude(int(handoff_id))
+    h = handoff.open_in_claude(int(handoff_id), provider=body.get("provider"))
     if not h:
         raise NotFound("handoff not found")
     return h
@@ -400,7 +418,7 @@ def _listen_diag(body):  # ?listen-diag: times of sound and of recognition only 
 def _listen_log(body):  # what 会話モード's recogniser did, never the words (#168)
     event = str(body.get("event") or "")
     detail = str(body.get("detail") or "")
-    if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed", "unsure") \
+    if event not in ("on", "off", "restart", "stall", "deaf", "error", "start-failed", "unsure", "wake") \
             or not re.fullmatch(r"[a-z0-9.-]{0,30}", detail):
         raise ValueError("unknown listen event")
     log.info("listen: %s%s", event, f" ({detail})" if detail else "")
@@ -411,6 +429,16 @@ def _es_said(body):  # a line the cat or the chat window showed (#139)
     mid = utterances.record(str(body.get("text") or ""), source=str(body.get("source") or "pet"),
                             kind=str(body.get("kind") or "notice"), key=body.get("key"))
     return {"recorded": mid is not None}
+
+
+def _es_notify(body):  # progress / completion notice from an external AI via MCP (#324)
+    msg = str(body.get("message") or "").strip()[:200]
+    if not msg:
+        raise ValueError("message is empty")
+    ev = events.push("ai_notify", text=msg, source_ai=str(body.get("source_ai") or "AI")[:30])
+    utterances.record(msg, source="system", kind="notice", key=ev["key"])
+    voice.say(CFG, msg, key=ev["key"], wake=False)
+    return {"ok": True, "key": ev["key"]}
 
 
 def _voice_stop(body):
@@ -496,6 +524,8 @@ def _pet_chat(body):  # show chat replies in the cat's bubble (#121), from its r
 
 def _drive_connect(body):
     url = gauth.begin(redirect_uri(), drive=True)
+def _gmail_connect(body):
+    url = gauth.begin(redirect_uri(), gmail=True)
     if body.get("open", True):
         os.startfile(url)
     return {"ok": True, "url": url}
@@ -523,6 +553,17 @@ POST = _table({
     "/api/drive/connect": Route(_drive_connect, **_LOCAL),
     "/api/drive/read": Route(lambda body: gdrive_view.read_text(body["file_id"], body.get("mime_type", "")), **_LOCAL),
     "/api/drive/log": Route(lambda body: gdrive_view.export_daily_log(body.get("title", ""), body.get("content", "")), **_LOCAL),
+    "/api/gmail/connect": Route(_gmail_connect, **_LOCAL),
+    "/api/gmail/sync": Route(lambda body: {"count": gmail_view.sync()}, **_LOCAL),
+    "/api/gmail/draft": Route(lambda body: gmail_view.create_draft(body.get("to"), body.get("subject"),
+                                                                   body.get("body"), body.get("thread_id")), **_LOCAL),
+    "/api/gmail/to-task": Route(lambda body: gmail_view.to_task(body["msg_id"], project=body.get("project"),
+                                                                due=body.get("due")), syncs=True),
+    "/api/calendar/update": Route(lambda body: calendar_view.update_event(
+        body["calendar"], body["event_id"], title=body.get("title"),
+        start=body.get("start"), end=body.get("end"), cfg=CFG), **_CALENDAR),
+    "/api/calendar/delete": Route(lambda body: calendar_view.delete_event(
+        body["calendar"], body["event_id"]), **_CALENDAR),
     "/api/youtube/connect": Route(_youtube_connect, **_LOCAL),
     "/api/youtube/playlists": Route(lambda body: youtube.playlists(body.get("page", "")), **_LOCAL),
     "/api/youtube/items": Route(lambda body: youtube.playlist_items(body.get("playlist", ""), body.get("page", "")), **_LOCAL),
@@ -539,6 +580,7 @@ POST = _table({
     "/api/listen/diag": Route(_listen_diag),
     "/api/listen/log": Route(_listen_log),
     "/api/es/said": Route(_es_said),
+    "/api/es/notify": Route(_es_notify),
     # a line the cat or the chat window shows
     "/api/voice/say": Route(lambda body: {"queued": voice.say(CFG, str(body.get("text") or "")[:500], key=body.get("key"),
                                                                   wake=body.get("wake", True) is not False)}, **_LOCAL),
@@ -549,6 +591,9 @@ POST = _table({
     "/api/warm": Route(lambda body: llm.warm(CFG)),
     "/api/focus/done": Route(lambda body: companion.focus_done(body.get("task_id"), int(body.get("minutes") or 25)), syncs=True),
     "/api/pomo": Route(_pomo),
+    "/api/reminders": Route(lambda body: reminders.add(body.get("title", ""), body["remind_at"]), **_LOCAL),
+    r"/api/reminders/(\d+)/cancel": Route(lambda body, rid: reminders.cancel(int(rid)) or (_ for _ in ()).throw(NotFound("reminder not found")), **_LOCAL),
+    r"/api/reminders/(\d+)/snooze": Route(lambda body, rid: reminders.snooze(int(rid), int(body.get("minutes") or reminders.DEFAULT_SNOOZE_MINUTES)) or (_ for _ in ()).throw(NotFound("reminder not found")), **_LOCAL),
     "/api/playback/open": Route(lambda body: playback.current.open()),
     "/api/playback/state": Route(lambda body: playback.current.update(body)),
     "/api/bgm/sync": Route(_bgm_sync),
@@ -716,6 +761,15 @@ def _pending_loop():
             _loop_failed(e, "answering waiting messages")
 
 
+def _reminder_loop():
+    while True:
+        try:
+            reminders.tick(CFG)
+        except Exception as e:
+            _loop_failed(e, "reminders tick")
+        time.sleep(5)
+
+
 def _pomo_loop():
     while True:
         try:
@@ -790,6 +844,7 @@ def main():
     linked_todos.start(CFG)
     threading.Thread(target=_recurring_loop, name="recurring", daemon=True).start()
     threading.Thread(target=_pomo_loop, name="pomodoro", daemon=True).start()
+    threading.Thread(target=_reminder_loop, name="reminders", daemon=True).start()
     threading.Thread(target=_pending_loop, name="pending", daemon=True).start()
     if pet_enabled():
         _start_pet()
