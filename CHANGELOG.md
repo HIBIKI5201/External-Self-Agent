@@ -6,6 +6,7 @@ PR ごとに「未リリース」へ追記し、版を上げるときに見出�
 ## [未リリース]
 
 ### 追加
+- Google Drive / Docs / Sheets 統合を追加した。最小権限（`drive.readonly`, `drive.file`）でファイル検索（`/drive`）・Docs/Sheets テキスト抽出・日次ログの Google Docs 書き出しを行える（#319）。
 - Gmail 統合を追加した。追加の最小権限（`gmail.readonly`, `gmail.compose`、自動送信は非対応）で未読・重要メールの同期・検索（`/mail`）・タスク化・返信下書き作成を行える（#318）。
 - Google カレンダー高度化（空き時間検索 `/free`、予定が詰まった日の締切前倒し警告、予定の編集・削除 API）を追加した（#320）。
 - マルチ AI スキル（`/codex`, `/agy`, `/gemini`, `/ai`）と、右ペインの AI プロバイダ別引き継ぎ表示・おすすめ AI 提案を追加した（#323）。

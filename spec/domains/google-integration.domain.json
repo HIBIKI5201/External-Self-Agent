@@ -26,6 +26,9 @@
       "pathPattern": "(^|/)(esagent/gmail_view\\.py|tests/test_gmail_view\\.py|skills/mail/SKILL\\.md)$"
     },
     {
+      "pathPattern": "(^|/)(esagent/gdrive_view\\.py|tests/test_gdrive_view\\.py|skills/drive/SKILL\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)esagent/youtube\\.py$"
     },
     {

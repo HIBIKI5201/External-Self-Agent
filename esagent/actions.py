@@ -118,6 +118,9 @@ def run_action(action, args, cfg):
     elif name == "/usage":
         import claude_usage
         reply = claude_usage.describe()
+    elif name == "/drive":
+        import gdrive_view
+        reply = gdrive_view.run_skill(args)
     elif name == "/mail":
         import gmail_view
         reply = gmail_view.run_skill(args)

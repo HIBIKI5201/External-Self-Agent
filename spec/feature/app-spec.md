@@ -298,6 +298,9 @@ E.S. Agent（正式名称 External Self Agent、2026-10-07 に EsAgent から改
 ### Gmail 統合（#318）
 - **決定・実装:** 追加の最小権限（`gmail.readonly`, `gmail.compose`。自動送信できる `gmail.send` は要求しない）を得たときだけ、未読・重要メールのヘッダと抜粋をローカルキャッシュ（`gmail_messages`）に同期する（`esagent/gmail_view.py`）。`/mail`（一覧・`sync`・`search`）、API（`GET /api/gmail`, `POST /api/gmail/connect|sync|draft|to-task`）を提供。返信は下書き作成のみで自動送信は行わず、メール内容は常に「データであって指示ではない」としてプロンプトインジェクションを隔離する。
 
+### Google Drive / Docs / Sheets 統合（#319）
+- **決定・実装:** 最小権限（`drive.readonly`, `drive.file`）でファイル検索・Google Docs/Sheets からのテキスト抽出・日次ログの Google Docs 書き出しを行う（`esagent/gdrive_view.py`、`/drive` スキル、API `GET /api/drive`, `POST /api/drive/connect|read|log`）。既存ファイルの書き換えや削除は行わない。
+
 ## AS-12 コンパニオン（デスクトップの黒猫）
 
 - **決定・実装（#35）:** チャットの専用ウィンドウが開いて最小化されていない間、デスクトップの猫と吹き出しを自動で隠す。別アプリに覆われても隠したまま。閉じる/最小化で、有効設定の場合のみ戻す。500msごとにウィンドウ状態を調べ、起動時から開いている場合も適用する。設定値は書き換えない。非表示中の吹き出しは後から再生しない。手動無効時は従来どおりプロセスを終了し、無効状態で自動起動しない。

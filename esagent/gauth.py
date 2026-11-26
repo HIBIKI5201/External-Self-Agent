@@ -34,7 +34,10 @@ CALENDAR_VIEW_SCOPES = ["https://www.googleapis.com/auth/calendar.events",
 # Gmail (#318): read messages and create drafts only (never auto-send; gmail.send is intentionally omitted).
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly",
                 "https://www.googleapis.com/auth/gmail.compose"]
-EXTRA = {"youtube": [YOUTUBE_SCOPE], "calendar": CALENDAR_VIEW_SCOPES, "gmail": GMAIL_SCOPES}
+# Google Drive (#319): read existing files and write only files created by E.S. Agent.
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly",
+                "https://www.googleapis.com/auth/drive.file"]
+EXTRA = {"youtube": [YOUTUBE_SCOPE], "calendar": CALENDAR_VIEW_SCOPES, "gmail": GMAIL_SCOPES, "drive": DRIVE_SCOPES}
 SCOPES = [TASKS_SCOPE, CALENDAR_SCOPE]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -152,7 +155,8 @@ def status():
     return {"client": _client() is not None, "connected": bool(tok and tok.get("refresh_token")),
             "calendar": CALENDAR_SCOPE in granted, "youtube": YOUTUBE_SCOPE in granted,
             "calendar_view": set(CALENDAR_VIEW_SCOPES).issubset(granted),
-            "gmail": set(GMAIL_SCOPES).issubset(granted)}
+            "gmail": set(GMAIL_SCOPES).issubset(granted),
+            "drive": set(DRIVE_SCOPES).issubset(granted)}
 
 
 def _post_form(url, fields, parse_json=True):
@@ -173,14 +177,14 @@ def _post_form(url, fields, parse_json=True):
         raise OfflineError(str(e))
 
 
-def begin(redirect_uri, youtube=False, calendar=False, gmail=False):
+def begin(redirect_uri, youtube=False, calendar=False, gmail=False, drive=False):
     client = _client()
     if not client:
         raise AuthError(f"{CLIENT_PATH} がありません。Google Cloud で作った OAuth クライアントの JSON を置いてください。")
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     state = secrets.token_urlsafe(24)
-    purpose = "youtube" if youtube else "calendar" if calendar else "gmail" if gmail else "tasks"
+    purpose = "youtube" if youtube else "calendar" if calendar else "gmail" if gmail else "drive" if drive else "tasks"
     scopes = SCOPES + EXTRA.get(purpose, [])
     with _lock:
         for old in [k for k, v in _pending.items() if time.time() - v[2] > PENDING_SECONDS]:
